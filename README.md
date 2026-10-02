@@ -6,8 +6,12 @@ Edit, fill, sign and protect PDFs offline, without a subscription.
 PDF Fire is built on open-source code and developed with AI-assisted coding. Every change is reviewed,
 built and tested before release, and the full source is here for anyone to check.
 
-**Download:** https://firehouse360.com/tools/pdf-fire (signed `.deb` for Ubuntu/Debian and `.rpm` for Fedora,
-with automatic updates). A signed Windows version is in the works.
+## ⬇ [Download PDF Fire](https://firehouse360.com/tools/pdf-fire)
+
+**Get PDF Fire from [firehouse360.com/tools/pdf-fire](https://firehouse360.com/tools/pdf-fire)** (recommended) — signed
+`.deb` for Ubuntu/Debian and `.rpm` for Fedora, installed with automatic updates. The same files are also attached to
+each [GitHub release](https://github.com/firehouse360/PDF-Fire/releases), without automatic updates.
+A signed Windows version is in the works.
 
 PDF Fire is based on [PDF4QT](https://github.com/JakubMelka/PDF4QT) by Jakub Melka — the PDF engine and the
 original applications are his work. The upstream README is kept in [README-PDF4QT.md](README-PDF4QT.md).
@@ -39,9 +43,9 @@ pdf-fire/scripts/make-deb.sh             # Ubuntu/Debian package into <work>/dis
 pdf-fire/scripts/make-rpm.sh             # Fedora package (podman) into <work>/dist
 ```
 
-The read-aloud voices need ONNX Runtime 1.23.2 and the Kokoro-82M voice data in `<work>/deps/kokoro`
-(see `Pdf4QtLibGui/CMakeLists.txt`). A script that downloads them, and automated Linux and Windows builds,
-are being added.
+The read-aloud voices need ONNX Runtime 1.23.2 and the Kokoro-82M voice data in `<work>/deps/kokoro`;
+`pdf-fire/scripts/fetch-voice-data.py` downloads them (every file pinned to its SHA-256). Windows builds run on
+GitHub Actions: [`.github/workflows/pdf-fire-windows.yml`](.github/workflows/pdf-fire-windows.yml).
 
 ## Licence
 

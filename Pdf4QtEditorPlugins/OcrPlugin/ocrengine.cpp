@@ -88,6 +88,11 @@ QString OcrEngine::getTessdataDirectory()
         candidates << prefix << QDir(prefix).filePath("tessdata");
     }
 
+    // PDF Fire: the language data installed with the program (Windows: next to the program)
+    const QDir applicationDirectory(QCoreApplication::applicationDirPath());
+    candidates << applicationDirectory.filePath("tessdata")
+               << applicationDirectory.filePath("../share/tessdata");
+
     candidates << "/usr/share/tesseract-ocr/5/tessdata"
                << "/usr/share/tesseract-ocr/4.00/tessdata"
                << "/usr/share/tesseract/tessdata"

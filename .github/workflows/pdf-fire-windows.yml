@@ -1,0 +1,123 @@
+name: PDF Fire - Windows
+
+# Builds PDF Fire for Windows (x64) on GitHub's Windows machines: the program folder,
+# with the natural voices and the English text-recognition data, as a download.
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 180
+    env:
+      VCPKG_INSTALLED_DIR: ${{ github.workspace }}\vcpkg_installed
+      VCPKG_ROOT: ${{ github.workspace }}\vcpkg
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\vcpkg-binary-cache
+      PDFFIRE_WORK_DIR: ${{ github.workspace }}\work
+
+    steps:
+      - name: Checkout PDF Fire
+        uses: actions/checkout@v4
+        with:
+          path: pdf-fire
+
+      - name: Natural voices and ONNX Runtime (pinned downloads)
+        shell: pwsh
+        run: python pdf-fire\pdf-fire\scripts\fetch-voice-data.py
+
+      - name: English text-recognition data (tessdata_fast, pinned)
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:PDFFIRE_WORK_DIR 'deps\tessdata'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $file = Join-Path $dir 'eng.traineddata'
+          Invoke-WebRequest -Uri 'https://github.com/tesseract-ocr/tessdata_fast/raw/4.1.0/eng.traineddata' -OutFile $file
+          $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne '7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2') { throw "eng.traineddata checksum mismatch: $hash" }
+
+      - name: 'vcpkg: set up'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
+          git clone --depth=1 https://github.com/microsoft/vcpkg.git
+          .\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+
+      - name: 'vcpkg: cache'
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}\vcpkg-binary-cache
+          key: ${{ runner.os }}-pdffire-vcpkg-${{ hashFiles('pdf-fire/vcpkg.json') }}
+          restore-keys: |
+            ${{ runner.os }}-pdffire-vcpkg-
+
+      - name: 'vcpkg: libraries (Tesseract, OpenSSL, FreeType, ...)'
+        shell: pwsh
+        working-directory: vcpkg
+        run: |
+          $manifestRoot = Join-Path $env:GITHUB_WORKSPACE 'pdf-fire'
+          .\vcpkg install --triplet x64-windows --x-manifest-root=$manifestRoot --x-install-root=$env:VCPKG_INSTALLED_DIR --clean-buildtrees-after-build --clean-packages-after-build
+
+      - name: Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.11.3'
+          host: 'windows'
+          target: 'desktop'
+          arch: 'win64_msvc2022_64'
+          dir: '${{ github.workspace }}/qt/'
+          install-deps: 'true'
+          modules: 'qtspeech qtmultimedia'
+          cache: 'true'
+          cache-key-prefix: ${{ runner.os }}-qt-6113
+          # aqtinstall 3.3 cannot read the Windows repository layout of Qt 6.11+ (same pin as upstream PDF4QT)
+          aqtsource: 'git+https://github.com/miurahr/aqtinstall.git@076e1659807d0b362a3ed684d54c2e9c775eb9c7'
+
+      - name: Build
+        working-directory: pdf-fire
+        shell: pwsh
+        run: |
+          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DCMAKE_VCPKG_BUILD_TYPE=Release `
+            -DCMAKE_TOOLCHAIN_FILE="${env:VCPKG_ROOT}\scripts\buildsystems\vcpkg.cmake" `
+            -DVCPKG_INSTALLED_DIR="${env:VCPKG_INSTALLED_DIR}" `
+            -DPDF4QT_QT_ROOT="${env:QT_ROOT_DIR}" `
+            -DPDF4QT_INSTALL_QT_DEPENDENCIES=ON -DPDF4QT_INSTALL_DEPENDENCIES=ON `
+            -DPDF4QT_INSTALL_MSVC_REDISTRIBUTABLE=ON -DPDF4QT_INSTALL_TO_USR=ON `
+            -DPDFFIRE_KOKORO_DIR="${env:PDFFIRE_WORK_DIR}\deps\kokoro"
+          cmake --build build --target release_translations --config Release -j4
+          cmake --build build --config Release -j4
+
+      - name: Unit tests
+        working-directory: pdf-fire
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $env:PATH = "$PWD\build\bin\Release;$PWD\build\bin;${env:VCPKG_INSTALLED_DIR}\x64-windows\bin;${env:QT_ROOT_DIR}\bin;$env:PATH"
+          $env:PDFFIRE_SPEECH_MUTE = '1'
+          $env:QT_QPA_PLATFORM = 'offscreen'
+          ctest --test-dir build -C Release --output-on-failure --timeout 300
+
+      - name: Program folder
+        working-directory: pdf-fire
+        shell: pwsh
+        run: |
+          cmake --install build --config Release
+          $bin = Join-Path $PWD 'build\install\usr\bin'
+          New-Item -ItemType Directory -Force -Path "$bin\tessdata" | Out-Null
+          Copy-Item (Join-Path $env:PDFFIRE_WORK_DIR 'deps\tessdata\eng.traineddata') "$bin\tessdata\"
+          Copy-Item LICENSE "$bin\LICENSE.txt"
+          Copy-Item -Recurse 3rdparty_licenses "$bin\3rdparty_licenses"
+          Get-ChildItem $bin | Format-Table Name, Length -AutoSize | Out-String -Width 200
+          if (-not (Test-Path "$bin\voice\kokoro.onnx")) { throw 'the voice data is missing from the program folder' }
+          if (-not (Test-Path "$bin\onnxruntime.dll")) { throw 'onnxruntime.dll is missing from the program folder' }
+
+      - name: Upload the program folder
+        uses: actions/upload-artifact@v4
+        with:
+          name: PDF-Fire-windows-x64
+          path: pdf-fire\build\install\usr\bin
+          retention-days: 30

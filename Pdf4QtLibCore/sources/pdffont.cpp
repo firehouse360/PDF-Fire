@@ -723,6 +723,10 @@ SystemFontData PDFSystemFontInfoStorage::loadFont(const CIDSystemInfo* cidSystem
             // PDF Fire: the URW clone of ZapfDingbats (fonts-urw-base35). The "Symbol"
             // font has no check mark, so the checked check boxes were drawn empty.
             fontName = "D050000L";
+#elif defined(Q_OS_WIN)
+            // PDF Fire: Segoe UI Symbol (part of Windows) has the dingbats by their Unicode
+            // characters (the check mark of a check box is U+2714); "Symbol" has none of them.
+            fontName = "Segoe UI Symbol";
 #else
             fontName = "Symbol";
 #endif

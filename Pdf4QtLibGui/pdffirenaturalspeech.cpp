@@ -438,7 +438,8 @@ QString PDFFireNaturalSpeech::getVoiceDirectory()
     {
         candidates << qEnvironmentVariable("PDFFIRE_VOICE_DIR");
     }
-    candidates << QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("../share/pdf-fire/voice"));
+    candidates << QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("voice"))   // Windows: next to the program
+               << QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("../share/pdf-fire/voice"));
 #ifdef PDFFIRE_DEV_VOICE_DIR
     candidates << QStringLiteral(PDFFIRE_DEV_VOICE_DIR);
 #endif

@@ -842,7 +842,13 @@ QStringList PDFFireCertificateAuthority::getTrustedAuthoritiesDirectories()
     {
         return s_trustedDirectoriesOverride;
     }
+#ifdef Q_OS_WIN
+    // For the whole computer: %ProgramData%\PDF Fire\trusted-authorities (set by the administrator)
+    const QString programData = qEnvironmentVariable("ProgramData", QStringLiteral("C:/ProgramData"));
+    return { getTrustedAuthoritiesDirectory(), QDir(programData).filePath(QStringLiteral("PDF Fire/trusted-authorities")) };
+#else
     return { getTrustedAuthoritiesDirectory(), QStringLiteral("/etc/pdf-fire/trusted-authorities") };
+#endif
 }
 
 void PDFFireCertificateAuthority::setTrustedAuthoritiesDirectoriesOverride(const QStringList& directories)

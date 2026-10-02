@@ -1,9 +1,17 @@
 # PDF Fire: Recognize Text (OCR) (MIT). Uses Tesseract (Apache 2.0) - the plugin is not
 # built, when Tesseract (headers + pkg-config file, package libtesseract-dev) is not found.
 
-find_package(PkgConfig QUIET)
-if(PkgConfig_FOUND)
-    pkg_check_modules(TESSERACT IMPORTED_TARGET tesseract)
+# Windows (vcpkg): the Tesseract CMake package; Linux: pkg-config
+find_package(Tesseract CONFIG QUIET)
+if(Tesseract_FOUND)
+    set(TESSERACT_FOUND ON)
+    set(PDFFIRE_TESSERACT_TARGET Tesseract::libtesseract)
+else()
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(TESSERACT IMPORTED_TARGET tesseract)
+    endif()
+    set(PDFFIRE_TESSERACT_TARGET PkgConfig::TESSERACT)
 endif()
 
 if(NOT TESSERACT_FOUND)
@@ -20,7 +28,7 @@ add_library(OcrPlugin SHARED
     icons.qrc
 )
 
-target_link_libraries(OcrPlugin PRIVATE Pdf4QtLibCore Pdf4QtLibWidgets Qt6::Core Qt6::Gui Qt6::Widgets PkgConfig::TESSERACT)
+target_link_libraries(OcrPlugin PRIVATE Pdf4QtLibCore Pdf4QtLibWidgets Qt6::Core Qt6::Gui Qt6::Widgets ${PDFFIRE_TESSERACT_TARGET})
 
 set_target_properties(OcrPlugin PROPERTIES
                       VERSION ${PDF4QT_VERSION}
