@@ -679,14 +679,15 @@ void OdtExportTest::testConvertPdf()
         writer.setPageMargins(QMarginsF(0, 0, 0, 0));
         QPainter painter(&writer);
 
-        QFont heading("DejaVu Sans");
+        // A font with a real bold face on this computer (Windows has no DejaVu Sans)
+        QFont heading(QFontDatabase::hasFamily("DejaVu Sans") ? QStringLiteral("DejaVu Sans") : QStringLiteral("Arial"));
         heading.setPixelSize(20);
         heading.setBold(true);
         painter.setFont(heading);
         painter.setPen(QColor(0x2F, 0x54, 0x96));
         painter.drawText(QPointF(72, 100), "Department Guidelines");
 
-        QFont body("DejaVu Sans");
+        QFont body(QFontDatabase::hasFamily("DejaVu Sans") ? QStringLiteral("DejaVu Sans") : QStringLiteral("Arial"));
         body.setPixelSize(10);
         painter.setFont(body);
         painter.setPen(Qt::black);

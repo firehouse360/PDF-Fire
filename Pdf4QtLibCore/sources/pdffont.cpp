@@ -942,6 +942,24 @@ SystemFontData PDFSystemFontInfoStorage::loadFontImpl(const FontDescriptor* desc
         }
     }
 
+    // PDF Fire: the last resort, as the font matching of Linux does it - a font of the same
+    // kind (fixed pitch, serif or sans serif), which is part of every Windows. Without it the
+    // text of a font, which is not embedded and not installed, was not shown or found at all.
+    if (result.isEmpty())
+    {
+        const wchar_t* fallbackFace = descriptor->isFixedPitch() ? L"Courier New" : (descriptor->isSerif() ? L"Times New Roman" : L"Arial");
+        LOGFONT logFont = { };
+        logFont.lfCharSet = DEFAULT_CHARSET;
+        logFont.lfWeight = LONG(descriptor->fontWeight);
+        logFont.lfItalic = lfItalic;
+        wcsncpy_s(logFont.lfFaceName, LF_FACESIZE, fallbackFace, _TRUNCATE);
+        result = SystemFontData{ getFontData(&logFont, hdc), 0 };
+        if (!result.isEmpty())
+        {
+            reporter->reportRenderError(RenderErrorType::Warning, PDFTranslationContext::tr("Inexact font substitution: font %1 replaced by %2.").arg(fontName, QString::fromWCharArray(fallbackFace)));
+        }
+    }
+
     ReleaseDC(NULL, hdc);
     return result;
 #elif defined(Q_OS_UNIX)
