@@ -533,12 +533,29 @@ void SignatureBuilderTest::restrictedDocumentPermissions()
     QVERIFY(!PDFFirePermissions::canAssemblePages(&userDocument));
     QVERIFY(!PDFFirePermissions::canChangeSecurity(&userDocument));
 
+    // The summary for Document Info and the bar above the pages: it opens without a
+    // password, only printing is allowed, the permissions password unlocks it
+    const PDFFirePermissions::ProtectionSummary userSummary = PDFFirePermissions::getProtectionSummary(&userDocument);
+    QVERIFY(userSummary.isEncrypted);
+    QVERIFY(!userSummary.needsOpenPassword);
+    QVERIFY(!userSummary.isOwner);
+    QVERIFY(userSummary.isRestricted);
+    QVERIFY(userSummary.canUnlock);
+    QCOMPARE(userSummary.allowed.size(), 1);
+    QCOMPARE(userSummary.notAllowed.size(), 7);
+    QVERIFY(!userSummary.explanation.isEmpty());
+
     PDFDocumentReader ownerReader(nullptr, [](bool* ok) { *ok = true; return QString("owner-secret"); }, false, true);
     const PDFDocument ownerDocument = ownerReader.readFromBuffer(buffer.data());
     QCOMPARE(ownerReader.getReadingResult(), PDFDocumentReader::Result::OK);
     QVERIFY(PDFFirePermissions::canModifyContent(&ownerDocument));
     QVERIFY(PDFFirePermissions::canCopyContent(&ownerDocument));
     QVERIFY(PDFFirePermissions::canChangeSecurity(&ownerDocument));
+    const PDFFirePermissions::ProtectionSummary ownerSummary = PDFFirePermissions::getProtectionSummary(&ownerDocument);
+    QVERIFY(ownerSummary.isOwner);
+    QVERIFY(!ownerSummary.isRestricted);
+    QVERIFY(!ownerSummary.canUnlock);
+    QVERIFY(ownerSummary.notAllowed.isEmpty());
 
     // No security at all - everything is allowed
     PDFDocumentBuilder plainBuilder;
@@ -547,6 +564,33 @@ void SignatureBuilderTest::restrictedDocumentPermissions()
     QVERIFY(PDFFirePermissions::canModifyContent(&plainDocument));
     QVERIFY(PDFFirePermissions::canChangeSecurity(&plainDocument));
     QCOMPARE(PDFFirePermissions::getCertification(&plainDocument), PDFFirePermissions::Certification::None);
+    const PDFFirePermissions::ProtectionSummary plainSummary = PDFFirePermissions::getProtectionSummary(&plainDocument);
+    QVERIFY(!plainSummary.isEncrypted);
+    QVERIFY(!plainSummary.isRestricted);
+    QVERIFY(!plainSummary.canUnlock);
+
+    // An open password, which is also the only password: it needs the password, and
+    // (without restrictions) nothing is restricted
+    PDFDocumentBuilder openBuilder;
+    openBuilder.appendPage(QRectF(0, 0, 612, 792));
+    PDFSecurityHandlerFactory::SecuritySettings openSettings;
+    openSettings.algorithm = PDFSecurityHandlerFactory::AES_256;
+    openSettings.userPassword = "open-secret";
+    openSettings.ownerPassword = "owner-secret";
+    openSettings.permissions = uint32_t(PDFSecurityHandler::Permission::PrintLowResolution) | uint32_t(PDFSecurityHandler::Permission::PrintHighResolution);
+    openBuilder.setSecurityHandler(PDFSecurityHandlerFactory::createSecurityHandler(openSettings));
+    const PDFDocument openSource = openBuilder.build();
+    QBuffer openBuffer;
+    QVERIFY(openBuffer.open(QBuffer::WriteOnly));
+    QVERIFY(writer.write(&openBuffer, &openSource));
+    openBuffer.close();
+    PDFDocumentReader openReader(nullptr, [](bool* ok) { *ok = true; return QString("open-secret"); }, false, false);
+    const PDFDocument openDocument = openReader.readFromBuffer(openBuffer.data());
+    QCOMPARE(openReader.getReadingResult(), PDFDocumentReader::Result::OK);
+    const PDFFirePermissions::ProtectionSummary openSummary = PDFFirePermissions::getProtectionSummary(&openDocument);
+    QVERIFY(openSummary.needsOpenPassword);
+    QVERIFY(openSummary.isRestricted);
+    QVERIFY(openSummary.canUnlock);
 }
 
 void SignatureBuilderTest::signatureSizeChanges_data()

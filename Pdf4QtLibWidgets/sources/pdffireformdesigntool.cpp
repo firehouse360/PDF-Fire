@@ -756,6 +756,13 @@ void PDFFireFormDesignTool::mouseReleaseEvent(QWidget* widget, QMouseEvent* even
             PDFFireFormFields::Settings settings = PDFFireFormFields::getDefaultSettings(type);
             settings.name = createFieldName(type);
 
+            // PDF Fire: a text field drawn as tall as two lines or more is a paragraph box -
+            // its words wrap (Multi-line), it can be switched off in its menu
+            if (type == PDFFireFormFields::Type::Text && rect.height() >= 34.0)
+            {
+                settings.type = PDFFireFormFields::Type::MultilineText;
+            }
+
             // A radio button placed while another radio button is selected joins its group
             if (type == PDFFireFormFields::Type::RadioButton && m_selectedWidget.isValid())
             {

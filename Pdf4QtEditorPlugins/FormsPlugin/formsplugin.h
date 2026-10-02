@@ -28,6 +28,8 @@
 
 #include <QObject>
 
+#include <functional>
+
 #include <map>
 
 class QActionGroup;
@@ -65,6 +67,7 @@ private:
     void onToolActivityChanged(bool active);
     void onProperties();
     void onContextMenu(QPoint globalPosition);
+    void changeSelectedField(const std::function<void(pdf::PDFFireFormFields::Settings&)>& change);
     void onDetectFields();
     void onTabOrder();
     void onFillForm();

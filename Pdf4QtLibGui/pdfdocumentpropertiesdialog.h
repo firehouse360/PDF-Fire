@@ -75,12 +75,16 @@ public:
     QByteArray getXMPMetadata() const;
     bool isXMPMetadataModified() const;
 
+    /// PDF Fire: the user asked to enter the permissions password (Overview page)
+    bool isUnlockRequested() const { return m_isUnlockRequested; }
+
 protected:
     virtual void closeEvent(QCloseEvent* event) override;
 
 private:
     Ui::PDFDocumentPropertiesDialog* ui;
 
+    void initializeOverview(const pdf::PDFDocument* document, const PDFFileInfo* fileInfo);
     void initializeProperties(const pdf::PDFDocument* document);
     void initializeFileInfoProperties(const PDFFileInfo* fileInfo);
     void initializeSecurity(const pdf::PDFDocument* document);
@@ -97,6 +101,7 @@ private:
     QString m_originalXMPMetadataText;
     const pdf::PDFDocument* m_document = nullptr;
     bool m_hasOriginalXMPMetadataStream = false;
+    bool m_isUnlockRequested = false;
 };
 
 }   // namespace pdfviewer

@@ -45,6 +45,8 @@ private slots:
     void fieldsAreParsedAsAForm();
     void radioGroup();
     void updateKeepsTypeAndChangesSettings();
+    void noOutlineByDefault();
+    void acrobatOptionsRoundTrip();
     void moveAndResize();
     void removeField();
     void removeRadioButtons();
@@ -308,6 +310,85 @@ void FormFieldsTest::updateKeepsTypeAndChangesSettings()
     QVERIFY(actual->readOnly);
     QCOMPARE(actual->value, QString("Mike"));
     QVERIFY(!actual->borderColor.isValid());
+}
+
+void FormFieldsTest::noOutlineByDefault()
+{
+    // PDF Fire (Mike, 2026-10-02): no field prints an outline, unless it is switched on
+    for (const PDFFireFormFields::Type type : { PDFFireFormFields::Type::Text, PDFFireFormFields::Type::MultilineText, PDFFireFormFields::Type::Date,
+                                                PDFFireFormFields::Type::CheckBox, PDFFireFormFields::Type::RadioButton, PDFFireFormFields::Type::ComboBox,
+                                                PDFFireFormFields::Type::ListBox, PDFFireFormFields::Type::Signature })
+    {
+        QVERIFY(!PDFFireFormFields::getDefaultSettings(type).borderColor.isValid());
+    }
+}
+
+void FormFieldsTest::acrobatOptionsRoundTrip()
+{
+    PDFDocument document = blank();
+    PDFDocumentBuilder builder(&document);
+    const PDFObjectReference widget = PDFFireFormFields::createField(&builder, firstPage(document), QRectF(50, 700, 200, 20), settings(PDFFireFormFields::Type::Text, "Zip"));
+
+    PDFFireFormFields::Settings changed = *PDFFireFormFields::readField(builder.getStorage(), widget);
+    changed.fontName = "TiBo";
+    changed.fontSize = 11.0;
+    changed.textColor = QColor(200, 0, 0);
+    changed.borderColor = Qt::blue;
+    changed.borderStyle = PDFFireFormFields::BorderStyle::Dashed;
+    changed.doNotScroll = true;
+    changed.doNotSpellCheck = true;
+    changed.maxLength = 5;
+    changed.comb = true;
+    changed.value = "16052";
+    PDFFireFormFields::updateField(&builder, widget, changed);
+
+    PDFDocument result = read(write(builder.build()));
+    auto actual = PDFFireFormFields::readField(&result.getStorage(), widget);
+    QCOMPARE(actual->type, PDFFireFormFields::Type::Text);
+    QCOMPARE(actual->fontName, QByteArray("TiBo"));
+    QCOMPARE(actual->fontSize, 11.0);
+    QCOMPARE(actual->textColor.red(), 200);
+    QCOMPARE(actual->borderStyle, PDFFireFormFields::BorderStyle::Dashed);
+    QVERIFY(actual->doNotScroll);
+    QVERIFY(actual->doNotSpellCheck);
+    QVERIFY(actual->comb);
+    QVERIFY(!actual->password);
+
+    // The font is in the form's resources and in the appearance; the comb puts the
+    // characters one by one
+    const PDFObjectStorage& storage = result.getStorage();
+    const PDFDictionary* widgetDictionary = storage.getDictionaryFromObject(storage.getObjectByReference(widget));
+    const PDFDictionary* appearance = storage.getDictionaryFromObject(widgetDictionary->get("AP"));
+    const PDFObject& normal = storage.getObject(appearance->get("N"));
+    const QByteArray content = storage.getDecodedStream(normal.getStream());
+    QVERIFY(content.contains("/TiBo 11 Tf"));
+    QCOMPARE(content.count(" Tj"), 5);
+    QVERIFY(content.contains("[3] 0 d"));
+
+    // Multi-line (the word wrap) switches a text field to a paragraph box and back;
+    // a comb is only for one line
+    PDFDocumentBuilder builder2(&result);
+    PDFFireFormFields::Settings wrap = *actual;
+    wrap.type = PDFFireFormFields::Type::MultilineText;
+    PDFFireFormFields::updateField(&builder2, widget, wrap);
+    result = read(write(builder2.build()));
+    actual = PDFFireFormFields::readField(&result.getStorage(), widget);
+    QCOMPARE(actual->type, PDFFireFormFields::Type::MultilineText);
+    QVERIFY(!actual->comb);
+
+    // A password is never written into the appearance
+    PDFDocumentBuilder builder3(&result);
+    PDFFireFormFields::Settings password = *actual;
+    password.type = PDFFireFormFields::Type::Text;
+    password.password = true;
+    password.value = "secret";
+    PDFFireFormFields::updateField(&builder3, widget, password);
+    result = read(write(builder3.build()));
+    const PDFDictionary* passwordWidget = result.getStorage().getDictionaryFromObject(result.getStorage().getObjectByReference(widget));
+    const PDFDictionary* passwordAppearance = result.getStorage().getDictionaryFromObject(passwordWidget->get("AP"));
+    const QByteArray passwordContent = result.getStorage().getDecodedStream(result.getStorage().getObject(passwordAppearance->get("N")).getStream());
+    QVERIFY(!passwordContent.contains("secret"));
+    QVERIFY(PDFFireFormFields::readField(&result.getStorage(), widget)->password);
 }
 
 void FormFieldsTest::moveAndResize()

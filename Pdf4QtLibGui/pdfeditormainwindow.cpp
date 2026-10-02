@@ -50,8 +50,13 @@
 #include "pdfadvancedtools.h"
 #include "pdfwidgetutils.h"
 #include "pdfactioncombobox.h"
+#include "pdffirepermissions.h"
 
 #include <QPainter>
+#include <QFrame>
+#include <QHBoxLayout>
+#include <QPushButton>
+#include <QToolButton>
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QCloseEvent>
@@ -173,6 +178,8 @@ PDFEditorMainWindow::PDFEditorMainWindow(QWidget* parent) :
     m_actionManager->setAction(PDFActionManager::CreatePolygon, ui->actionCreatePolygon);
     m_actionManager->setAction(PDFActionManager::CreateEllipse, ui->actionCreateEllipse);
     m_actionManager->setAction(PDFActionManager::CreateArrow, ui->actionCreateArrow);
+    m_actionManager->setAction(PDFActionManager::AddText, ui->actionAddText);
+    m_actionManager->setAction(PDFActionManager::UnlockPermissions, ui->actionUnlockPermissions);
     m_actionManager->setAction(PDFActionManager::CreateFreehandCurve, ui->actionCreateFreehandCurve);
     m_actionManager->setAction(PDFActionManager::DeleteAnnotation, ui->actionDeleteAnnotation);
     m_actionManager->setAction(PDFActionManager::RenderOptionAntialiasing, ui->actionRenderOptionAntialiasing);
@@ -314,6 +321,41 @@ PDFEditorMainWindow::PDFEditorMainWindow(QWidget* parent) :
     m_documentTabBar->setUsesScrollButtons(true);
     m_documentTabBar->setVisible(false);
     documentAreaLayout->addWidget(m_documentTabBar);
+
+    // PDF Fire: a document protected by its author says so above the pages - otherwise
+    // the greyed-out tools are a riddle (Acrobat shows "SECURED" and a similar bar)
+    m_protectionBar = new QFrame(documentArea);
+    m_protectionBar->setObjectName("protectionBar");
+    m_protectionBar->setStyleSheet("QFrame#protectionBar { background: palette(alternate-base); border-left: 4px solid #E8590C; border-bottom: 1px solid palette(mid); }");
+    QHBoxLayout* protectionBarLayout = new QHBoxLayout(m_protectionBar);
+    protectionBarLayout->setContentsMargins(10, 4, 4, 4);
+    m_protectionBarLabel = new QLabel(m_protectionBar);
+    m_protectionBarLabel->setObjectName("protectionBarLabel");
+    m_protectionBarLabel->setWordWrap(true);
+    m_protectionBarLabel->setTextFormat(Qt::PlainText);
+    protectionBarLayout->addWidget(m_protectionBarLabel, 1);
+    QPushButton* protectionInfoButton = new QPushButton(tr("Document Info"), m_protectionBar);
+    protectionInfoButton->setObjectName("protectionBarInfoButton");
+    connect(protectionInfoButton, &QPushButton::clicked, ui->actionProperties, &QAction::trigger);
+    protectionBarLayout->addWidget(protectionInfoButton);
+    m_protectionBarUnlockButton = new QPushButton(tr("Enter Password..."), m_protectionBar);
+    m_protectionBarUnlockButton->setObjectName("protectionBarUnlockButton");
+    m_protectionBarUnlockButton->setToolTip(ui->actionUnlockPermissions->toolTip());
+    connect(m_protectionBarUnlockButton, &QPushButton::clicked, ui->actionUnlockPermissions, &QAction::trigger);
+    protectionBarLayout->addWidget(m_protectionBarUnlockButton);
+    QToolButton* protectionCloseButton = new QToolButton(m_protectionBar);
+    protectionCloseButton->setText(QString::fromUtf8("\xC3\x97"));
+    protectionCloseButton->setAutoRaise(true);
+    protectionCloseButton->setToolTip(tr("Hide this message"));
+    connect(protectionCloseButton, &QToolButton::clicked, this, [this]()
+    {
+        m_isProtectionBarDismissed = true;
+        m_protectionBar->hide();
+    });
+    protectionBarLayout->addWidget(protectionCloseButton);
+    m_protectionBar->hide();
+    documentAreaLayout->addWidget(m_protectionBar);
+
     documentAreaLayout->addWidget(m_programController->getPdfWidget(), 1);
     setCentralWidget(documentArea);
     setFocusProxy(m_programController->getPdfWidget());
@@ -624,6 +666,38 @@ void PDFEditorMainWindow::setDocument(const pdf::PDFModifiedDocument& document)
     {
         m_advancedFindDockWidget->hide();
     }
+
+    if (document && document.hasReset() && !document.hasPreserveUndoRedo())
+    {
+        // Another document - its protection is shown again
+        m_isProtectionBarDismissed = false;
+    }
+    updateProtectionBar();
+}
+
+void PDFEditorMainWindow::updateProtectionBar()
+{
+    if (!m_protectionBar)
+    {
+        return;
+    }
+
+    const pdf::PDFDocument* document = m_programController->getDocument();
+    const pdf::PDFFirePermissions::ProtectionSummary protection = pdf::PDFFirePermissions::getProtectionSummary(document);
+    if (!document || !protection.isRestricted || m_isProtectionBarDismissed)
+    {
+        m_protectionBar->hide();
+        return;
+    }
+
+    QString text = QString::fromUtf8("\xF0\x9F\x94\x92  ") + protection.headline;
+    if (!protection.allowed.isEmpty())
+    {
+        text += QChar(' ') + tr("Allowed: %1.").arg(protection.allowed.join(QStringLiteral(", ")).toLower());
+    }
+    m_protectionBarLabel->setText(text);
+    m_protectionBarUnlockButton->setVisible(protection.canUnlock);
+    m_protectionBar->show();
 }
 
 void PDFEditorMainWindow::updateDocumentTabs()

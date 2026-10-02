@@ -26,6 +26,7 @@
 #include "pdfencoding.h"
 #include "pdfannotationmanipulator.h"
 #include "pdfglobal.h"
+#include "pdfannotation.h"
 
 #include <QRegularExpression>
 
@@ -44,6 +45,10 @@ namespace
 constexpr PDFInteger FLAG_READ_ONLY = 1 << 0;
 constexpr PDFInteger FLAG_REQUIRED = 1 << 1;
 constexpr PDFInteger FLAG_MULTILINE = 1 << 12;
+constexpr PDFInteger FLAG_PASSWORD = 1 << 13;
+constexpr PDFInteger FLAG_DO_NOT_SPELL_CHECK = 1 << 22;
+constexpr PDFInteger FLAG_DO_NOT_SCROLL = 1 << 23;
+constexpr PDFInteger FLAG_COMB = 1 << 24;
 constexpr PDFInteger FLAG_NO_TOGGLE_TO_OFF = 1 << 14;
 constexpr PDFInteger FLAG_RADIO = 1 << 15;
 constexpr PDFInteger FLAG_PUSHBUTTON = 1 << 16;
@@ -64,6 +69,36 @@ constexpr int HELVETICA_WIDTHS[] = {
     667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278, 278, 278, 469, 556,     // 'P' - '_'
     333, 556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556,     // '`' - 'o'
     556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584           // 'p' - '~'
+};
+
+// PDF Fire: widths of the characters 32-126 of the other standard fonts (AFM of the
+// URW base 35 fonts, which have the metrics of the standard fonts; the quote and the
+// grave accent are those of WinAnsiEncoding). Courier has all characters 600 wide.
+constexpr int HELVETICA_BOLD_WIDTHS[] = {
+    278, 333, 474, 556, 556, 889, 722, 238, 333, 333, 389, 584, 278, 333, 278, 278,
+    556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 333, 333, 584, 584, 584, 611,
+    975, 722, 722, 722, 722, 667, 611, 778, 722, 278, 556, 722, 611, 833, 722, 778,
+    667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 333, 278, 333, 584, 556,
+    333, 556, 611, 556, 611, 556, 333, 611, 611, 278, 278, 556, 278, 889, 611, 611,
+    611, 611, 389, 556, 333, 611, 556, 778, 556, 556, 500, 389, 280, 389, 584
+};
+
+constexpr int TIMES_ROMAN_WIDTHS[] = {
+    250, 333, 408, 500, 500, 833, 778, 180, 333, 333, 500, 564, 250, 333, 250, 278,
+    500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 278, 278, 564, 564, 564, 444,
+    921, 722, 667, 667, 722, 611, 556, 722, 722, 333, 389, 722, 611, 889, 722, 722,
+    556, 722, 667, 556, 611, 722, 722, 944, 722, 722, 611, 333, 278, 333, 469, 500,
+    333, 444, 500, 444, 500, 444, 333, 500, 500, 278, 278, 500, 278, 778, 500, 500,
+    500, 500, 333, 389, 278, 500, 500, 722, 500, 500, 444, 480, 200, 480, 541
+};
+
+constexpr int TIMES_BOLD_WIDTHS[] = {
+    250, 333, 555, 500, 500, 1000, 833, 278, 333, 333, 500, 570, 250, 333, 250, 278,
+    500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 333, 333, 570, 570, 570, 500,
+    930, 722, 667, 722, 722, 667, 611, 778, 778, 389, 500, 778, 667, 944, 722, 778,
+    611, 778, 722, 556, 667, 722, 722, 1000, 722, 722, 667, 333, 278, 333, 581, 500,
+    333, 500, 556, 444, 556, 444, 333, 500, 556, 278, 333, 556, 278, 833, 556, 500,
+    556, 556, 444, 389, 333, 556, 500, 722, 500, 500, 444, 394, 220, 394, 520
 };
 
 QByteArray formatNumber(PDFReal value)
@@ -281,15 +316,34 @@ int getPageRotation(const PDFObjectStorage* storage, PDFObjectReference page)
     return 0;
 }
 
-PDFObject createHelveticaFont()
+PDFObject createStandardFont(const QByteArray& resourceName, const QByteArray& baseFont)
 {
     PDFDictionaryBuilder font;
     font.setEntry(PDFInplaceOrMemoryString("Type"), PDFObject::createName("Font"));
     font.setEntry(PDFInplaceOrMemoryString("Subtype"), PDFObject::createName("Type1"));
-    font.setEntry(PDFInplaceOrMemoryString("BaseFont"), PDFObject::createName("Helvetica"));
+    font.setEntry(PDFInplaceOrMemoryString("BaseFont"), PDFObject::createName(baseFont));
     font.setEntry(PDFInplaceOrMemoryString("Encoding"), PDFObject::createName("WinAnsiEncoding"));
-    font.setEntry(PDFInplaceOrMemoryString("Name"), PDFObject::createName("Helv"));
+    font.setEntry(PDFInplaceOrMemoryString("Name"), PDFObject::createName(resourceName));
     return PDFObject::createDictionary(std::move(font));
+}
+
+PDFObject createHelveticaFont()
+{
+    return createStandardFont("Helv", "Helvetica");
+}
+
+/// The font of the field's text: one of the standard fonts (an unknown name - Helvetica)
+const PDFFireFormFields::FontInfo& findFont(const QByteArray& fontName)
+{
+    const std::vector<PDFFireFormFields::FontInfo>& fonts = PDFFireFormFields::getFonts();
+    for (const PDFFireFormFields::FontInfo& font : fonts)
+    {
+        if (font.resourceName == fontName || font.baseFont == fontName)
+        {
+            return font;
+        }
+    }
+    return fonts.front();
 }
 
 PDFObject createZapfDingbatsFont()
@@ -313,7 +367,7 @@ bool isButtonType(PDFFireFormFields::Type type)
 }
 
 /// The words of the text wrapped to lines of the given width (in the units of the font size)
-QStringList wrapText(const QString& text, PDFReal width)
+QStringList wrapText(const QString& text, PDFReal width, const QByteArray& fontName)
 {
     QStringList lines;
     for (const QString& paragraph : text.split(QChar('\n')))
@@ -322,7 +376,7 @@ QStringList wrapText(const QString& text, PDFReal width)
         for (const QString& word : paragraph.split(QChar(' ')))
         {
             const QString candidate = line.isEmpty() ? word : line + QChar(' ') + word;
-            if (!line.isEmpty() && PDFFireFormFields::getHelveticaTextWidth(candidate) > width)
+            if (!line.isEmpty() && PDFFireFormFields::getTextWidth(fontName, candidate) > width)
             {
                 lines << line;
                 line = word;
@@ -358,7 +412,10 @@ PDFFireFormFields::Settings PDFFireFormFields::getDefaultSettings(Type type)
 {
     Settings settings;
     settings.type = type;
-    settings.borderColor = QColor(Qt::black);
+    // PDF Fire: no outline by default (Mike, 2026-10-02) - the form usually has its own
+    // lines and boxes, and on the screen the fields are highlighted. The outline is
+    // switched on in the properties or in the menu of the field.
+    settings.borderColor = QColor();
     settings.backgroundColor = QColor();
     settings.borderWidth = 1.0;
 
@@ -437,11 +494,72 @@ QString PDFFireFormFields::getTypeName(Type type)
 
 PDFReal PDFFireFormFields::getHelveticaTextWidth(const QString& text)
 {
+    return getTextWidth("Helv", text);
+}
+
+const std::vector<PDFFireFormFields::FontInfo>& PDFFireFormFields::getFonts()
+{
+    static const std::vector<FontInfo> fonts = {
+        { "Helv", "Helvetica", QStringLiteral("Helvetica (Arial)") },
+        { "HeBo", "Helvetica-Bold", QStringLiteral("Helvetica Bold") },
+        { "TiRo", "Times-Roman", QStringLiteral("Times") },
+        { "TiBo", "Times-Bold", QStringLiteral("Times Bold") },
+        { "Cour", "Courier", QStringLiteral("Courier") },
+        { "CoBo", "Courier-Bold", QStringLiteral("Courier Bold") }
+    };
+    return fonts;
+}
+
+QFont PDFFireFormFields::createSystemFont(const QByteArray& fontName)
+{
+    // The standard fonts by their names in the form's resources, as Acrobat writes
+    // them; any other name is a family name of the system
+    static const std::pair<const char*, std::pair<const char*, bool>> mapping[] = {
+        { "Helv", { "Helvetica", false } }, { "HeBo", { "Helvetica", true } },
+        { "Helvetica", { "Helvetica", false } }, { "Helvetica-Bold", { "Helvetica", true } },
+        { "TiRo", { "Times", false } }, { "TiBo", { "Times", true } },
+        { "Times-Roman", { "Times", false } }, { "Times-Bold", { "Times", true } },
+        { "Cour", { "Courier", false } }, { "CoBo", { "Courier", true } },
+        { "Courier", { "Courier", false } }, { "Courier-Bold", { "Courier", true } }
+    };
+    for (const auto& [name, family] : mapping)
+    {
+        if (fontName == name)
+        {
+            QFont font(QString::fromLatin1(family.first));
+            font.setBold(family.second);
+            return font;
+        }
+    }
+    return QFont(QString::fromLatin1(fontName));
+}
+
+PDFReal PDFFireFormFields::getTextWidth(const QByteArray& fontName, const QString& text)
+{
+    const QByteArray baseFont = findFont(fontName).baseFont;
+    const int* widths = HELVETICA_WIDTHS;
+    if (baseFont == "Helvetica-Bold")
+    {
+        widths = HELVETICA_BOLD_WIDTHS;
+    }
+    else if (baseFont == "Times-Roman")
+    {
+        widths = TIMES_ROMAN_WIDTHS;
+    }
+    else if (baseFont == "Times-Bold")
+    {
+        widths = TIMES_BOLD_WIDTHS;
+    }
+    else if (baseFont.startsWith("Courier"))
+    {
+        return text.size() * 0.6;
+    }
+
     PDFReal width = 0.0;
     for (QChar character : text)
     {
         const char16_t unicode = character.unicode();
-        width += (unicode >= 32 && unicode <= 126) ? HELVETICA_WIDTHS[unicode - 32] : 556;
+        width += (unicode >= 32 && unicode <= 126) ? widths[unicode - 32] : 556;
     }
     return width / 1000.0;
 }
@@ -468,11 +586,16 @@ QByteArray PDFFireFormFields::createAppearanceContent(const Settings& settings, 
         {
             content += colorOperator(settings.borderColor, true);
             content += formatNumber(borderWidth) + " w\n";
+            if (settings.borderStyle == BorderStyle::Dashed)
+            {
+                content += "[3] 0 d\n";
+            }
             content += circlePath(center, radius - borderWidth * 0.5) + "S\n";
+            content += "[] 0 d\n";
         }
         if (on)
         {
-            content += "0 g\n";
+            content += colorOperator(settings.textColor.isValid() ? settings.textColor : QColor(Qt::black), false);
             content += circlePath(center, radius * 0.45) + "f\n";
         }
         return content;
@@ -488,8 +611,27 @@ QByteArray PDFFireFormFields::createAppearanceContent(const Settings& settings, 
     {
         content += colorOperator(settings.borderColor, true);
         content += formatNumber(borderWidth) + " w\n";
-        content += formatNumber(borderWidth * 0.5) + " " + formatNumber(borderWidth * 0.5) + " " + formatNumber(width - borderWidth) + " " + formatNumber(height - borderWidth) + " re S\n";
+        switch (settings.borderStyle)
+        {
+            case BorderStyle::Underline:
+                // Only a line along the bottom - a line to write on
+                content += "0 " + formatNumber(borderWidth * 0.5) + " m " + formatNumber(width) + " " + formatNumber(borderWidth * 0.5) + " l S\n";
+                break;
+
+            case BorderStyle::Dashed:
+                content += "[3] 0 d\n";
+                content += formatNumber(borderWidth * 0.5) + " " + formatNumber(borderWidth * 0.5) + " " + formatNumber(width - borderWidth) + " " + formatNumber(height - borderWidth) + " re S\n";
+                content += "[] 0 d\n";
+                break;
+
+            case BorderStyle::Solid:
+                content += formatNumber(borderWidth * 0.5) + " " + formatNumber(borderWidth * 0.5) + " " + formatNumber(width - borderWidth) + " " + formatNumber(height - borderWidth) + " re S\n";
+                break;
+        }
     }
+
+    const QColor textColor = settings.textColor.isValid() ? settings.textColor : QColor(Qt::black);
+    const QByteArray fontName = findFont(settings.fontName).resourceName;
 
     switch (settings.type)
     {
@@ -501,7 +643,7 @@ QByteArray PDFFireFormFields::createAppearanceContent(const Settings& settings, 
                 // centred by its ink (the glyph a20 is 0.686 x 0.705 of the font size,
                 // 0.035 from its origin), and fills 80 % of the box
                 const PDFReal fontSize = qMax(1.0, 0.8 * qMin(width / 0.686, height / 0.705));
-                content += "q\nBT\n0 g\n/ZaDb " + formatNumber(fontSize) + " Tf\n";
+                content += "q\nBT\n" + colorOperator(textColor, false) + "/ZaDb " + formatNumber(fontSize) + " Tf\n";
                 content += formatNumber((width - 0.686 * fontSize) * 0.5 - 0.035 * fontSize) + " " + formatNumber((height - 0.705 * fontSize) * 0.5) + " Td\n(4) Tj\nET\nQ\n";
             }
             break;
@@ -545,14 +687,16 @@ QByteArray PDFFireFormFields::createAppearanceContent(const Settings& settings, 
             }
             else if (settings.type == Type::MultilineText)
             {
-                lines = wrapText(settings.value, innerWidth / fontSize);
+                lines = wrapText(settings.password ? QString(settings.value.size(), QChar('*')) : settings.value, innerWidth / fontSize, fontName);
             }
             else if (!settings.value.isEmpty())
             {
-                lines << settings.value;
+                // A password is never written into the appearance
+                const QString shownValue = settings.password ? QString(settings.value.size(), QChar('*')) : settings.value;
+                lines << shownValue;
 
                 // A text longer than the field is made smaller (automatic size only)
-                const PDFReal textWidth = getHelveticaTextWidth(settings.value);
+                const PDFReal textWidth = getTextWidth(fontName, shownValue);
                 if (settings.fontSize <= 0.0 && textWidth * fontSize > innerWidth)
                 {
                     fontSize = qMax(4.0, innerWidth / textWidth);
@@ -573,12 +717,28 @@ QByteArray PDFFireFormFields::createAppearanceContent(const Settings& settings, 
                     content += formatNumber(borderWidth + 1.0) + " " + formatNumber(top - lineHeight) + " " + formatNumber(width - 2.0 * borderWidth - 2.0) + " " + formatNumber(lineHeight) + " re f\n";
                 }
 
-                content += "BT\n/Helv " + formatNumber(fontSize) + " Tf\n0 g\n";
+                content += "BT\n/" + fontName + " " + formatNumber(fontSize) + " Tf\n" + colorOperator(textColor, false);
 
                 PDFReal baseline = isMultiline ? (height - borderWidth - TEXT_PADDING - fontSize * 0.9) : ((height - 0.718 * fontSize) * 0.5);
+
+                // A comb: each character in the middle of its own box (Maximal length boxes)
+                const bool isComb = settings.comb && settings.type == Type::Text && settings.maxLength > 0 && !settings.password;
+                if (isComb)
+                {
+                    const PDFReal cellWidth = width / settings.maxLength;
+                    const QString text = lines.front().left(settings.maxLength);
+                    for (qsizetype i = 0; i < text.size(); ++i)
+                    {
+                        const PDFReal characterWidth = getTextWidth(fontName, text.mid(i, 1)) * fontSize;
+                        content += "1 0 0 1 " + formatNumber(cellWidth * (i + 0.5) - characterWidth * 0.5) + " " + formatNumber(baseline) + " Tm\n";
+                        content += toPDFString(text.mid(i, 1)) + " Tj\n";
+                    }
+                    lines.clear();
+                }
+
                 for (const QString& line : lines)
                 {
-                    const PDFReal textWidth = getHelveticaTextWidth(line) * fontSize;
+                    const PDFReal textWidth = getTextWidth(fontName, line) * fontSize;
                     PDFReal x = borderWidth + TEXT_PADDING;
                     if (settings.alignment == 1)
                     {
@@ -744,6 +904,16 @@ std::optional<PDFFireFormFields::Settings> PDFFireFormFields::readField(const PD
     const QRegularExpressionMatch fontSizeMatch = QRegularExpression(QStringLiteral("([0-9.]+)\\s+Tf")).match(QString::fromLatin1(defaultAppearance));
     settings.fontSize = fontSizeMatch.hasMatch() ? fontSizeMatch.captured(1).toDouble() : 0.0;
 
+    // PDF Fire: the font and the colour of the text, the text options
+    const PDFAnnotationDefaultAppearance appearance = PDFAnnotationDefaultAppearance::parse(defaultAppearance);
+    const QByteArray appearanceFontName = appearance.getFontName();
+    settings.fontName = (!appearanceFontName.isEmpty() && appearanceFontName != "ZaDb") ? findFont(appearanceFontName).resourceName : QByteArray("Helv");
+    settings.textColor = appearance.getFontColor().isValid() ? appearance.getFontColor() : QColor(Qt::black);
+    settings.password = (flags & FLAG_PASSWORD) && isTextType(settings.type);
+    settings.doNotSpellCheck = (flags & FLAG_DO_NOT_SPELL_CHECK);
+    settings.doNotScroll = (flags & FLAG_DO_NOT_SCROLL) && isTextType(settings.type);
+    settings.comb = (flags & FLAG_COMB) && isTextType(settings.type);
+
     const PDFObject value = getInherited("V");
     if (isButtonType(settings.type))
     {
@@ -803,6 +973,15 @@ std::optional<PDFFireFormFields::Settings> PDFFireFormFields::readField(const PD
     if (const PDFDictionary* borderStyle = storage->getDictionaryFromObject(widgetDictionary->get("BS")))
     {
         settings.borderWidth = loader.readNumberFromDictionary(borderStyle, "W", 1.0);
+
+        // A field without a border has the width 0 - the border, when it is switched
+        // on, has the usual width
+        if (settings.borderWidth <= 0.0)
+        {
+            settings.borderWidth = 1.0;
+        }
+        const QByteArray style = loader.readNameFromDictionary(borderStyle, "S");
+        settings.borderStyle = (style == "D") ? BorderStyle::Dashed : ((style == "U") ? BorderStyle::Underline : BorderStyle::Solid);
     }
 
     return settings;
@@ -832,9 +1011,12 @@ void PDFFireFormFields::ensureAcroForm(PDFDocumentBuilder* builder)
     // The fonts of the fields in the default resources
     PDFDictionaryBuilder resources = copyDictionary(storage, form.get("DR"));
     PDFDictionaryBuilder fonts = copyDictionary(storage, resources.get("Font"));
-    if (!fonts.hasKey("Helv"))
+    for (const FontInfo& font : getFonts())
     {
-        fonts.setEntry(PDFInplaceOrMemoryString("Helv"), PDFObject::createReference(builder->addObject(createHelveticaFont())));
+        if (!fonts.hasKey(font.resourceName))
+        {
+            fonts.setEntry(PDFInplaceOrMemoryString(font.resourceName), PDFObject::createReference(builder->addObject(createStandardFont(font.resourceName, font.baseFont))));
+        }
     }
     if (!fonts.hasKey("ZaDb"))
     {
@@ -959,12 +1141,19 @@ void PDFFireFormFields::writeFieldEntries(PDFDocumentBuilder* builder, PDFObject
     if (const PDFObject& existingFlags = storage->getObject(dictionary.get("Ff")); existingFlags.isInt())
     {
         // Flags, which the form maker does not set, are kept
-        flags = existingFlags.getInteger() & ~(FLAG_READ_ONLY | FLAG_REQUIRED | FLAG_MULTILINE | FLAG_EDIT);
+        flags = existingFlags.getInteger() & ~(FLAG_READ_ONLY | FLAG_REQUIRED | FLAG_MULTILINE | FLAG_EDIT |
+                                               FLAG_PASSWORD | FLAG_DO_NOT_SPELL_CHECK | FLAG_DO_NOT_SCROLL | FLAG_COMB);
     }
     flags |= settings.readOnly ? FLAG_READ_ONLY : 0;
     flags |= settings.required ? FLAG_REQUIRED : 0;
 
     const QByteArray fontSize = formatNumber(qMax(0.0, settings.fontSize));
+    const QColor textColor = settings.textColor.isValid() ? settings.textColor : QColor(Qt::black);
+    const QByteArray textColorOperator = (textColor.red() == textColor.green() && textColor.green() == textColor.blue())
+                                         ? formatNumber(textColor.redF()) + " g"
+                                         : colorOperator(textColor, false).trimmed();
+    const QByteArray textAppearance = "/" + findFont(settings.fontName).resourceName + " " + fontSize + " Tf " + textColorOperator;
+    const QByteArray buttonAppearance = "/ZaDb 0 Tf " + textColorOperator;
 
     switch (settings.type)
     {
@@ -973,7 +1162,17 @@ void PDFFireFormFields::writeFieldEntries(PDFDocumentBuilder* builder, PDFObject
         case Type::Date:
             setEntry(dictionary, "FT", PDFObject::createName("Tx"));
             flags |= (settings.type == Type::MultilineText) ? FLAG_MULTILINE : 0;
-            setEntry(dictionary, "DA", PDFObject::createString("/Helv " + fontSize + " Tf 0 g"));
+            flags |= settings.doNotScroll ? FLAG_DO_NOT_SCROLL : 0;
+            flags |= settings.doNotSpellCheck ? FLAG_DO_NOT_SPELL_CHECK : 0;
+            if (settings.type != Type::Date)
+            {
+                flags |= settings.password ? FLAG_PASSWORD : 0;
+
+                // A comb needs the maximal length, and it is one line of plain text
+                const bool isComb = settings.comb && settings.type == Type::Text && settings.maxLength > 0 && !settings.password;
+                flags |= isComb ? FLAG_COMB : 0;
+            }
+            setEntry(dictionary, "DA", PDFObject::createString(textAppearance));
             setEntry(dictionary, "Q", settings.alignment ? PDFObject::createInteger(settings.alignment) : PDFObject());
             setEntry(dictionary, "MaxLen", settings.maxLength > 0 ? PDFObject::createInteger(settings.maxLength) : PDFObject());
             if (writeValue)
@@ -985,13 +1184,13 @@ void PDFFireFormFields::writeFieldEntries(PDFDocumentBuilder* builder, PDFObject
 
         case Type::CheckBox:
             setEntry(dictionary, "FT", PDFObject::createName("Btn"));
-            setEntry(dictionary, "DA", PDFObject::createString("/ZaDb 0 Tf 0 g"));
+            setEntry(dictionary, "DA", PDFObject::createString(buttonAppearance));
             break;
 
         case Type::RadioButton:
             setEntry(dictionary, "FT", PDFObject::createName("Btn"));
             flags |= FLAG_RADIO | FLAG_NO_TOGGLE_TO_OFF;
-            setEntry(dictionary, "DA", PDFObject::createString("/ZaDb 0 Tf 0 g"));
+            setEntry(dictionary, "DA", PDFObject::createString(buttonAppearance));
             break;
 
         case Type::ComboBox:
@@ -1001,8 +1200,9 @@ void PDFFireFormFields::writeFieldEntries(PDFDocumentBuilder* builder, PDFObject
             if (settings.type == Type::ComboBox)
             {
                 flags |= FLAG_COMBO | (settings.editable ? FLAG_EDIT : 0);
+                flags |= (settings.editable && settings.doNotSpellCheck) ? FLAG_DO_NOT_SPELL_CHECK : 0;
             }
-            setEntry(dictionary, "DA", PDFObject::createString("/Helv " + fontSize + " Tf 0 g"));
+            setEntry(dictionary, "DA", PDFObject::createString(textAppearance));
             setEntry(dictionary, "Q", settings.alignment ? PDFObject::createInteger(settings.alignment) : PDFObject());
 
             // Items with an export value different from the displayed text are written
@@ -1105,7 +1305,23 @@ void PDFFireFormFields::writeWidgetAppearance(PDFDocumentBuilder* builder, PDFOb
 
     PDFDictionaryBuilder borderStyle;
     borderStyle.setEntry(PDFInplaceOrMemoryString("W"), PDFObject::createReal(settings.borderColor.isValid() ? settings.borderWidth : 0.0));
-    borderStyle.setEntry(PDFInplaceOrMemoryString("S"), PDFObject::createName("S"));
+    switch (settings.borderStyle)
+    {
+        case BorderStyle::Dashed:
+        {
+            borderStyle.setEntry(PDFInplaceOrMemoryString("S"), PDFObject::createName("D"));
+            PDFArrayBuilder dashes;
+            dashes.appendItem(PDFObject::createInteger(3));
+            borderStyle.setEntry(PDFInplaceOrMemoryString("D"), PDFObject::createArray(std::move(dashes)));
+            break;
+        }
+        case BorderStyle::Underline:
+            borderStyle.setEntry(PDFInplaceOrMemoryString("S"), PDFObject::createName("U"));
+            break;
+        case BorderStyle::Solid:
+            borderStyle.setEntry(PDFInplaceOrMemoryString("S"), PDFObject::createName("S"));
+            break;
+    }
     dictionary.setEntry(PDFInplaceOrMemoryString("BS"), PDFObject::createDictionary(std::move(borderStyle)));
 
     // The appearance streams
@@ -1114,6 +1330,11 @@ void PDFFireFormFields::writeWidgetAppearance(PDFDocumentBuilder* builder, PDFOb
         PDFDictionaryBuilder fonts;
         fonts.setEntry(PDFInplaceOrMemoryString("Helv"), createHelveticaFont());
         fonts.setEntry(PDFInplaceOrMemoryString("ZaDb"), createZapfDingbatsFont());
+        const FontInfo& textFont = findFont(settings.fontName);
+        if (textFont.resourceName != "Helv")
+        {
+            fonts.setEntry(PDFInplaceOrMemoryString(textFont.resourceName), createStandardFont(textFont.resourceName, textFont.baseFont));
+        }
         PDFDictionaryBuilder resources;
         resources.setEntry(PDFInplaceOrMemoryString("Font"), PDFObject::createDictionary(std::move(fonts)));
 
@@ -1303,9 +1524,18 @@ void PDFFireFormFields::updateField(PDFDocumentBuilder* builder, PDFObjectRefere
         return;
     }
 
-    // The type of a field is not changed
+    // The type of a field is not changed - except a text field, which can be switched
+    // between one line and several lines (Multi-line, the word wrap)
     Settings settings = newSettings;
-    settings.type = oldSettings->type;
+    const bool isLineSwitch = (oldSettings->type == Type::Text || oldSettings->type == Type::MultilineText) &&
+                              (newSettings.type == Type::Text || newSettings.type == Type::MultilineText);
+    if (!isLineSwitch)
+    {
+        settings.type = oldSettings->type;
+    }
+
+    // The fonts of the fields in the form's resources (an older form has Helvetica only)
+    ensureAcroForm(builder);
 
     const PDFObjectReference field = getFieldOfWidget(storage, widget);
 

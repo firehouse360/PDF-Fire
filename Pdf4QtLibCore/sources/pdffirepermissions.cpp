@@ -220,7 +220,105 @@ QString PDFFirePermissions::getRestrictionReason(const PDFDocument* document)
             break;
     }
 
-    return QCoreApplication::translate("PDFFirePermissions", "The document is protected - its security settings don't allow this. Open it with the owner password to change it.");
+    return QCoreApplication::translate("PDFFirePermissions", "The document is protected by its author - its security settings don't allow this. "
+                                                             "Enter the permissions password (Protect > Enter Password) to change it.");
+}
+
+PDFFirePermissions::ProtectionSummary PDFFirePermissions::getProtectionSummary(const PDFDocument* document)
+{
+    ProtectionSummary summary;
+    if (!document)
+    {
+        return summary;
+    }
+
+    auto tr = [](const char* text) { return QCoreApplication::translate("PDFFirePermissions", text); };
+
+    const PDFSecurityHandler* securityHandler = document->getStorage().getSecurityHandler();
+    const PDFSecurityHandler::AuthorizationResult authorization = securityHandler ? securityHandler->getAuthorizationResult()
+                                                                                    : PDFSecurityHandler::AuthorizationResult::NoAuthorizationRequired;
+    summary.isEncrypted = securityHandler && securityHandler->getMode() != EncryptionMode::None;
+    summary.isOwner = authorization == PDFSecurityHandler::AuthorizationResult::OwnerAuthorized;
+    summary.certification = getCertification(document);
+
+    if (summary.isEncrypted && securityHandler->getMode() == EncryptionMode::Standard)
+    {
+        // The document needs a password to open, if the empty password doesn't open it
+        PDFSecurityHandlerPointer clonedHandler(securityHandler->clone());
+        const PDFSecurityHandler::AuthorizationResult emptyPasswordResult = clonedHandler->authenticate([](bool* ok) { *ok = false; return QString(); }, false);
+        summary.needsOpenPassword = emptyPasswordResult == PDFSecurityHandler::AuthorizationResult::Failed ||
+                                    emptyPasswordResult == PDFSecurityHandler::AuthorizationResult::Cancelled;
+    }
+    else if (summary.isEncrypted)
+    {
+        // A certificate (public key) opens the document
+        summary.needsOpenPassword = true;
+    }
+
+    struct Item
+    {
+        bool isAllowed;
+        QString text;
+    };
+
+    const bool canPrintHigh = isAllowed(document, Permission::PrintHighResolution);
+    const bool canPrintLow = isAllowed(document, Permission::PrintLowResolution);
+    QString printText = tr("Printing");
+    if (canPrintLow && !canPrintHigh)
+    {
+        printText = tr("Printing (low quality only)");
+    }
+
+    const Item items[] = {
+        { canPrintLow || canPrintHigh, printText },
+        { canModifyContent(document), tr("Changing the text and images of the pages") },
+        { canAnnotate(document), tr("Adding text, comments, highlights and drawings") },
+        { canFillForms(document), tr("Filling in form fields") },
+        { canSign(document), tr("Signing") },
+        { canAssemblePages(document), tr("Inserting, deleting and rotating pages") },
+        { canCopyContent(document), tr("Copying text and images") },
+        { canChangeSecurity(document), tr("Changing the passwords and security") }
+    };
+
+    for (const Item& item : items)
+    {
+        (item.isAllowed ? summary.allowed : summary.notAllowed) << item.text;
+    }
+
+    summary.isRestricted = !summary.notAllowed.isEmpty();
+
+    // Only the restrictions of the security handler can be lifted by the permissions
+    // password - a certification stays (a change would break the signature)
+    const bool isRestrictedBySecurity = summary.isEncrypted && !summary.isOwner &&
+                                        authorization != PDFSecurityHandler::AuthorizationResult::NoAuthorizationRequired;
+    summary.canUnlock = isRestrictedBySecurity && securityHandler->getMode() == EncryptionMode::Standard;
+
+    if (summary.certification != Certification::None)
+    {
+        summary.headline = getRestrictionReason(document);
+        summary.explanation = tr("The author certified the document with a digital signature. Changes, which the certification "
+                                 "doesn't allow, would make the signature invalid, so the tools for them are turned off.");
+    }
+    else if (isRestrictedBySecurity && summary.isRestricted)
+    {
+        summary.headline = summary.needsOpenPassword ? tr("Protected: a password opens it, and its author restricted what may be done with it.")
+                                                     : tr("Protected by its author: it opens without a password, but changes are restricted.");
+        summary.explanation = tr("The author of the document set a permissions password and turned off the things below, so the "
+                                 "tools for them are greyed out. Acrobat and other careful PDF programs honour the same settings. "
+                                 "If you know the permissions password, enter it to unlock the document; otherwise ask the sender "
+                                 "for a copy without the restrictions.");
+    }
+    else if (summary.isEncrypted)
+    {
+        summary.headline = summary.isOwner ? tr("Encrypted - opened with the permissions password, everything is allowed.")
+                                           : tr("Encrypted - a password opens it; nothing else is restricted.");
+    }
+    else
+    {
+        summary.headline = tr("Not protected - no password, nothing is restricted.");
+    }
+
+    return summary;
 }
 
 }   // namespace pdf

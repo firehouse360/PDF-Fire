@@ -27,6 +27,7 @@
 #include "pdfform.h"
 #include "pdfdocumentwriter.h"
 #include "pdfadvancedtools.h"
+#include "pdffireaddtexttool.h"
 #include "pdfdrawspacecontroller.h"
 #include "pdfwidgetutils.h"
 #include "pdfconstants.h"
@@ -576,6 +577,10 @@ void PDFProgramController::initialize(Features features,
     if (QAction* action = m_actionManager->getAction(PDFActionManager::Encryption))
     {
         connect(action, &QAction::triggered, this, &PDFProgramController::onActionEncryptionTriggered);
+    }
+    if (QAction* action = m_actionManager->getAction(PDFActionManager::UnlockPermissions))
+    {
+        connect(action, &QAction::triggered, this, &PDFProgramController::onActionUnlockPermissionsTriggered);
     }
     if (QAction* action = m_actionManager->getAction(PDFActionManager::FitPage))
     {
@@ -1160,6 +1165,12 @@ void PDFProgramController::initializeToolManager()
         pdf::PDFCreateFreeTextTool* createFreeTextTool = new pdf::PDFCreateFreeTextTool(m_pdfWidget->getDrawWidgetProxy(), m_toolManager, action, this);
         m_toolManager->addTool(createFreeTextTool);
     }
+    if (QAction* action = m_actionManager->getAction(PDFActionManager::AddText))
+    {
+        // PDF Fire: Add Text - click anywhere on a page and type
+        pdf::PDFFireAddTextTool* addTextTool = new pdf::PDFFireAddTextTool(m_pdfWidget->getDrawWidgetProxy(), m_toolManager, action, this);
+        m_toolManager->addTool(addTextTool);
+    }
     if (QAction* action = m_actionManager->getAction(PDFActionManager::CreateStraightLine))
     {
         pdf::PDFCreateLineTypeTool* createStraightLineTool = new pdf::PDFCreateLineTypeTool(m_pdfWidget->getDrawWidgetProxy(), m_toolManager, pdf::PDFCreateLineTypeTool::Type::Line, action, this);
@@ -1590,7 +1601,14 @@ void PDFProgramController::onActionPropertiesTriggered()
     Q_ASSERT(m_pdfDocument);
 
     PDFDocumentPropertiesDialog documentPropertiesDialog(m_pdfDocument.data(), &m_fileInfo, m_mainWindow);
-    if (documentPropertiesDialog.exec() == QDialog::Accepted && documentPropertiesDialog.isXMPMetadataModified())
+    const int dialogResult = documentPropertiesDialog.exec();
+    if (documentPropertiesDialog.isUnlockRequested())
+    {
+        // PDF Fire: "Enter Permissions Password" on the Overview page
+        onActionUnlockPermissionsTriggered();
+        return;
+    }
+    if (dialogResult == QDialog::Accepted && documentPropertiesDialog.isXMPMetadataModified())
     {
         pdf::PDFDocumentModifier modifier(m_pdfDocument.data());
         pdf::PDFDocumentBuilder* builder = modifier.getBuilder();
@@ -1798,6 +1816,53 @@ void PDFProgramController::onActionCreateBitonalDocumentTriggered()
         pdf::PDFModifiedDocument document(qMove(pointer), m_optionalContentActivity, pdf::PDFModifiedDocument::ModificationFlags(pdf::PDFModifiedDocument::Reset | pdf::PDFModifiedDocument::PreserveUndoRedo));
         onDocumentModified(qMove(document));
     }
+}
+
+void PDFProgramController::onActionUnlockPermissionsTriggered()
+{
+    // PDF Fire: a document protected by its author (a permissions password, no password
+    // to open it, or an open password, which is not the permissions password) is opened
+    // with restrictions. The permissions password lifts them - as Acrobat asks for it.
+    if (!m_pdfDocument)
+    {
+        return;
+    }
+
+    const pdf::PDFSecurityHandler* securityHandler = m_pdfDocument->getStorage().getSecurityHandler();
+    if (!pdf::PDFFirePermissions::getProtectionSummary(m_pdfDocument.data()).canUnlock)
+    {
+        return;
+    }
+
+    int attempt = 0;
+    auto queryPassword = [this, &attempt](bool* ok)
+    {
+        const QString label = (attempt++ == 0) ? tr("The author of this document restricted what may be done with it.\n"
+                                                    "Enter the permissions password to unlock the greyed-out tools:")
+                                                 : tr("That is not the permissions password of this document. Try again:");
+        return QInputDialog::getText(m_mainWindow, tr("Enter Permissions Password"), label, QLineEdit::Password, QString(), ok);
+    };
+
+    pdf::PDFSecurityHandlerPointer clonedSecurityHandler(securityHandler->clone());
+    const pdf::PDFSecurityHandler::AuthorizationResult authorizationResult = clonedSecurityHandler->authenticate(queryPassword, true);
+    if (authorizationResult != pdf::PDFSecurityHandler::AuthorizationResult::OwnerAuthorized)
+    {
+        // Cancelled by the user
+        return;
+    }
+
+    pdf::PDFObjectStorage storage = m_pdfDocument->getStorage();
+    storage.setSecurityHandler(qMove(clonedSecurityHandler));
+
+    pdf::PDFDocumentPointer pointer(new pdf::PDFDocument(qMove(storage), m_pdfDocument->getInfo()->version, QByteArray()));
+    // A reset (keeping the view and the undo history), so every tool and plugin
+    // checks the permissions again - many of them do it only on a reset
+    const pdf::PDFModifiedDocument::ModificationFlags flags(pdf::PDFModifiedDocument::Authorization | pdf::PDFModifiedDocument::Reset |
+                                                            pdf::PDFModifiedDocument::PreserveUndoRedo | pdf::PDFModifiedDocument::PreserveView);
+    pdf::PDFModifiedDocument document(qMove(pointer), m_optionalContentActivity, flags);
+    onDocumentModified(qMove(document));
+    updateTitle();
+    m_mainWindowInterface->setStatusBarMessage(tr("The document is unlocked - every tool is available. Saving keeps its protection."), 8000);
 }
 
 void PDFProgramController::onActionEncryptionTriggered()
@@ -2165,6 +2230,8 @@ void PDFProgramController::updateActionsAvailability()
     // document without security) may change the security - otherwise anybody could
     // remove the restrictions
     m_actionManager->setEnabled(PDFActionManager::Encryption, hasValidDocument && pdf::PDFFirePermissions::canChangeSecurity(m_pdfDocument.data()));
+    // PDF Fire: a document protected by its author can be unlocked by its permissions password
+    m_actionManager->setEnabled(PDFActionManager::UnlockPermissions, hasValidDocument && pdf::PDFFirePermissions::getProtectionSummary(m_pdfDocument.data()).canUnlock);
     m_actionManager->setEnabled(PDFActionManager::Save, hasValidDocument);
     m_actionManager->setEnabled(PDFActionManager::SaveAs, hasValidDocument);
     m_actionManager->setEnabled(PDFActionManager::Properties, hasDocument);
@@ -2668,6 +2735,12 @@ void PDFProgramController::updateTitle()
         if (m_undoRedoManager && !m_undoRedoManager->isCurrentSaved())
         {
             title += "*";
+        }
+
+        // PDF Fire: as "(SECURED)" of Acrobat - the author restricted, what may be done
+        if (pdf::PDFFirePermissions::getProtectionSummary(m_pdfDocument.data()).isRestricted)
+        {
+            title += tr(" (Protected)");
         }
 
         m_mainWindow->setWindowTitle(tr("%1 - %2").arg(title, QApplication::applicationDisplayName()));

@@ -60,6 +60,7 @@
 #include <QMouseEvent>
 #include <QStringList>
 #include <QTabBar>
+#include <QTabWidget>
 #include <QTimer>
 #include <QTreeWidget>
 #include <QWheelEvent>
@@ -273,7 +274,8 @@ private:
             }
 
             if (QWidget* widget = focusWidget)
-            {                if (qEnvironmentVariableIsSet("PDFFIRE_DEBUG_SCRIPT"))
+            {
+                if (qEnvironmentVariableIsSet("PDFFIRE_DEBUG_SCRIPT"))
                 {
                     qInfo() << "PDFFIRE_SCRIPT key: focus widget" << widget->metaObject()->className() << widget->objectName();
                 }
@@ -328,6 +330,17 @@ private:
                 QWheelEvent event(widget->mapFrom(m_window, point), m_window->mapToGlobal(point), QPoint(), QPoint(0, argument.section(',', 2, 2).toInt()),
                                   Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
                 QApplication::sendEvent(widget, &event);
+            }
+        }
+        else if (command == "dialogtab")
+        {
+            // dialogtab:<index> - shows the page of the first tab widget of the dialog
+            if (QWidget* dialog = QApplication::activeModalWidget())
+            {
+                if (QTabWidget* tabWidget = dialog->findChild<QTabWidget*>())
+                {
+                    tabWidget->setCurrentIndex(argument.toInt());
+                }
             }
         }
         else if (command == "listactions")

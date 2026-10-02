@@ -79,6 +79,16 @@ private:
     QDoubleSpinBox* m_borderWidthSpinBox = nullptr;
     QColor m_borderColor;
     QColor m_backgroundColor;
+
+    // PDF Fire: the rest of Acrobat's field properties
+    QComboBox* m_borderStyleComboBox = nullptr;
+    QComboBox* m_fontComboBox = nullptr;
+    QColor m_textColor;
+    QCheckBox* m_multilineCheckBox = nullptr;
+    QCheckBox* m_scrollCheckBox = nullptr;
+    QCheckBox* m_combCheckBox = nullptr;
+    QCheckBox* m_passwordCheckBox = nullptr;
+    QCheckBox* m_spellCheckBox = nullptr;
 };
 
 }   // namespace pdfplugin

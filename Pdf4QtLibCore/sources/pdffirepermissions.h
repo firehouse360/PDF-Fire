@@ -27,6 +27,7 @@
 #include "pdfsecurityhandler.h"
 
 #include <QString>
+#include <QStringList>
 
 namespace pdf
 {
@@ -90,6 +91,25 @@ public:
 
     /// Returns the reason, why the changes are not allowed (for a tooltip or a message)
     static QString getRestrictionReason(const PDFDocument* document);
+
+    /// The protection of the document in plain words (Document Info, the bar above
+    /// a protected document)
+    struct ProtectionSummary
+    {
+        bool isEncrypted = false;       ///< The document is encrypted
+        bool needsOpenPassword = false; ///< A password is needed to open the document
+        bool isOwner = false;           ///< Opened with the permissions (owner) password
+        bool isRestricted = false;      ///< Something is not allowed
+        bool canUnlock = false;         ///< The permissions password would lift the restrictions
+        Certification certification = Certification::None;
+        QString headline;               ///< One sentence about the protection
+        QString explanation;            ///< Why the tools are greyed out, and what can be done
+        QStringList allowed;            ///< What may be done
+        QStringList notAllowed;         ///< What may not be done
+    };
+
+    /// Returns the protection of the document in plain words
+    static ProtectionSummary getProtectionSummary(const PDFDocument* document);
 };
 
 }   // namespace pdf

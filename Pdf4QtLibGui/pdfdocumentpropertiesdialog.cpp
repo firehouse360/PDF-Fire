@@ -29,8 +29,15 @@
 #include "pdfutils.h"
 #include "pdfexception.h"
 #include "pdfexecutionpolicy.h"
+#include "pdffirepermissions.h"
 
+#include <QFormLayout>
+#include <QGroupBox>
+#include <QHBoxLayout>
+#include <QLabel>
 #include <QLocale>
+#include <QScrollArea>
+#include <QVBoxLayout>
 #include <QMessageBox>
 #include <QPageSize>
 #include <QPushButton>
@@ -96,6 +103,7 @@ PDFDocumentPropertiesDialog::PDFDocumentPropertiesDialog(const pdf::PDFDocument*
     initializeFonts(document);
     initializeDisplayAndPrintSettings(document);
     initializeXMPMetadata(document);
+    initializeOverview(document, fileInfo);
     connect(ui->xmpMetadataDefaultPushButton, &QPushButton::clicked, this, &PDFDocumentPropertiesDialog::createDefaultXMPMetadata);
 
     const int minimumSectionSize = pdf::PDFWidgetUtils::scaleDPI_x(this, 300);
@@ -112,6 +120,174 @@ PDFDocumentPropertiesDialog::~PDFDocumentPropertiesDialog()
 {
     Q_ASSERT(m_fontTreeWidgetItems.empty());
     delete ui;
+}
+
+void PDFDocumentPropertiesDialog::initializeOverview(const pdf::PDFDocument* document, const PDFFileInfo* fileInfo)
+{
+    // PDF Fire: the first page of Document Info - the most asked things in plain words:
+    // what the document is, and whether (and how) it is protected
+    setWindowTitle(tr("Document Info"));
+
+    QLocale locale;
+    const pdf::PDFDocumentInfo* info = document->getInfo();
+    const pdf::PDFCatalog* catalog = document->getCatalog();
+
+    QScrollArea* scrollArea = new QScrollArea(ui->tabWidget);
+    scrollArea->setObjectName("overviewTab");
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setFrameShape(QFrame::NoFrame);
+    QWidget* page = new QWidget(scrollArea);
+    QVBoxLayout* pageLayout = new QVBoxLayout(page);
+
+    // Protection
+    const pdf::PDFFirePermissions::ProtectionSummary protection = pdf::PDFFirePermissions::getProtectionSummary(document);
+    QGroupBox* protectionGroupBox = new QGroupBox(tr("Protection"), page);
+    QVBoxLayout* protectionLayout = new QVBoxLayout(protectionGroupBox);
+
+    QLabel* headlineLabel = new QLabel(protectionGroupBox);
+    headlineLabel->setObjectName("protectionHeadlineLabel");
+    headlineLabel->setWordWrap(true);
+    headlineLabel->setTextFormat(Qt::PlainText);
+    QFont headlineFont = headlineLabel->font();
+    headlineFont.setBold(true);
+    headlineLabel->setFont(headlineFont);
+    headlineLabel->setText((protection.isRestricted ? QString::fromUtf8("\xF0\x9F\x94\x92 ") : QString()) + protection.headline);
+    protectionLayout->addWidget(headlineLabel);
+
+    if (!protection.explanation.isEmpty())
+    {
+        QLabel* explanationLabel = new QLabel(protection.explanation, protectionGroupBox);
+        explanationLabel->setWordWrap(true);
+        explanationLabel->setTextFormat(Qt::PlainText);
+        protectionLayout->addWidget(explanationLabel);
+    }
+
+    auto createListLabel = [protectionGroupBox](const QString& caption, const QString& mark, const QStringList& items)
+    {
+        QStringList lines = { caption };
+        for (const QString& item : items)
+        {
+            lines << QString("%1  %2").arg(mark, item);
+        }
+        QLabel* label = new QLabel(lines.join(QChar('\n')), protectionGroupBox);
+        label->setTextFormat(Qt::PlainText);
+        label->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+        label->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        return label;
+    };
+
+    QHBoxLayout* listsLayout = new QHBoxLayout();
+    if (!protection.allowed.isEmpty())
+    {
+        listsLayout->addWidget(createListLabel(tr("Allowed:"), QString::fromUtf8("\xE2\x9C\x93"), protection.allowed), 1);
+    }
+    if (!protection.notAllowed.isEmpty())
+    {
+        QLabel* notAllowedLabel = createListLabel(tr("Not allowed:"), QString::fromUtf8("\xE2\x9C\x97"), protection.notAllowed);
+        notAllowedLabel->setObjectName("protectionNotAllowedLabel");
+        listsLayout->addWidget(notAllowedLabel, 1);
+    }
+    protectionLayout->addLayout(listsLayout);
+
+    if (protection.canUnlock)
+    {
+        QPushButton* unlockButton = new QPushButton(tr("Enter Permissions Password..."), protectionGroupBox);
+        unlockButton->setObjectName("unlockPermissionsButton");
+        unlockButton->setAutoDefault(false);
+        connect(unlockButton, &QPushButton::clicked, this, [this]()
+        {
+            m_isUnlockRequested = true;
+            reject();
+        });
+        QHBoxLayout* buttonLayout = new QHBoxLayout();
+        buttonLayout->addWidget(unlockButton);
+        buttonLayout->addStretch(1);
+        protectionLayout->addLayout(buttonLayout);
+    }
+    pageLayout->addWidget(protectionGroupBox);
+
+    // The document
+    QGroupBox* documentGroupBox = new QGroupBox(tr("Document"), page);
+    QFormLayout* formLayout = new QFormLayout(documentGroupBox);
+    auto addRow = [formLayout, documentGroupBox](const QString& caption, const QString& value)
+    {
+        if (value.trimmed().isEmpty())
+        {
+            return;
+        }
+        QLabel* valueLabel = new QLabel(value, documentGroupBox);
+        valueLabel->setTextFormat(Qt::PlainText);
+        valueLabel->setWordWrap(true);
+        valueLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        formLayout->addRow(caption, valueLabel);
+    };
+
+    auto formatDate = [&locale](const QDateTime& dateTime) { return dateTime.isValid() ? locale.toString(dateTime.toLocalTime(), QLocale::LongFormat) : QString(); };
+
+    addRow(tr("File:"), fileInfo->fileName);
+    addRow(tr("Folder:"), fileInfo->path);
+    addRow(tr("Title:"), info->title);
+    addRow(tr("Author:"), info->author);
+    addRow(tr("Subject:"), info->subject);
+    addRow(tr("Keywords:"), info->keywords);
+    addRow(tr("Made with:"), info->creator);
+    addRow(tr("PDF made by:"), info->producer);
+    addRow(tr("Created:"), formatDate(info->creationDate));
+    addRow(tr("Changed:"), formatDate(info->modifiedDate));
+
+    const pdf::PDFInteger pageCount = catalog->getPageCount();
+    QString pagesText = locale.toString(pageCount);
+    if (pageCount > 0)
+    {
+        const pdf::PDFPage* firstPage = catalog->getPage(0);
+        const QSizeF pageSizeMM = firstPage->getRectMM(firstPage->getRotatedMediaBox()).size();
+        const QPageSize pageSize(pageSizeMM, QPageSize::Millimeter, QString(), QPageSize::FuzzyOrientationMatch);
+        pagesText += QString(" (%1, %2 x %3 in)").arg(pageSize.name(),
+                                                      locale.toString(pageSizeMM.width() / 25.4, 'f', 2),
+                                                      locale.toString(pageSizeMM.height() / 25.4, 'f', 2));
+    }
+    addRow(tr("Pages:"), pagesText);
+    addRow(tr("PDF version:"), QString::fromLatin1(document->getVersion()));
+
+    if (fileInfo->fileSize > 0)
+    {
+        addRow(tr("File size:"), fileInfo->fileSize > 1024 * 1024 ? QString("%1 MB").arg(locale.toString(fileInfo->fileSize / (1024.0 * 1024.0), 'f', 1))
+                                                                   : QString("%1 kB").arg(locale.toString(fileInfo->fileSize / 1024.0, 'f', 0)));
+    }
+
+    const pdf::PDFSecurityHandler* securityHandler = document->getStorage().getSecurityHandler();
+    if (protection.isEncrypted && securityHandler)
+    {
+        QString encryption = tr("Yes");
+        switch (securityHandler->getMode())
+        {
+            case pdf::EncryptionMode::Standard:
+                encryption = protection.needsOpenPassword ? tr("Yes - a password opens it") : tr("Yes - it opens without a password");
+                break;
+            case pdf::EncryptionMode::PublicKey:
+                encryption = tr("Yes - a certificate opens it");
+                break;
+            default:
+                break;
+        }
+        addRow(tr("Encrypted:"), encryption);
+    }
+    else
+    {
+        addRow(tr("Encrypted:"), tr("No"));
+    }
+
+    pageLayout->addWidget(documentGroupBox);
+
+    QLabel* moreLabel = new QLabel(tr("Every detail (all properties, the security settings, the fonts and the XML metadata) is on the other pages."), page);
+    moreLabel->setWordWrap(true);
+    moreLabel->setEnabled(false);
+    pageLayout->addWidget(moreLabel);
+    pageLayout->addStretch(1);
+
+    scrollArea->setWidget(page);
+    ui->tabWidget->insertTab(0, scrollArea, tr("Overview"));
+    ui->tabWidget->setCurrentIndex(0);
 }
 
 void PDFDocumentPropertiesDialog::initializeProperties(const pdf::PDFDocument* document)

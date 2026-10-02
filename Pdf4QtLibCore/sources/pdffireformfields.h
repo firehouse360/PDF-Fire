@@ -28,6 +28,7 @@
 #include "pdftextlayoutgenerator.h"
 
 #include <QColor>
+#include <QFont>
 #include <QRectF>
 #include <QStringList>
 
@@ -48,6 +49,14 @@ class PDFObjectStorage;
 class PDF4QTLIBCORESHARED_EXPORT PDFFireFormFields
 {
 public:
+    /// Line style of the border (ISO 32000, 12.5.4, Border styles)
+    enum class BorderStyle
+    {
+        Solid,
+        Dashed,
+        Underline
+    };
+
     enum class Type
     {
         Text,
@@ -80,7 +89,34 @@ public:
         QColor borderColor = Qt::black; ///< Invalid - no border
         QColor backgroundColor;         ///< Invalid - transparent
         PDFReal borderWidth = 1.0;
+
+        // PDF Fire: the options of Acrobat's field properties
+        QByteArray fontName = "Helv";   ///< Standard font of the text (see getFonts), the name in the form's resources
+        QColor textColor = Qt::black;   ///< Colour of the text
+        BorderStyle borderStyle = BorderStyle::Solid;
+        bool doNotScroll = false;       ///< The text may not be longer than the field (text fields)
+        bool password = false;          ///< The typed text is hidden (text fields)
+        bool comb = false;              ///< The text is spread over the boxes of Maximal length (text fields)
+        bool doNotSpellCheck = false;   ///< The text is not checked for spelling (text fields, editable lists)
     };
+
+    /// A standard font usable in the fields (all PDF readers have it)
+    struct FontInfo
+    {
+        QByteArray resourceName;    ///< Name in the form's resources, used in /DA (Helv, TiRo, ...)
+        QByteArray baseFont;        ///< Standard 14 font (Helvetica, Times-Roman, ...)
+        QString displayName;        ///< Name shown to the user
+    };
+
+    /// Returns the fonts, which can be chosen for the text of a field
+    static const std::vector<FontInfo>& getFonts();
+
+    /// Returns the font of the system, which shows the standard font of the form's
+    /// resources (Helv, TiRo, Cour...) or a font name (Helvetica, Times-Roman...)
+    static QFont createSystemFont(const QByteArray& fontName);
+
+    /// Returns the width of the text in a standard font, in the units of the font size
+    static PDFReal getTextWidth(const QByteArray& fontName, const QString& text);
 
     /// Returns the default settings of a new field of the given type (border,
     /// background, the default date format and the like)

@@ -219,6 +219,7 @@
     <addaction name="menuSticky_Note"/>
     <addaction name="actionCreateHyperlink"/>
     <addaction name="menuHyperlinkToThisPDF"/>
+    <addaction name="actionAddText"/>
     <addaction name="actionInlineText"/>
     <addaction name="actionCreateStraightLine"/>
     <addaction name="actionCreatePolyline"/>
@@ -1037,6 +1038,33 @@
    </property>
    <property name="toolTip">
     <string>Arrow - drag or click two points; the arrowhead is at the second point</string>
+   </property>
+  </action>
+  <action name="actionAddText">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="icon">
+    <iconset resource="pdf4qtlibgui.qrc">
+     <normaloff>:/resources/add-text.svg</normaloff>:/resources/add-text.svg</iconset>
+   </property>
+   <property name="text">
+    <string>Add &amp;Text</string>
+   </property>
+   <property name="toolTip">
+    <string>Add Text - click anywhere on a page and type (click a text you added to change it)</string>
+   </property>
+  </action>
+  <action name="actionUnlockPermissions">
+   <property name="icon">
+    <iconset resource="pdf4qtlibgui.qrc">
+     <normaloff>:/resources/unlock.svg</normaloff>:/resources/unlock.svg</iconset>
+   </property>
+   <property name="text">
+    <string>Enter &amp;Permissions Password...</string>
+   </property>
+   <property name="toolTip">
+    <string>The document is protected by its author - enter its permissions password to unlock the greyed-out tools</string>
    </property>
   </action>
   <action name="actionCreateEllipse">

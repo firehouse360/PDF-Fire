@@ -63,7 +63,9 @@
         <file>resources/annot-polyline.svg</file>
         <file>resources/annot-sticky-note.svg</file>
         <file>resources/annot-straight-line.svg</file>
-        <file>resources/annot-arrow.svg</file>
+        <file>resources/annot-arrow.svg</file>
+        <file>resources/add-text.svg</file>
+        <file>resources/unlock.svg</file>
         <file>resources/support-heart.svg</file>
         <file>resources/close.svg</file>
         <file>resources/copy-text.svg</file>

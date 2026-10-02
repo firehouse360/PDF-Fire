@@ -125,6 +125,7 @@ private:
     void applyDefaultDocumentView();
     void updateWelcomePage(bool hasDocument);
     void updatePageActions();
+    void updateProtectionBar();
     std::vector<pdf::PDFInteger> getTargetPages() const;
     QMenu* findPluginMenu(const QString& name) const;
 
@@ -150,6 +151,10 @@ private:
     PDFFireWelcomeWidget* m_welcomeWidget = nullptr;
     QTabBar* m_documentTabBar = nullptr;   ///< PDF Fire: tabs of the open documents
     bool m_isUpdatingDocumentTabs = false;
+    QFrame* m_protectionBar = nullptr;     ///< PDF Fire: "protected by its author" above the pages
+    QLabel* m_protectionBarLabel = nullptr;
+    QPushButton* m_protectionBarUnlockButton = nullptr;
+    bool m_isProtectionBarDismissed = false;
     QList<QAction*> m_pageActions;
     int m_sidebarExpandedWidth = 0;
 };

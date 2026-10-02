@@ -20,6 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+#include "pdffireformfields.h"
 #include "pdfwidgetformmanager.h"
 #include "pdffirepermissions.h"
 #include "pdfdrawwidget.h"
@@ -1980,7 +1981,8 @@ void PDFListBoxPseudowidget::setAppearance(const PDFAnnotationDefaultAppearance&
 
     QColor fontColor = appearance.getFontColor();
 
-    QFont font(appearance.getFontName());
+    // PDF Fire: the standard fonts of the forms (Helv, TiRo, Cour...) by their families
+    QFont font = PDFFireFormFields::createSystemFont(appearance.getFontName());
     font.setHintingPreference(QFont::PreferNoHinting);
     font.setPixelSize(qCeil(fontSize));
     font.setStyleStrategy(QFont::ForceOutline);

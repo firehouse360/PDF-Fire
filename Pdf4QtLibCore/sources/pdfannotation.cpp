@@ -29,6 +29,7 @@
 #include "pdfparser.h"
 #include "pdfform.h"
 #include "pdfpainterutils.h"
+#include "pdfdocumentbuilder.h"
 
 #include <QtMath>
 #include <QIcon>
@@ -2909,7 +2910,8 @@ void PDFFreeTextAnnotation::draw(AnnotationDrawParameters& parameters) const
     // Draw text
     PDFAnnotationDefaultAppearance defaultAppearance = PDFAnnotationDefaultAppearance::parse(getDefaultAppearance());
 
-    QFont font(defaultAppearance.getFontName());
+    // PDF Fire: the name of the font is a PDF name, a space in it is written as #20
+    QFont font(PDFDocumentBuilder::decodeFreeTextFontName(defaultAppearance.getFontName()));
     font.setPixelSize(defaultAppearance.getFontSize());
     painter.setFont(font);
     painter.setPen(parameters.colorConvertor.convert(defaultAppearance.getFontColor(), false, true));

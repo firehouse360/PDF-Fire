@@ -34,6 +34,7 @@
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
+#include <QColorDialog>
 #include <QMenu>
 #include <QMainWindow>
 #include <QMessageBox>
@@ -256,11 +257,209 @@ void FormsPlugin::onProperties()
     }
 }
 
+void FormsPlugin::changeSelectedField(const std::function<void(pdf::PDFFireFormFields::Settings&)>& change)
+{
+    const pdf::PDFObjectReference widget = m_tool->getSelectedWidget();
+    if (!m_document || !widget.isValid())
+    {
+        return;
+    }
+
+    std::optional<pdf::PDFFireFormFields::Settings> settings = pdf::PDFFireFormFields::readField(&m_document->getStorage(), widget);
+    if (!settings)
+    {
+        return;
+    }
+
+    change(*settings);
+    const pdf::PDFFireFormFields::Settings newSettings = *settings;
+    m_tool->modify([&](pdf::PDFDocumentBuilder* builder) { pdf::PDFFireFormFields::updateField(builder, widget, newSettings); });
+}
+
 void FormsPlugin::onContextMenu(QPoint globalPosition)
 {
+    using Settings = pdf::PDFFireFormFields::Settings;
+    using BorderStyle = pdf::PDFFireFormFields::BorderStyle;
+
+    // PDF Fire: the look and the options of the selected field straight from its menu,
+    // as in Acrobat - the full set is in Properties
+    const pdf::PDFObjectReference widget = m_tool->getSelectedWidget();
+    const std::optional<Settings> current = (m_document && widget.isValid()) ? pdf::PDFFireFormFields::readField(&m_document->getStorage(), widget) : std::nullopt;
+
     QMenu menu(m_widget);
+    menu.setObjectName("formFieldContextMenu");
     menu.addAction(m_actionProperties);
     menu.addSeparator();
+
+    if (current)
+    {
+        const Settings settings = *current;
+        const bool isTextField = settings.type == Type::Text || settings.type == Type::MultilineText;
+        const bool isText = isTextField || settings.type == Type::Date;
+        const bool isChoice = settings.type == Type::ComboBox || settings.type == Type::ListBox;
+
+        auto addCheckable = [](QMenu* targetMenu, const QString& text, bool checked)
+        {
+            QAction* action = targetMenu->addAction(text);
+            action->setCheckable(true);
+            action->setChecked(checked);
+            return action;
+        };
+
+        // Border
+        QMenu* borderMenu = menu.addMenu(tr("Border"));
+        borderMenu->setObjectName("formFieldBorderMenu");
+        QActionGroup* widthGroup = new QActionGroup(borderMenu);
+        const std::pair<QString, qreal> widths[] = { { tr("None"), 0.0 }, { tr("Thin (1 pt)"), 1.0 }, { tr("Medium (2 pt)"), 2.0 }, { tr("Thick (3 pt)"), 3.0 } };
+        for (const auto& [text, width] : widths)
+        {
+            const bool checked = (width == 0.0) ? !settings.borderColor.isValid() : (settings.borderColor.isValid() && qFuzzyCompare(settings.borderWidth, width));
+            QAction* action = addCheckable(borderMenu, text, checked);
+            widthGroup->addAction(action);
+            connect(action, &QAction::triggered, this, [this, width]()
+            {
+                changeSelectedField([width](Settings& s)
+                {
+                    if (width == 0.0)
+                    {
+                        s.borderColor = QColor();
+                    }
+                    else
+                    {
+                        if (!s.borderColor.isValid())
+                        {
+                            s.borderColor = Qt::black;
+                        }
+                        s.borderWidth = width;
+                    }
+                });
+            });
+        }
+        borderMenu->addSeparator();
+        QActionGroup* styleGroup = new QActionGroup(borderMenu);
+        const std::pair<QString, BorderStyle> styles[] = { { tr("Solid"), BorderStyle::Solid }, { tr("Dashed"), BorderStyle::Dashed }, { tr("Underline Only"), BorderStyle::Underline } };
+        for (const auto& [text, style] : styles)
+        {
+            QAction* action = addCheckable(borderMenu, text, settings.borderStyle == style);
+            action->setEnabled(settings.borderColor.isValid());
+            styleGroup->addAction(action);
+            connect(action, &QAction::triggered, this, [this, style]() { changeSelectedField([style](Settings& s) { s.borderStyle = style; }); });
+        }
+        borderMenu->addSeparator();
+        connect(borderMenu->addAction(tr("Border Color...")), &QAction::triggered, this, [this, settings]()
+        {
+            const QColor color = QColorDialog::getColor(settings.borderColor.isValid() ? settings.borderColor : QColor(Qt::black), m_widget, tr("Border Color"));
+            if (color.isValid())
+            {
+                changeSelectedField([color](Settings& s) { s.borderColor = color; });
+            }
+        });
+
+        // Background
+        QMenu* backgroundMenu = menu.addMenu(tr("Background"));
+        QAction* noBackgroundAction = addCheckable(backgroundMenu, tr("None"), !settings.backgroundColor.isValid());
+        connect(noBackgroundAction, &QAction::triggered, this, [this]() { changeSelectedField([](Settings& s) { s.backgroundColor = QColor(); }); });
+        connect(backgroundMenu->addAction(tr("Fill Color...")), &QAction::triggered, this, [this, settings]()
+        {
+            const QColor color = QColorDialog::getColor(settings.backgroundColor.isValid() ? settings.backgroundColor : QColor(Qt::white), m_widget, tr("Background Color"));
+            if (color.isValid())
+            {
+                changeSelectedField([color](Settings& s) { s.backgroundColor = color; });
+            }
+        });
+
+        if (isText || isChoice)
+        {
+            // Font
+            QMenu* fontMenu = menu.addMenu(tr("Font"));
+            fontMenu->setObjectName("formFieldFontMenu");
+            QActionGroup* fontGroup = new QActionGroup(fontMenu);
+            for (const pdf::PDFFireFormFields::FontInfo& font : pdf::PDFFireFormFields::getFonts())
+            {
+                QAction* action = addCheckable(fontMenu, font.displayName, settings.fontName == font.resourceName);
+                fontGroup->addAction(action);
+                const QByteArray fontName = font.resourceName;
+                connect(action, &QAction::triggered, this, [this, fontName]() { changeSelectedField([fontName](Settings& s) { s.fontName = fontName; }); });
+            }
+
+            // Font size
+            QMenu* sizeMenu = menu.addMenu(tr("Font Size"));
+            sizeMenu->setObjectName("formFieldFontSizeMenu");
+            QActionGroup* sizeGroup = new QActionGroup(sizeMenu);
+            for (const qreal size : { 0.0, 8.0, 9.0, 10.0, 11.0, 12.0, 14.0, 16.0, 18.0, 24.0 })
+            {
+                QAction* action = addCheckable(sizeMenu, size == 0.0 ? tr("Auto (fits the field)") : tr("%1 pt").arg(size), qFuzzyCompare(settings.fontSize + 1.0, size + 1.0));
+                sizeGroup->addAction(action);
+                connect(action, &QAction::triggered, this, [this, size]() { changeSelectedField([size](Settings& s) { s.fontSize = size; }); });
+            }
+
+            // Alignment
+            QMenu* alignmentMenu = menu.addMenu(tr("Alignment"));
+            QActionGroup* alignmentGroup = new QActionGroup(alignmentMenu);
+            const QString alignments[] = { tr("Left"), tr("Center"), tr("Right") };
+            for (int i = 0; i < 3; ++i)
+            {
+                QAction* action = addCheckable(alignmentMenu, alignments[i], settings.alignment == i);
+                alignmentGroup->addAction(action);
+                connect(action, &QAction::triggered, this, [this, i]() { changeSelectedField([i](Settings& s) { s.alignment = i; }); });
+            }
+        }
+
+        if (settings.type != Type::Signature)
+        {
+            connect(menu.addAction(settings.type == Type::CheckBox || settings.type == Type::RadioButton ? tr("Check Color...") : tr("Text Color...")),
+                    &QAction::triggered, this, [this, settings]()
+            {
+                const QColor color = QColorDialog::getColor(settings.textColor.isValid() ? settings.textColor : QColor(Qt::black), m_widget, tr("Text Color"));
+                if (color.isValid())
+                {
+                    changeSelectedField([color](Settings& s) { s.textColor = color; });
+                }
+            });
+        }
+
+        if (isTextField)
+        {
+            menu.addSeparator();
+            QAction* multilineAction = addCheckable(&menu, tr("Multi-line (Wrap Words)"), settings.type == Type::MultilineText);
+            multilineAction->setObjectName("formFieldMultilineAction");
+            multilineAction->setToolTip(tr("A paragraph box: the words wrap to the next line"));
+            connect(multilineAction, &QAction::triggered, this, [this](bool checked)
+            {
+                changeSelectedField([checked](Settings& s)
+                {
+                    s.type = checked ? Type::MultilineText : Type::Text;
+                    if (checked)
+                    {
+                        s.comb = false;
+                    }
+                    else
+                    {
+                        s.value.replace(QChar('\n'), QChar(' '));
+                    }
+                });
+            });
+        }
+
+        if (isText)
+        {
+            QAction* scrollAction = addCheckable(&menu, tr("Scroll Long Text"), !settings.doNotScroll);
+            connect(scrollAction, &QAction::triggered, this, [this](bool checked) { changeSelectedField([checked](Settings& s) { s.doNotScroll = !checked; }); });
+            QAction* spellAction = addCheckable(&menu, tr("Check Spelling"), !settings.doNotSpellCheck);
+            connect(spellAction, &QAction::triggered, this, [this](bool checked) { changeSelectedField([checked](Settings& s) { s.doNotSpellCheck = !checked; }); });
+        }
+
+        menu.addSeparator();
+        if (settings.type != Type::Signature)
+        {
+            QAction* requiredAction = addCheckable(&menu, tr("Required"), settings.required);
+            connect(requiredAction, &QAction::triggered, this, [this](bool checked) { changeSelectedField([checked](Settings& s) { s.required = checked; }); });
+        }
+        QAction* readOnlyAction = addCheckable(&menu, tr("Read Only"), settings.readOnly);
+        connect(readOnlyAction, &QAction::triggered, this, [this](bool checked) { changeSelectedField([checked](Settings& s) { s.readOnly = checked; }); });
+        menu.addSeparator();
+    }
+
     menu.addAction(m_actionDuplicate);
     menu.addAction(m_actionCopyToAllPages);
     menu.addSeparator();

@@ -338,6 +338,7 @@ void PDFEditorMainWindow::setupRibbon()
     fileGroup->addSmallAction(ui->actionSave_As);
     fileGroup->addSmallAction(ui->actionPrint);
     fileGroup->addSmallAction(ui->actionSend_by_E_Mail);
+    fileGroup->addSmallAction(ui->actionProperties);    // PDF Fire: Document Info
 
     // PDF Fire: export to an editable document (ExportPlugin), next to Save As
     if (QAction* exportOdtAction = findMenuAction(findPluginMenu("Export"), "exportplugin_ExportOdt"))
@@ -346,6 +347,10 @@ void PDFEditorMainWindow::setupRibbon()
         exportOdtAction->setToolTip(tr("Save the document as an editable text document (OpenDocument .odt) - it opens in LibreOffice Writer and in Microsoft Word"));
         fileGroup->addSmallAction(exportOdtAction);
     }
+
+    // PDF Fire: Add Text of Acrobat - click anywhere and type - near the start, where it is always seen
+    PDFFireRibbonGroup* homeAddGroup = homePage->addGroup(tr("Add"));
+    homeAddGroup->addLargeAction(ui->actionAddText);
 
     PDFFireRibbonGroup* undoGroup = homePage->addGroup(tr("Undo"));
     undoGroup->addSmallAction(ui->actionUndo);
@@ -393,6 +398,7 @@ void PDFEditorMainWindow::setupRibbon()
 
     PDFFireRibbonGroup* notesGroup = commentPage->addGroup(tr("Notes"));
     notesGroup->addLargeMenu(themedIcon(this, ":/resources/annot-sticky-note.svg"), tr("Sticky Note"), ui->menuSticky_Note);
+    notesGroup->addLargeAction(ui->actionAddText);
     notesGroup->addLargeAction(ui->actionInlineText);
     notesGroup->addLargeMenu(themedIcon(this, ":/resources/wallet.svg"), tr("Stamp"), ui->menuStamp);
 
@@ -474,6 +480,10 @@ void PDFEditorMainWindow::setupRibbon()
 
     // ---- Edit -----------------------------------------------------------------
     PDFFireRibbonPage* editPage = m_ribbon->addPage(tr("Edit"));
+
+    // PDF Fire: text typed anywhere on the page (a typewriter text, as Acrobat's Add Text)
+    PDFFireRibbonGroup* addTextGroup = editPage->addGroup(tr("Add"));
+    addTextGroup->addLargeAction(ui->actionAddText);
     if (editorMenu)
     {
         // "Create Rectangle" -> "Rectangle", the group is about creating
@@ -550,6 +560,8 @@ void PDFEditorMainWindow::setupRibbon()
 
     PDFFireRibbonGroup* securityGroup = protectPage->addGroup(tr("Security"));
     securityGroup->addLargeAction(ui->actionEncryption);
+    securityGroup->addLargeAction(ui->actionUnlockPermissions);   // PDF Fire: the permissions password
+    securityGroup->addLargeAction(ui->actionProperties);          // PDF Fire: what is protected, and how
     securityGroup->addLargeAction(ui->actionSanitize);
     securityGroup->addSmallAction(ui->actionRemoveExternalLinks);
 
@@ -770,6 +782,7 @@ void PDFEditorMainWindow::setupRibbon()
     PDFFireRibbonGroup* showGroup = viewPage->addGroup(tr("Show"));
     showGroup->addLargeAction(sidebarAction);
     showGroup->addLargeAction(ui->actionFullscreenMode);
+    showGroup->addLargeAction(ui->actionProperties);    // PDF Fire: Document Info (metadata, protection)
 
     PDFFireRibbonGroup* layoutGroup = viewPage->addGroup(tr("Page Layout"));
     layoutGroup->addSmallAction(ui->actionPageLayoutSinglePage);
@@ -846,6 +859,11 @@ void PDFEditorMainWindow::setupRibbon()
     ui->actionCreatePolygon->setIconText(tr("Polygon"));
     ui->actionCreateHyperlink->setIconText(tr("Web Link"));
     ui->actionInlineText->setIconText(tr("Text Box"));
+    ui->actionAddText->setIconText(tr("Add Text"));
+    ui->actionUnlockPermissions->setIconText(tr("Enter Password"));
+    ui->actionProperties->setIconText(tr("Document Info"));
+    ui->actionProperties->setText(tr("Document &Info..."));
+    ui->actionProperties->setToolTip(tr("Document Info - the title, author, dates, pages, and whether the document is protected (and what that blocks)"));
     ui->actionDeleteAnnotation->setIconText(tr("Delete"));
     ui->actionInsertPageNumbers->setIconText(tr("Page Numbers"));
     ui->actionPageGeometry->setIconText(tr("Page Size"));

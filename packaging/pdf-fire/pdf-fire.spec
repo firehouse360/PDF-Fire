@@ -4,14 +4,14 @@
 # against Fedora's own Qt and libraries, stages `cmake --install` under /opt/pdf-fire, and then
 # runs rpmbuild on this spec in the same container with the stage passed in:
 #
-#   rpmbuild -bb pdf-fire.spec --define "pdffire_stage <dir>" --define "pdffire_version 0.1.0" \
+#   rpmbuild -bb pdf-fire.spec --define "pdffire_stage <dir>" --define "pdffire_version 0.1.1" \
 #            --define "pdffire_engine 1.6.0.0" --define "pdffire_private_libs <regex>"
 #
 # Everything private lives in /opt/pdf-fire (the programs carry RPATH $ORIGIN/../lib), the same
 # layout as the .deb from scripts/make-deb.sh, so nothing collides with a Fedora pdf4qt package.
 # The package is left UNSIGNED on purpose — signing is a separate step.
 
-%{!?pdffire_version: %global pdffire_version 0.1.0}
+%{!?pdffire_version: %global pdffire_version 0.1.1}
 %{!?pdffire_engine: %global pdffire_engine 1.6.0.0}
 %{!?pdffire_stage: %{error:pdffire_stage is not set - build with scripts/make-rpm.sh}}
 
@@ -74,5 +74,12 @@ cp -a %{pdffire_stage}/. %{buildroot}/
 %{_datadir}/icons/hicolor/*/apps/pdf-fire.*
 
 %changelog
+* Fri Oct 02 2026 PDF Fire <pdffire.constant740@passmail.net> - 0.1.1-1
+- Add Text: click anywhere on a page and type (typewriter text, editable later).
+- Document Info with the protection status in plain words; a bar above protected documents;
+  Protect > Enter Password (the permissions password unlocks the restricted tools).
+- Form fields: no outline by default; fonts, text colour, dashed / underline borders,
+  multi-line, scroll, comb, password and spelling options; quick options in the right-click menu.
+
 * Thu Oct 01 2026 PDF Fire <pdffire.constant740@passmail.net> - 0.1.0-1
 - Local build. See pdf-fire-PLAN.md for the change list.

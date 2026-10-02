@@ -210,6 +210,8 @@ public:
         BookmarkImport,
         BookmarkGenerateAutomatically,
         CreateArrow,            ///< PDF Fire
+        AddText,                ///< PDF Fire: click anywhere and type
+        UnlockPermissions,      ///< PDF Fire: enter the permissions (owner) password
         LastAction
     };
 
@@ -421,6 +423,7 @@ private:
     void onActionPageGeometryTriggered();
     void onActionCreateBitonalDocumentTriggered();
     void onActionEncryptionTriggered();
+    void onActionUnlockPermissionsTriggered();
     void onActionFitPageTriggered();
     void onActionFitWidthTriggered();
     void onActionFitHeightTriggered();
