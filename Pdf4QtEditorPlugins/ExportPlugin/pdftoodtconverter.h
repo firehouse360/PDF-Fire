@@ -82,6 +82,11 @@ public:
     /// "Carlito", bold, italic). Public for the tests.
     static void parseFontName(QByteArray fontName, QString* family, bool* bold, bool* italic);
 
+    /// Bold and italic, as the embedded TrueType / OpenType font program itself says it
+    /// (the 'OS/2' and 'head' tables) - the name does not always tell (Qt on Windows writes
+    /// "Arial" for Arial Bold). Sets only true values. Public for the tests.
+    static void getEmbeddedFontStyle(const QByteArray& fontProgram, bool* bold, bool* italic);
+
     /// Returns the family to use for \p family: itself, when installed, otherwise a similar
     /// installed family. Public for the tests.
     static QString getSubstituteFamily(const QString& family, const QByteArray& fontName, bool serif, bool monospace, const QStringList& installedFamilies);

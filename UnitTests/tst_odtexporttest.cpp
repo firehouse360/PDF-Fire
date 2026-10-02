@@ -262,6 +262,7 @@ private slots:
     void testFontNames();
     void testDetails();
     void testConvertPdf();
+    void testEmbeddedFontStyle();
     void testConvertFileFromEnvironment();
 };
 
@@ -665,6 +666,53 @@ void OdtExportTest::testDetails()
     QCOMPARE(PdfToOdtConverter::getSubstituteFamily("Helvetica", "Helvetica", false, false, installed), QString("Helvetica"));
 }
 
+void OdtExportTest::testEmbeddedFontStyle()
+{
+    // A minimal sfnt: the table directory with a 'head' table (macStyle = bold | italic)
+    QByteArray font(12 + 16 + 54, '\0');
+    const auto put16 = [&font](int offset, quint16 value) { font[offset] = char(value >> 8); font[offset + 1] = char(value & 0xFF); };
+    const auto put32 = [&put16](int offset, quint32 value) { put16(offset, quint16(value >> 16)); put16(offset + 2, quint16(value & 0xFFFF)); };
+    put32(0, 0x00010000);
+    put16(4, 1);
+    put32(12, 0x68656164);      // 'head'
+    put32(20, 28);              // offset
+    put32(24, 54);              // length
+    put16(28 + 44, 0x0003);     // macStyle
+
+    bool bold = false;
+    bool italic = false;
+    PdfToOdtConverter::getEmbeddedFontStyle(font, &bold, &italic);
+    QVERIFY(bold && italic);
+
+    put16(28 + 44, 0x0000);
+    bold = italic = false;
+    PdfToOdtConverter::getEmbeddedFontStyle(font, &bold, &italic);
+    QVERIFY(!bold && !italic);
+
+    // Not a font program (a CFF or Type 1 font) - nothing is changed
+    bold = italic = false;
+    PdfToOdtConverter::getEmbeddedFontStyle(QByteArray("%!PS-AdobeFont-1.0"), &bold, &italic);
+    QVERIFY(!bold && !italic);
+
+    // Real fonts of this computer, when they are installed
+    const QList<std::pair<QString, bool>> realFonts = {
+        { "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", true },
+        { "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", false },
+        { "C:/Windows/Fonts/arialbd.ttf", true },
+        { "C:/Windows/Fonts/arial.ttf", false },
+    };
+    for (const auto& [fileName, isBold] : realFonts)
+    {
+        QFile file(fileName);
+        if (file.open(QFile::ReadOnly))
+        {
+            bold = italic = false;
+            PdfToOdtConverter::getEmbeddedFontStyle(file.readAll(), &bold, &italic);
+            QVERIFY2(bold == isBold && !italic, qPrintable(fileName));
+        }
+    }
+}
+
 void OdtExportTest::testConvertPdf()
 {
     // A real PDF written by Qt: a heading, two paragraphs, an image
@@ -733,7 +781,22 @@ void OdtExportTest::testConvertPdf()
 
     auto heading = std::find_if(document.body.begin(), document.body.end(), [](const OdtParagraph& paragraph) { return paragraph.getPlainText() == "Department Guidelines"; });
     QCOMPARE(heading->headingLevel, 1);
-    QVERIFY(document.headingStyles[0].text.bold);
+    // The fonts of the generated PDF, shown when the heading is not bold
+    QStringList fontNames;
+    if (const pdf::PDFDictionary* resources = pdfDocument.getDictionaryFromObject(pdfDocument.getCatalog()->getPage(0)->getResources()))
+    {
+        if (const pdf::PDFDictionary* fonts = pdfDocument.getDictionaryFromObject(resources->get("Font")))
+        {
+            for (size_t i = 0; i < fonts->getCount(); ++i)
+            {
+                if (const pdf::PDFDictionary* fontDictionary = pdfDocument.getDictionaryFromObject(fonts->getValue(i)))
+                {
+                    fontNames << QString::fromLatin1(pdfDocument.getObject(fontDictionary->get("BaseFont")).getString());
+                }
+            }
+        }
+    }
+    QVERIFY2(document.headingStyles[0].text.bold, qPrintable(fontNames.join(", ")));
     QCOMPARE(document.headingStyles[0].text.color, QColor(0x2F, 0x54, 0x96));
 
     // The image, between the paragraphs, at its size

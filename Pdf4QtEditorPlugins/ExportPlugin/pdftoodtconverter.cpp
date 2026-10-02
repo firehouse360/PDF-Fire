@@ -209,6 +209,10 @@ const OdtPageExtractor::FontInfo& OdtPageExtractor::getFontInfo(const pdf::PDFFo
         }
 
         PdfToOdtConverter::parseFontName(name, &info.family, &info.bold, &info.italic);
+        if (const QByteArray* fontProgram = descriptor->getEmbeddedFontData())
+        {
+            PdfToOdtConverter::getEmbeddedFontStyle(*fontProgram, &info.bold, &info.italic);
+        }
 
         // The font descriptor may know more than the name ("Arial,Bold" is clear, "F1" is not)
         if (descriptor->fontWeight >= 600.0 || descriptor->isForceBold())
@@ -501,6 +505,61 @@ PdfToOdtConverter::PdfToOdtConverter(pdf::PDFDocument document, Settings setting
     m_settings(std::move(settings))
 {
 
+}
+
+void PdfToOdtConverter::getEmbeddedFontStyle(const QByteArray& fontProgram, bool* bold, bool* italic)
+{
+    // The table directory of an sfnt font (TrueType 0x00010000 / 'true', OpenType 'OTTO')
+    const auto uint16At = [&fontProgram](qsizetype offset) -> quint32
+    {
+        return offset + 2 <= fontProgram.size() ? (quint32(quint8(fontProgram[offset])) << 8) | quint8(fontProgram[offset + 1]) : 0;
+    };
+    const auto uint32At = [&uint16At](qsizetype offset) -> quint32 { return (uint16At(offset) << 16) | uint16At(offset + 2); };
+
+    const quint32 version = uint32At(0);
+    if (version != 0x00010000 && version != 0x74727565 && version != 0x4F54544F)
+    {
+        return;
+    }
+
+    const quint32 tableCount = uint16At(4);
+    for (quint32 i = 0; i < tableCount; ++i)
+    {
+        const qsizetype record = 12 + qsizetype(i) * 16;
+        const quint32 tag = uint32At(record);
+        const qsizetype offset = qsizetype(uint32At(record + 8));
+        const qsizetype length = qsizetype(uint32At(record + 12));
+        if (offset <= 0 || offset + length > fontProgram.size())
+        {
+            continue;
+        }
+
+        if (tag == 0x4F532F32 && length >= 64)          // 'OS/2': usWeightClass, fsSelection
+        {
+            const quint32 weightClass = uint16At(offset + 4);
+            const quint32 selection = uint16At(offset + 62);
+            if (weightClass >= 600 || (selection & (1 << 5)))
+            {
+                *bold = true;
+            }
+            if (selection & (1 << 0))
+            {
+                *italic = true;
+            }
+        }
+        else if (tag == 0x68656164 && length >= 46)     // 'head': macStyle
+        {
+            const quint32 macStyle = uint16At(offset + 44);
+            if (macStyle & (1 << 0))
+            {
+                *bold = true;
+            }
+            if (macStyle & (1 << 1))
+            {
+                *italic = true;
+            }
+        }
+    }
 }
 
 void PdfToOdtConverter::parseFontName(QByteArray fontName, QString* family, bool* bold, bool* italic)
