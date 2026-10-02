@@ -394,7 +394,9 @@ void SignatureBuilderTest::departmentAuthority()
     // Trusted - the whole chain is valid
     QFile crlFile(QDir(authorityDirectory).filePath(PDFFireCertificateAuthority::CRL_FILE_NAME));
     QVERIFY(crlFile.open(QFile::ReadOnly));
-    QVERIFY2(PDFFireCertificateAuthority::trustAuthority(authority.getCertificate(), crlFile.readAll(), &errorMessage), qPrintable(errorMessage));
+    const QByteArray crlData = crlFile.readAll();
+    crlFile.close();   // Windows can't replace a file, which is open (the authority rewrites the list below)
+    QVERIFY2(PDFFireCertificateAuthority::trustAuthority(authority.getCertificate(), crlData, &errorMessage), qPrintable(errorMessage));
     QVERIFY(PDFFireCertificateAuthority::isAuthorityTrusted(authority.getCertificate()));
     results = verifySignedDocument(signedDocument);
     QVERIFY2(results.front().isCertificateValid(), qPrintable(results.front().getErrors().join('\n')));

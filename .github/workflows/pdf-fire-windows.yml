@@ -39,6 +39,11 @@ jobs:
           Invoke-WebRequest -Uri 'https://github.com/tesseract-ocr/tessdata_fast/raw/4.1.0/eng.traineddata' -OutFile $file
           $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
           if ($hash -ne '7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2') { throw "eng.traineddata checksum mismatch: $hash" }
+          # Tesseract's glyph-less font: the invisible text layer of a recognized page
+          $font = Join-Path $dir 'pdf.ttf'
+          Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/tesseract-ocr/tesseract/5.5.1/tessdata/pdf.ttf' -OutFile $font
+          $hash = (Get-FileHash $font -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne 'c7845420925a23d88ed830a63957b8af85a66a8daf8d9fc90e843673b2ef1a59') { throw "pdf.ttf checksum mismatch: $hash" }
 
       - name: 'vcpkg: set up'
         shell: pwsh
@@ -96,7 +101,7 @@ jobs:
           $crt = Get-ChildItem "$vs\VC\Redist\MSVC\*\x64\Microsoft.VC*.CRT" -Directory | Sort-Object FullName | Select-Object -Last 1
           if (-not $crt) { throw 'the Microsoft C++ runtime (VC Redist CRT folder) was not found' }
           "C++ runtime: $($crt.FullName)"
-          $env:MSVC_REDISTRIBUTABLES_PATH = $crt.FullName
+          $env:MSVC_REDISTRIBUTABLES_PATH = $crt.FullName.Replace('\', '/')   # CMake reads \ as an escape
           cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DCMAKE_VCPKG_BUILD_TYPE=Release `
             -DCMAKE_TOOLCHAIN_FILE="${env:VCPKG_ROOT}\scripts\buildsystems\vcpkg.cmake" `
             -DVCPKG_INSTALLED_DIR="${env:VCPKG_INSTALLED_DIR}" `
@@ -114,8 +119,9 @@ jobs:
         run: |
           $env:PATH = "$PWD\build\usr\bin\Release;$PWD\build\usr\bin\pdfplugins\Release;${env:VCPKG_INSTALLED_DIR}\x64-windows\bin;${env:QT_ROOT_DIR}\bin;$env:PATH"
           $env:PDFFIRE_SPEECH_MUTE = '1'
-          $env:QT_QPA_PLATFORM = 'offscreen'
+          # The normal Windows platform (it has the system fonts; "offscreen" has none on Windows)
           $env:QT_FORCE_STDERR_LOGGING = '1'
+          $env:TESSDATA_PREFIX = Join-Path $env:PDFFIRE_WORK_DIR 'deps\tessdata'
           ctest --test-dir build -C Release --output-on-failure --timeout 300
           $ctestResult = $LASTEXITCODE
           # A failed test, run on its own: its exit code (0xC0000135 = a DLL is missing,
@@ -141,13 +147,22 @@ jobs:
           cmake --install build --config Release
           $bin = Join-Path $PWD 'build\install\usr\bin'
           New-Item -ItemType Directory -Force -Path "$bin\tessdata" | Out-Null
-          Copy-Item (Join-Path $env:PDFFIRE_WORK_DIR 'deps\tessdata\eng.traineddata') "$bin\tessdata\"
+          Copy-Item (Join-Path $env:PDFFIRE_WORK_DIR 'deps\tessdata\eng.traineddata'), (Join-Path $env:PDFFIRE_WORK_DIR 'deps\tessdata\pdf.ttf') "$bin\tessdata\"
           Copy-Item LICENSE "$bin\LICENSE.txt"
           Copy-Item -Recurse 3rdparty_licenses "$bin\3rdparty_licenses"
+          # The licence of every library vcpkg built (Tesseract, Leptonica, curl, libarchive, ...)
+          $vcpkgLicenses = Join-Path $bin "3rdparty_licenses\vcpkg"
+          New-Item -ItemType Directory -Force -Path $vcpkgLicenses | Out-Null
+          Get-ChildItem "${env:VCPKG_INSTALLED_DIR}\x64-windows\share\*\copyright" | ForEach-Object {
+            Copy-Item $_.FullName (Join-Path $vcpkgLicenses "$($_.Directory.Name).txt")
+          }
+          $count = (Get-ChildItem $vcpkgLicenses).Count
+          "vcpkg licences: $count"
+          if ($count -lt 10) { throw 'the licences of the vcpkg libraries are missing' }
           Get-ChildItem $bin | Format-Table Name, Length -AutoSize | Out-String -Width 200
           if (-not (Test-Path "$bin\voice\kokoro.onnx")) { throw 'the voice data is missing from the program folder' }
           if (-not (Test-Path "$bin\onnxruntime.dll")) { throw 'onnxruntime.dll is missing from the program folder' }
-          foreach ($need in 'vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll', 'multimedia', 'tls', 'tessdata\eng.traineddata', 'platforms\qwindows.dll') {
+          foreach ($need in 'vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll', 'multimedia', 'tls', 'tessdata\eng.traineddata', 'tessdata\pdf.ttf', 'platforms\qwindows.dll') {
             if (-not (Test-Path (Join-Path $bin $need))) { throw "$need is missing from the program folder" }
           }
           Get-ChildItem "$bin\multimedia", "$bin\tls" | Format-Table Name, Length -AutoSize | Out-String -Width 200

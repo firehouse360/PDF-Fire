@@ -39,6 +39,9 @@
 #include <QFuture>
 #include <QtConcurrent/QtConcurrentRun>
 
+// The version of ONNX Runtime is checked before it is used (Windows has an older
+// onnxruntime.dll of its own in System32 - a wrong one must not crash the program)
+#define ORT_API_MANUAL_INIT
 #include <onnxruntime_cxx_api.h>
 
 #include <algorithm>
@@ -132,6 +135,17 @@ bool KokoroModel::load(QString* errorMessage)
             m_vocabulary.insert(codePoints.front(), it.value().toInteger());
         }
     }
+
+    const OrtApiBase* apiBase = OrtGetApiBase();
+    const OrtApi* api = apiBase ? apiBase->GetApi(ORT_API_VERSION) : nullptr;
+    if (!api)
+    {
+        m_loadError = tr("The voice engine (ONNX Runtime %1) is older than PDF Fire needs (1.%2 or newer). Reinstall PDF Fire.")
+                          .arg(QString::fromLatin1(apiBase ? apiBase->GetVersionString() : "?")).arg(ORT_API_VERSION);
+        *errorMessage = m_loadError;
+        return false;
+    }
+    Ort::InitApi(api);
 
     try
     {

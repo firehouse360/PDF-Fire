@@ -11,7 +11,7 @@ built and tested before release, and the full source is here for anyone to check
 **Get PDF Fire from [firehouse360.com/tools/pdf-fire](https://firehouse360.com/tools/pdf-fire)** (recommended) — signed
 `.deb` for Ubuntu/Debian and `.rpm` for Fedora, installed with automatic updates. The same files are also attached to
 each [GitHub release](https://github.com/firehouse360/PDF-Fire/releases), without automatic updates.
-A signed Windows version is in the works.
+A Windows version is in the works.
 
 PDF Fire is based on [PDF4QT](https://github.com/JakubMelka/PDF4QT) by Jakub Melka — the PDF engine and the
 original applications are his work. The upstream README is kept in [README-PDF4QT.md](README-PDF4QT.md).
@@ -52,10 +52,10 @@ GitHub Actions: [`.github/workflows/pdf-fire-windows.yml`](.github/workflows/pdf
 MIT — see [LICENSE](LICENSE). Third-party licences are in [3rdparty_licenses](3rdparty_licenses), including
 the Kokoro voice model (Apache 2.0), misaki (Apache 2.0) and ONNX Runtime (MIT).
 
-## Privacy and code signing
+## Privacy and checking downloads
 
 PDF Fire sends nothing over the network unless you ask it to — see [PRIVACY.md](pdf-fire/PRIVACY.md).
-Windows releases are signed under the [code signing policy](pdf-fire/CODE_SIGNING_POLICY.md).
+How to check that a download is genuine: [VERIFY.md](pdf-fire/VERIFY.md).
 
 ## Support
 

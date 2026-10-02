@@ -73,9 +73,21 @@ private:
 
 QByteArray OcrTextLayerTest::fontProgram()
 {
-    // Tesseract's glyph-less font, when it is installed (the layer works without it)
-    QFile file("/usr/share/tesseract-ocr/5/tessdata/pdf.ttf");
-    return file.open(QFile::ReadOnly) ? file.readAll() : QByteArray();
+    // Tesseract's glyph-less font, when it is installed (the layer works without it):
+    // TESSDATA_PREFIX (the Windows build), or the Ubuntu package
+    for (const QString& fileName : { QDir(qEnvironmentVariable("TESSDATA_PREFIX")).filePath("pdf.ttf"),
+                                     QStringLiteral("/usr/share/tesseract-ocr/5/tessdata/pdf.ttf") })
+    {
+        QFile file(fileName);
+        if (!qEnvironmentVariableIsEmpty("TESSDATA_PREFIX") || fileName.startsWith('/'))
+        {
+            if (file.open(QFile::ReadOnly))
+            {
+                return file.readAll();
+            }
+        }
+    }
+    return QByteArray();
 }
 
 OcrPageText OcrTextLayerTest::sampleText()

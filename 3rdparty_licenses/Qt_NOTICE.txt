@@ -1,0 +1,13 @@
+Qt 6 (The Qt Company Ltd. and other contributors) is used under the GNU Lesser General Public
+License version 3 (Qt_LGPL-3.0.txt, which refers to Qt_GPL-3.0.txt). PDF Fire links Qt dynamically:
+the Qt libraries are the separate Qt6*.dll files (Windows) or the system's Qt packages (Linux), and
+can be replaced by other builds of the same Qt version. The source code of Qt is available from
+https://download.qt.io/official_releases/qt/ and https://code.qt.io/.
+
+The Windows build includes the FFmpeg libraries (avcodec, avformat, avutil, swresample, swscale)
+shipped by The Qt Company with Qt Multimedia, used under the GNU LGPL version 2.1 or later (FFmpeg_LGPL-2.1.txt);
+source code: https://ffmpeg.org/download.html.
+
+The licences of the other libraries of the Windows build (from vcpkg: Tesseract, Leptonica,
+libcurl, libarchive, OpenSSL, FreeType, libtiff, libwebp, oneTBB and others) are in the folder
+"vcpkg", one file per library.

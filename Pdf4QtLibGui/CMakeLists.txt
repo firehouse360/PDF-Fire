@@ -135,7 +135,10 @@ if(WIN32)
     # The DLLs go next to the program (and into the build folder, for running from there)
     set(PDFFIRE_ONNXRUNTIME_LIBRARIES "${PDFFIRE_ONNXRUNTIME_DIR}/lib/onnxruntime.dll" "${PDFFIRE_ONNXRUNTIME_DIR}/lib/onnxruntime_providers_shared.dll")
     install(FILES ${PDFFIRE_ONNXRUNTIME_LIBRARIES} DESTINATION ${PDF4QT_INSTALL_BIN_DIR})
-    file(COPY ${PDFFIRE_ONNXRUNTIME_LIBRARIES} DESTINATION ${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR})
+    # Next to the programs of the build too (the tests): Windows looks in System32, where it has an
+    # older onnxruntime.dll of its own, before the folders on PATH
+    add_custom_command(TARGET Pdf4QtLibGui POST_BUILD
+                       COMMAND ${CMAKE_COMMAND} -E copy_if_different ${PDFFIRE_ONNXRUNTIME_LIBRARIES} $<TARGET_FILE_DIR:Pdf4QtLibGui>)
 else()
     file(GLOB PDFFIRE_ONNXRUNTIME_LIBRARIES "${PDFFIRE_ONNXRUNTIME_DIR}/lib/libonnxruntime.so.*")
     install(FILES ${PDFFIRE_ONNXRUNTIME_LIBRARIES} DESTINATION ${PDF4QT_INSTALL_LIB_DIR})
