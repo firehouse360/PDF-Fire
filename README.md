@@ -52,6 +52,11 @@ GitHub Actions: [`.github/workflows/pdf-fire-windows.yml`](.github/workflows/pdf
 MIT — see [LICENSE](LICENSE). Third-party licences are in [3rdparty_licenses](3rdparty_licenses), including
 the Kokoro voice model (Apache 2.0), misaki (Apache 2.0) and ONNX Runtime (MIT).
 
+## Privacy and code signing
+
+PDF Fire sends nothing over the network unless you ask it to — see [PRIVACY.md](pdf-fire/PRIVACY.md).
+Windows releases are signed under the [code signing policy](pdf-fire/CODE_SIGNING_POLICY.md).
+
 ## Support
 
 PDF Fire is free and stays free. If it helps you, you can
