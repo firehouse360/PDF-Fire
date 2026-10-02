@@ -66,7 +66,8 @@ RemoveHandler .php .phtml .php3 .php4 .php5 .php7 .phps .pht .phtm .phar
 AddType application/vnd.debian.binary-package .deb
 AddType application/x-rpm .rpm
 AddType application/pgp-keys .asc
-AddType text/plain .repo .sources .txt
+AddType text/plain .repo .sources .txt .sha256
+AddType application/vnd.microsoft.portable-executable .exe
 <IfModule mod_headers.c>
     Header always set X-Content-Type-Options "nosniff"
     # The repository metadata changes on every release - never serve it stale

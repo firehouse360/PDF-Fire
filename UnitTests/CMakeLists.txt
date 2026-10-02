@@ -527,5 +527,8 @@ if(NOT PDF4QT_BUILD_ONLY_CORE_LIBRARY)
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}
     )
     add_test(UnitTestsOdtExport "${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}/UnitTestsOdtExport")
-    set_tests_properties(UnitTestsOdtExport PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    # Not on Windows: its "offscreen" platform has no fonts, so the test PDF (written by Qt) has no text
+    if(NOT WIN32)
+        set_tests_properties(UnitTestsOdtExport PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    endif()
 endif()
