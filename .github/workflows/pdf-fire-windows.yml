@@ -36,12 +36,12 @@ jobs:
           $dir = Join-Path $env:PDFFIRE_WORK_DIR 'deps\tessdata'
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
           $file = Join-Path $dir 'eng.traineddata'
-          Invoke-WebRequest -Uri 'https://github.com/tesseract-ocr/tessdata_fast/raw/4.1.0/eng.traineddata' -OutFile $file
+          Invoke-WebRequest -MaximumRetryCount 5 -RetryIntervalSec 15 -Uri 'https://github.com/tesseract-ocr/tessdata_fast/raw/4.1.0/eng.traineddata' -OutFile $file
           $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
           if ($hash -ne '7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2') { throw "eng.traineddata checksum mismatch: $hash" }
           # Tesseract's glyph-less font: the invisible text layer of a recognized page
           $font = Join-Path $dir 'pdf.ttf'
-          Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/tesseract-ocr/tesseract/5.5.1/tessdata/pdf.ttf' -OutFile $font
+          Invoke-WebRequest -MaximumRetryCount 5 -RetryIntervalSec 15 -Uri 'https://raw.githubusercontent.com/tesseract-ocr/tesseract/5.5.1/tessdata/pdf.ttf' -OutFile $font
           $hash = (Get-FileHash $font -Algorithm SHA256).Hash.ToLower()
           if ($hash -ne 'c7845420925a23d88ed830a63957b8af85a66a8daf8d9fc90e843673b2ef1a59') { throw "pdf.ttf checksum mismatch: $hash" }
 

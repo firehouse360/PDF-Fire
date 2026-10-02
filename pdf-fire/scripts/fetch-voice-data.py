@@ -19,6 +19,7 @@ import shutil
 import struct
 import sys
 import tarfile
+import time
 import urllib.request
 import zipfile
 import ast
@@ -64,8 +65,16 @@ def fetch(url, path, expected):
         return
     print("download", url)
     tmp = path + ".part"
-    with urllib.request.urlopen(url, timeout=120) as response, open(tmp, "wb") as out:
-        shutil.copyfileobj(response, out, 1 << 20)
+    for attempt in range(1, 6):
+        try:
+            with urllib.request.urlopen(url, timeout=120) as response, open(tmp, "wb") as out:
+                shutil.copyfileobj(response, out, 1 << 20)
+            break
+        except OSError as error:   # a network hiccup: try again a few times
+            if attempt == 5:
+                sys.exit("download failed: %s (%s)" % (url, error))
+            print("  retry %d: %s" % (attempt, error))
+            time.sleep(15 * attempt)
     actual = sha256(tmp)
     if actual != expected:
         os.remove(tmp)
