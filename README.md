@@ -3,6 +3,9 @@
 **A free PDF editor for Linux, built by [Firehouse 360](https://firehouse360.com) for fire departments, free for everyone.**
 Edit, fill, sign and protect PDFs offline, without a subscription.
 
+PDF Fire is built on open-source code and developed with AI-assisted coding. Every change is reviewed,
+built and tested before release, and the full source is here for anyone to check.
+
 **Download:** https://firehouse360.com/tools/pdf-fire (signed `.deb` for Ubuntu/Debian and `.rpm` for Fedora,
 with automatic updates). A signed Windows version is in the works.
 
