@@ -27,9 +27,11 @@
 #include "pdfutils.h"
 #include "pdfwidgetutils.h"
 #include "pdfsecurityhandler.h"
+#include "pdfexception.h"
 #include "pdfcertificatemanager.h"
 #include "pdfcertificatelisthelper.h"
 
+#include <QLabel>
 #include <QMessageBox>
 
 #include "pdfdbgheap.h"
@@ -47,6 +49,17 @@ PDFEncryptionSettingsDialog::PDFEncryptionSettingsDialog(QByteArray documentId, 
     m_algorithmHintWidget(new PDFEncryptionStrengthHintWidget(this))
 {
     ui->setupUi(this);
+
+    // PDF Fire: the permissions are a request to the reader of the document, not a lock.
+    // The warning is at the bottom, above the buttons, so nobody relies on them by mistake.
+    QLabel* permissionsWarningLabel = new QLabel(tr("<b>Note:</b> the permissions (printing, copying, changes) are honoured by Adobe Acrobat and PDF Fire, "
+                                                    "but not by every app - Firefox, some document viewers and free tools ignore them. Only the "
+                                                    "<b>password to open</b> the document is real protection. To make any change to the document "
+                                                    "visible, sign or certify it (Sign tab)."), this);
+    permissionsWarningLabel->setObjectName("permissionsWarningLabel");
+    permissionsWarningLabel->setWordWrap(true);
+    permissionsWarningLabel->setTextFormat(Qt::RichText);
+    ui->dialogLayout->insertWidget(ui->dialogLayout->indexOf(ui->buttonBox), permissionsWarningLabel);
 
     ui->algorithmComboBox->addItem(tr("None"), int(pdf::PDFSecurityHandlerFactory::None));
     ui->algorithmComboBox->addItem(tr("RC4 128-bit | R4"), int(pdf::PDFSecurityHandlerFactory::RC4));
@@ -258,7 +271,23 @@ void PDFEncryptionSettingsDialog::accept()
         return;
     }
 
-    m_updatedSecurityHandler = pdf::PDFSecurityHandlerFactory::createSecurityHandler(settings);
+    // PDF Fire: creation of the encryption can fail, the dialog must not be accepted then
+    try
+    {
+        m_updatedSecurityHandler = pdf::PDFSecurityHandlerFactory::createSecurityHandler(settings);
+    }
+    catch (const pdf::PDFException& exception)
+    {
+        m_updatedSecurityHandler.reset();
+        QMessageBox::critical(this, tr("Error"), exception.getMessage());
+        return;
+    }
+
+    if (!m_updatedSecurityHandler)
+    {
+        QMessageBox::critical(this, tr("Error"), tr("Failed to create the encryption."));
+        return;
+    }
 
     QDialog::accept();
 }

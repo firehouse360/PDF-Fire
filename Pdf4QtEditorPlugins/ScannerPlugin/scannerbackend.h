@@ -81,6 +81,9 @@ public:
     virtual std::vector<ScannerDevice> devices(QString* errorMessage) = 0;
     virtual QStringList sources(const QString& deviceId) = 0;
     virtual ScanResult scan(const ScanSettings& settings) = 0;
+
+    /// PDF Fire: stops the running scan (called from another thread than the scan)
+    virtual void cancel() { }
 };
 
 std::unique_ptr<ScannerBackend> createPlatformScannerBackend();

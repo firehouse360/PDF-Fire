@@ -118,6 +118,10 @@ public:
         double m_speechPitch;
         double m_speechVolume;
 
+        // PDF Fire: zoom of a newly opened document - "fitWidth", "fitPage",
+        // "fitHeight", or the zoom in percent ("100")
+        QString m_openZoom;
+
         // Magnifier tool settings
         int m_magnifierSize;
         double m_magnifierZoom;

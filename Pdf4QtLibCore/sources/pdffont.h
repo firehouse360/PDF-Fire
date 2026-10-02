@@ -93,6 +93,11 @@ struct TextSequenceItem
     QChar character;
     PDFReal advance = 0;
     CID cid = 0;
+
+    /// PDF Fire: the text of a glyph, which stands for several characters (a ligature
+    /// like "ti" or "ffi", or a character outside of the basic plane). The character
+    /// is null then, and this is the text of the glyph. Empty for ordinary glyphs.
+    QString text;
 };
 
 struct TextSequence
@@ -395,6 +400,11 @@ public:
     const GlyphNames* getGlyphNames() const { return &m_glyphNames; }
     QChar getUnicode(CID cid) const;
 
+    /// PDF Fire: returns the text of a character code, which stands for several characters
+    /// (according to the ToUnicode map), or an empty string for an ordinary character
+    QString getMultiCharacterText(CID cid) const;
+    void setMultiCharacterTexts(std::map<CID, QString> texts) { m_multiCharacterTexts = qMove(texts); }
+
     /// Returns the glyph advance (or zero, if glyph advance is invalid)
     PDFInteger getGlyphAdvance(size_t index) const;
 
@@ -418,6 +428,7 @@ protected:
     GlyphIndices m_glyphIndices;
     GlyphNames m_glyphNames;
     StandardFontType m_standardFontType; ///< Type of the standard font (or invalid, if it is not a standard font)
+    std::map<CID, QString> m_multiCharacterTexts; ///< PDF Fire: codes standing for several characters
 };
 
 class PDFType1Font : public PDFSimpleFont
@@ -648,6 +659,15 @@ public:
     /// Converts character code with a known byte length to QChar, use only on ToUnicode CMaps
     QChar getToUnicode(CID cid, unsigned int byteCount) const;
 
+    /// PDF Fire: returns the text of a code, which is mapped to several characters (a
+    /// ligature, or a character outside of the basic plane), or an empty string.
+    /// \param code Character code
+    /// \param byteCount Byte count of the code (zero = any)
+    QString getMultiCharacterText(unsigned int code, unsigned int byteCount = 0) const;
+
+    /// PDF Fire: returns all codes, which are mapped to several characters (code, byte count)
+    const std::map<std::pair<unsigned int, unsigned int>, QString>& getMultiCharacterTexts() const { return m_multiCharacterTexts; }
+
     /// Converts QChar to CID, use only on ToUnicode CMaps
     CID getFromUnicode(QChar character) const;
 
@@ -708,6 +728,7 @@ private:
     /// requires, that entries are sorted.
     static Entries optimize(const Entries& entries);
 
+    std::map<std::pair<unsigned int, unsigned int>, QString> m_multiCharacterTexts; ///< PDF Fire: codes mapped to several characters
     Entries m_entries;
     unsigned int m_maxKeyLength = 0;
     bool m_vertical = false;

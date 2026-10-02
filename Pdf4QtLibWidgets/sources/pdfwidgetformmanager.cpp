@@ -21,6 +21,7 @@
 // SOFTWARE.
 
 #include "pdfwidgetformmanager.h"
+#include "pdffirepermissions.h"
 #include "pdfdrawwidget.h"
 #include "pdftexteditpseudowidget.h"
 #include "pdfdrawspacecontroller.h"
@@ -277,12 +278,48 @@ public:
 
     virtual bool isEditorDrawEnabled() const override;
     virtual void draw(AnnotationDrawParameters& parameters, bool edit) const override;
+    virtual void mousePressEvent(QWidget* widget, QMouseEvent* event, const QPointF& mousePagePosition) override;
+    virtual void mouseReleaseEvent(QWidget* widget, QMouseEvent* event, const QPointF& mousePagePosition) override;
+
+private:
+    bool m_isPressed = false;
 };
 
 PDFFormFieldSignatureEditor::PDFFormFieldSignatureEditor(PDFWidgetFormManager* formManager, PDFFormWidget formWidget) :
     BaseClass(formManager, formWidget)
 {
 
+}
+
+void PDFFormFieldSignatureEditor::mousePressEvent(QWidget* widget, QMouseEvent* event, const QPointF& mousePagePosition)
+{
+    Q_UNUSED(widget);
+    Q_UNUSED(mousePagePosition);
+
+    // PDF Fire: a click on a signature line, which is not signed yet, offers the
+    // signing with a certificate (the signature is put into this field). The signing
+    // starts, when the button is released - the dialog of the signing would take the
+    // release of the button, and the field would keep the mouse (every next click
+    // anywhere on the page would open the dialog again).
+    const PDFFormFieldSignature* signatureField = dynamic_cast<const PDFFormFieldSignature*>(m_formWidget.getParent());
+    if (event->button() == Qt::LeftButton && signatureField && signatureField->getSignature().getContents().isEmpty())
+    {
+        event->accept();
+        m_isPressed = true;
+    }
+}
+
+void PDFFormFieldSignatureEditor::mouseReleaseEvent(QWidget* widget, QMouseEvent* event, const QPointF& mousePagePosition)
+{
+    Q_UNUSED(widget);
+    Q_UNUSED(mousePagePosition);
+
+    if (event->button() == Qt::LeftButton && m_isPressed)
+    {
+        m_isPressed = false;
+        event->accept();
+        Q_EMIT m_formManager->unsignedSignatureFieldClicked(m_formWidget.getWidget());
+    }
 }
 
 bool PDFFormFieldSignatureEditor::isEditorDrawEnabled() const
@@ -568,6 +605,13 @@ void PDFWidgetFormManager::shortcutOverrideEvent(QWidget* widget, QKeyEvent* eve
 
 void PDFWidgetFormManager::keyPressEvent(QWidget* widget, QKeyEvent* event)
 {
+    if (m_focusedEditor && !PDFFirePermissions::canFillForms(getDocument()))
+    {
+        // PDF Fire: the document doesn't allow filling in the forms
+        setFocusToEditor(nullptr);
+        return;
+    }
+
     if (m_focusedEditor)
     {
         m_focusedEditor->keyPressEvent(widget, event);
@@ -584,7 +628,9 @@ void PDFWidgetFormManager::keyReleaseEvent(QWidget* widget, QKeyEvent* event)
 
 void PDFWidgetFormManager::mousePressEvent(QWidget* widget, QMouseEvent* event)
 {
-    if (!hasForm())
+    // PDF Fire: a protected or certified document, which doesn't allow filling in
+    // the forms - the fields are shown, but they can't be edited
+    if (!hasForm() || !PDFFirePermissions::canFillForms(getDocument()))
     {
         return;
     }
@@ -612,7 +658,7 @@ void PDFWidgetFormManager::mousePressEvent(QWidget* widget, QMouseEvent* event)
 
 void PDFWidgetFormManager::mouseDoubleClickEvent(QWidget* widget, QMouseEvent* event)
 {
-    if (!hasForm())
+    if (!hasForm() || !PDFFirePermissions::canFillForms(getDocument()))
     {
         return;
     }
@@ -841,7 +887,7 @@ QString PDFWidgetFormManager::getTooltip() const
 
 bool PDFWidgetFormManager::focusNextPrevFormField(bool next)
 {
-    if (m_widgetEditors.empty())
+    if (m_widgetEditors.empty() || !PDFFirePermissions::canFillForms(getDocument()))
     {
         return false;
     }

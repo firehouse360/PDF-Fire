@@ -51,6 +51,7 @@
 #include <openssl/pkcs7.h>
 #include <openssl/pkcs12.h>
 #include <openssl/evp.h>
+#include <openssl/rand.h>
 
 #include <array>
 
@@ -442,6 +443,12 @@ PDFSecurityHandlerPointer PDFSecurityHandler::createSecurityHandler(const PDFObj
         case 2:
         case 3:
             Length = parseInt(dictionary, "Length", false, 40);
+
+            // PDF Fire: the key length is used as a size of a buffer later
+            if (Length < 40 || Length > 128 || Length % 8 != 0)
+            {
+                throw PDFException(PDFTranslationContext::tr("Invalid encryption key length (%1).").arg(Length));
+            }
             break;
 
         case 4:
@@ -785,6 +792,12 @@ CryptFilter PDFSecurityHandler::parseCryptFilter(PDFInteger length, const PDFObj
 
     filter.keyLength = parseInt(cryptFilterDictionary, "Length", false, publicKey ? length : length / 8);
 
+    // PDF Fire: the key length is used as a size of a buffer later
+    if (filter.keyLength < 0 || filter.keyLength > 256)
+    {
+        throw PDFException(PDFTranslationContext::tr("Invalid encryption key length (%1).").arg(filter.keyLength));
+    }
+
     // Recipients
     filter.recipients = parseRecipients(cryptFilterDictionary);
 
@@ -999,13 +1012,8 @@ QByteArray PDFStandardOrPublicSecurityHandler::encryptUsingFilter(const QByteArr
     {
         AES_data result;
 
-        QRandomGenerator randomNumberGenerator = QRandomGenerator::securelySeeded();
-
         result.initializationVector.resize(AES_BLOCK_SIZE);
-        for (int i = 0; i < AES_BLOCK_SIZE; ++i)
-        {
-            result.initializationVector[i] = uint8_t(randomNumberGenerator.generate());
-        }
+        PDFSecurityHandlerFactory::fillWithSecureRandomData(reinterpret_cast<unsigned char*>(result.initializationVector.data()), AES_BLOCK_SIZE);
 
         result.paddedData = data;
 
@@ -2109,12 +2117,17 @@ PDFSecurityHandlerPointer PDFSecurityHandlerFactory::createSecurityHandler(const
         }
     }
 
+    // PDF Fire: if no owner password is given, then the user password is used as the owner
+    // password (as ISO 32000 prescribes for the revisions 2-4). An empty owner password would
+    // otherwise authorize anybody as the owner, without any password at all.
+    const QString ownerPassword = settings.ownerPassword.isEmpty() ? settings.userPassword : settings.ownerPassword;
+
     if (standardHandler)
     {
         standardHandler->m_R = getRevisionFromAlgorithm(settings.algorithm);
         standardHandler->m_permissions = settings.permissions | 0xFFFFF000;
 
-        QByteArray adjustedOwnerPassword = handler->adjustPassword(settings.ownerPassword, standardHandler->m_R);
+        QByteArray adjustedOwnerPassword = handler->adjustPassword(ownerPassword, standardHandler->m_R);
         QByteArray adjustedUserPassword = handler->adjustPassword(settings.userPassword, standardHandler->m_R);
 
         // Generate encryption entries
@@ -2215,10 +2228,7 @@ PDFSecurityHandlerPointer PDFSecurityHandlerFactory::createSecurityHandler(const
                 permsData[9] = 'a';
                 permsData[10] = 'd';
                 permsData[11] = 'b';
-                permsData[12] = randomNumberGenerator.generate() & 0xFF;
-                permsData[13] = randomNumberGenerator.generate() & 0xFF;
-                permsData[14] = randomNumberGenerator.generate() & 0xFF;
-                permsData[15] = randomNumberGenerator.generate() & 0xFF;
+                fillWithSecureRandomData(permsData + 12, 4);
 
                 Q_ASSERT(standardHandler->m_Perms.size() == AES_BLOCK_SIZE);
                 AES_KEY key = { };
@@ -2240,7 +2250,7 @@ PDFSecurityHandlerPointer PDFSecurityHandlerFactory::createSecurityHandler(const
 
     bool firstTry = true;
     const bool isPublicKeySecurity = settings.algorithm == Algorithm::Certificate;
-    auto passwordCallback = [isPublicKeySecurity, &settings, &firstTry](bool* b) { *b = firstTry; firstTry = false; return !isPublicKeySecurity ? settings.ownerPassword : settings.userPassword; };
+    auto passwordCallback = [isPublicKeySecurity, &settings, &ownerPassword, &firstTry](bool* b) { *b = firstTry; firstTry = false; return !isPublicKeySecurity ? ownerPassword : settings.userPassword; };
     handler->authenticate(passwordCallback, !isPublicKeySecurity);
     if (handler->getAuthorizationResult() == PDFSecurityHandler::AuthorizationResult::OwnerAuthorized ||
         (isPublicKeySecurity && handler->getAuthorizationResult() == PDFSecurityHandler::AuthorizationResult::UserAuthorized))
@@ -2330,19 +2340,48 @@ int PDFSecurityHandlerFactory::getRevisionFromAlgorithm(Algorithm algorithm)
 
 QByteArray PDFSecurityHandlerFactory::generateRandomByteArray(QRandomGenerator& generator, int size)
 {
-    QByteArray ba;
-    ba.reserve(size);
+    // PDF Fire: keys, salts and seeds must come from a cryptographically secure generator.
+    // QRandomGenerator::securelySeeded() is only a securely seeded deterministic generator,
+    // so the generator passed by the caller is intentionally not used.
+    Q_UNUSED(generator);
 
-    for (int i = 0; i < size; ++i)
-    {
-        ba.push_back(static_cast<char>(generator.generate()));
-    }
-
+    QByteArray ba(qMax(size, 0), Qt::Uninitialized);
+    fillWithSecureRandomData(convertByteArrayToUcharPtr(ba), ba.size());
     return ba;
+}
+
+void PDFSecurityHandlerFactory::fillWithSecureRandomData(unsigned char* data, int size)
+{
+    if (size > 0 && RAND_bytes(data, size) != 1)
+    {
+        throw PDFException(PDFTranslationContext::tr("Secure random number generator failed."));
+    }
 }
 
 bool PDFSecurityHandlerFactory::validate(const SecuritySettings& settings, QString* errorMessage)
 {
+    switch (settings.algorithm)
+    {
+        case pdf::PDFSecurityHandlerFactory::RC4:
+        case pdf::PDFSecurityHandlerFactory::AES_128:
+        case pdf::PDFSecurityHandlerFactory::AES_256:
+        {
+            // PDF Fire: with both passwords empty, anybody is authorized as the owner
+            if (settings.userPassword.isEmpty() && settings.ownerPassword.isEmpty())
+            {
+                if (errorMessage)
+                {
+                    *errorMessage = tr("Password must not be empty. Enter the user password, the owner password, or both.");
+                }
+                return false;
+            }
+            break;
+        }
+
+        default:
+            break;
+    }
+
     switch (settings.algorithm)
     {
         case pdf::PDFSecurityHandlerFactory::RC4:
@@ -2381,7 +2420,10 @@ bool PDFSecurityHandlerFactory::validate(const SecuritySettings& settings, QStri
         {
             if (!pdf::PDFCertificateManager::isCertificateValid(settings.certificate, settings.userPassword))
             {
-                *errorMessage = tr("Invalid certificate or password.");
+                if (errorMessage)
+                {
+                    *errorMessage = tr("Invalid certificate or password.");
+                }
                 return false;
             }
 

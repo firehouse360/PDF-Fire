@@ -493,6 +493,15 @@ public:
     /// \param handler New security handler, or nullptr
     void setSecurityHandler(PDFSecurityHandlerPointer handler);
 
+    /// PDF Fire: creates a new random identifier of a document (a part of the ID array
+    /// of the trailer dictionary). An encrypted document must have the identifier, and
+    /// the identifier is a part of the encryption key of the revisions 2-4.
+    static QByteArray createDocumentId();
+
+    /// PDF Fire: sets the identifier of the document (both parts of the ID array)
+    /// \param id Identifier
+    void setDocumentId(const QByteArray& id);
+
     /// Creates a printable signature widget and appends its field to AcroForm,
     /// preserving existing fields and settings and adding both signature flags.
     /// The rectangle uses the page's unrotated PDF coordinates. An absent

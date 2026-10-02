@@ -232,6 +232,11 @@ private:
     int m_maxTextLength;
 
     QRectF m_widgetRect;
+
+    /// PDF Fire: the font size of the default appearance is 0 (automatic) - the size
+    /// of the base font is the largest size, a long text is written smaller to fit
+    bool m_isAutomaticFontSize = false;
+    qreal m_automaticFontSize = 0.0;
     QColor m_textColor;
 };
 

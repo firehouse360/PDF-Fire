@@ -27,6 +27,11 @@
 #include "pdfform.h"
 #include "pdfdocumentreader.h"
 #include "pdfdocumentwriter.h"
+#include "pdffiresigningrecord.h"
+#include "pdffirecertificateauthority.h"
+#include "pdffirepermissions.h"
+#include "pdfsecurityhandler.h"
+#include "pdfencoding.h"
 
 #include <QtTest>
 #include <QBuffer>
@@ -81,12 +86,19 @@ private slots:
     void signingFailureIsReported_data();
     void signingFailureIsReported();
     void multipleSignatures();
+    void incrementalSaveKeepsSignature();
     void signingOverInvalidSignature();
     void existingSignaturesNotPreserved();
     void preservesAcroForm_data();
     void preservesAcroForm();
     void widgetStructure_data();
     void widgetStructure();
+    void signingRecordIsSigned();
+    void dateTimeIsWrittenAsUtc();
+    void departmentAuthority();
+    void certification_data();
+    void certification();
+    void restrictedDocumentPermissions();
 
 private:
     static bool createTestCertificate(const QTemporaryDir& directory, PDFCertificateEntry& certificate, QString& password);
@@ -233,6 +245,306 @@ void SignatureBuilderTest::signedDocumentRoundTrip()
         QCOMPARE(changedResults.size(), size_t(1));
         QVERIFY(!changedResults.front().isSignatureValid());
     }
+}
+
+void SignatureBuilderTest::signingRecordIsSigned()
+{
+    // PDF Fire: the signing record (audit trail) is a part of the signature
+    // dictionary - it is read back, and a change of it breaks the signature
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    PDFCertificateEntry certificate;
+    QString password;
+    QVERIFY(createTestCertificate(directory, certificate, password));
+
+    PDFDocumentBuilder builder;
+    const auto page = builder.appendPage(QRectF(0, 0, 612, 792));
+    PDFDocument document = builder.build();
+
+    PDFFireSigningRecord record;
+    record.signerName = "Record Test";
+    record.typedName = "Record Test";
+    record.signingTime = QDateTime(QDate(2026, 10, 1), QTime(16, 30, 0), QTimeZone(-4 * 3600));
+    record.documentName = "test.pdf";
+    record.documentFingerprint = PDFFireSigningRecord::getFingerprint("original");
+    record.consentAccepted = true;
+    record.collectComputerInformation(true, true, true);
+    record.publicAddress = "203.0.113.7 (reported by test)";
+    record.hostName = "test-host";
+
+    QByteArray signedDocument;
+    PDFDocumentSigner::Parameters parameters;
+    parameters.document = &document;
+    parameters.signingTime = record.signingTime;
+    parameters.signFunction = [&](const QByteArray& data, QByteArray& signature)
+    {
+        return PDFSignatureFactory::sign(certificate, password, data, signature);
+    };
+    parameters.createSignatureFieldFunction = [&](PDFDocumentBuilder& signedBuilder, PDFObjectReference signatureDictionary)
+    {
+        const PDFObjectReference field = signedBuilder.createSignatureField("Signature", signatureDictionary, page);
+        record.writeTo(signedBuilder, signatureDictionary);
+        return field;
+    };
+    QCOMPARE(PDFDocumentSigner::sign(parameters, signedDocument), PDFDocumentSigner::Result::OK);
+
+    const auto results = verifySignedDocument(signedDocument);
+    QCOMPARE(results.size(), size_t(1));
+    QVERIFY2(results.front().isSignatureValid(), qPrintable(results.front().getErrors().join('\n')));
+    QCOMPARE(results.front().getSigningRecord(), record.toText());
+    QCOMPARE(results.front().getLocation(), QString("test-host"));
+    QVERIFY(record.toText().contains("Signed (UTC): 2026-10-01T20:30:00Z"));
+    QVERIFY(record.toText().contains("Signed (local time): 2026-10-01T16:30:00-04:00"));
+    QVERIFY(record.toText().contains("Public IP address: 203.0.113.7"));
+    QVERIFY(record.toText().contains("Consent to sign electronically: accepted"));
+    QVERIFY(signedDocument.contains("/Prop_Build"));
+
+    // The record is written as a hexadecimal string - a changed digit of it is
+    // a changed record, which must be detected
+    const int recordPosition = signedDocument.indexOf(PDFFireSigningRecord::DICTIONARY_KEY);
+    QVERIFY(recordPosition > 0);
+    const int digitPosition = signedDocument.indexOf('<', recordPosition) + 40;
+    QByteArray changedRecord = signedDocument;
+    changedRecord[digitPosition] = changedRecord[digitPosition] == '6' ? '7' : '6';
+    const auto changedResults = verifySignedDocument(changedRecord);
+    QCOMPARE(changedResults.size(), size_t(1));
+    QVERIFY(!changedResults.front().isSignatureValid());
+}
+
+void SignatureBuilderTest::dateTimeIsWrittenAsUtc()
+{
+    // PDF Fire: a date is written in UTC and marked so ('Z') - other readers would
+    // otherwise show it shifted by the offset of the time zone
+    const QDateTime dateTime(QDate(2026, 10, 1), QTime(16, 30, 0), QTimeZone(-4 * 3600));
+    const QByteArray text = PDFEncoding::convertDateTimeToString(dateTime);
+    QCOMPARE(text, QByteArray("D:20261001203000Z"));
+    QCOMPARE(PDFEncoding::convertToDateTime(text).toMSecsSinceEpoch(), dateTime.toMSecsSinceEpoch());
+}
+
+void SignatureBuilderTest::departmentAuthority()
+{
+    // PDF Fire: a department authority issues the certificate of a member; the
+    // signature is trusted, when the authority is trusted, and the revocation of
+    // the certificate is found in the revocation list of the authority
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    PDFFireCertificateAuthority::setTrustedAuthoritiesDirectoriesOverride({ directory.filePath("trusted") });
+
+    const QString authorityDirectory = directory.filePath("authority");
+    QString errorMessage;
+    {
+        PDFFireCertificateAuthority authority;
+        PDFFireCertificateAuthority::AuthorityInfo info;
+        info.name = "Test VFD Signing Authority";
+        info.organization = "Test VFD";
+        info.crlUrl = "https://example.org/pki/test-vfd.crl";
+        QVERIFY(!authority.create(authorityDirectory, info, "short", &errorMessage));
+        QVERIFY2(authority.create(authorityDirectory, info, "correct horse battery", &errorMessage), qPrintable(errorMessage));
+        QVERIFY(!PDFFireCertificateAuthority().create(authorityDirectory, info, "correct horse battery", &errorMessage));
+    }
+
+    PDFFireCertificateAuthority authority;
+    QVERIFY(!authority.open(authorityDirectory, "wrong passphrase!", &errorMessage));
+    QVERIFY2(authority.open(authorityDirectory, "correct horse battery", &errorMessage), qPrintable(errorMessage));
+    QCOMPARE(authority.getName(), QString("Test VFD Signing Authority"));
+    QCOMPARE(authority.getCrlUrl(), QString("https://example.org/pki/test-vfd.crl"));
+
+    PDFFireCertificateAuthority::MemberInfo member;
+    member.name = "Jane Firefighter";
+    member.title = "Lieutenant";
+    member.email = "jane@example.org";
+    member.policy.recordOperatingSystem = true;
+    member.policy.recordComputer = false;
+    member.policy.recordLocalAddresses = true;
+    member.policy.recordPublicAddress = false;
+    member.policy.isLocked = true;
+    const QString memberPassword = PDFFireCertificateAuthority::generatePassword();
+    QCOMPARE(memberPassword.size(), 19);
+
+    PDFCertificateEntry certificate;
+    PDFFireCertificateAuthority::IssuedCertificate issued;
+    QVERIFY2(authority.issue(member, memberPassword, &certificate.pkcs12, &issued, &errorMessage), qPrintable(errorMessage));
+    QCOMPARE(authority.getIssuedCertificates().size(), size_t(1));
+    QVERIFY(issued.expires > QDateTime::currentDateTimeUtc().addDays(700));
+
+    // The policy and the issuer are read without the password
+    const std::optional<PDFFireSigningPolicy> policy = PDFFireCertificateAuthority::readSigningPolicy(certificate, QString());
+    QVERIFY(policy.has_value());
+    QVERIFY(policy->recordOperatingSystem && !policy->recordComputer && policy->recordLocalAddresses && !policy->recordPublicAddress && policy->isLocked);
+    QCOMPARE(policy->authorityName, QString("Test VFD Signing Authority"));
+    QCOMPARE(PDFFireCertificateAuthority::readIssuerName(certificate, QString()), QString("Test VFD Signing Authority"));
+    QCOMPARE(PDFCertificateManager::getCertificateOwnerName(certificate, memberPassword), QString("Jane Firefighter"));
+    QVERIFY(PDFCertificateManager::isCertificateValid(certificate, memberPassword));
+    QCOMPARE(PDFFireCertificateAuthority::readAuthorityCertificate(certificate.pkcs12), authority.getCertificate());
+    QVERIFY(!PDFCertificateManager::isCertificateValid(certificate, "not the password"));
+
+    PDFDocumentBuilder builder;
+    builder.appendPage(QRectF(0, 0, 612, 792));
+    PDFDocument document = builder.build();
+    QByteArray signedDocument;
+    QCOMPARE(signDocument(document, QByteArray(), certificate, memberPassword, "Signature", signedDocument), PDFDocumentSigner::Result::OK);
+
+    // Not trusted yet - the signature is valid, the authority (in the chain) is not trusted
+    auto results = verifySignedDocument(signedDocument);
+    QCOMPARE(results.size(), size_t(1));
+    QVERIFY(results.front().isSignatureValid());
+    QVERIFY(results.front().hasFlag(PDFSignatureVerificationResult::Error_Certificate_SelfSignedChain));
+    QVERIFY(!results.front().hasFlag(PDFSignatureVerificationResult::Error_Certificate_SelfSigned));
+
+    // Trusted - the whole chain is valid
+    QFile crlFile(QDir(authorityDirectory).filePath(PDFFireCertificateAuthority::CRL_FILE_NAME));
+    QVERIFY(crlFile.open(QFile::ReadOnly));
+    QVERIFY2(PDFFireCertificateAuthority::trustAuthority(authority.getCertificate(), crlFile.readAll(), &errorMessage), qPrintable(errorMessage));
+    QVERIFY(PDFFireCertificateAuthority::isAuthorityTrusted(authority.getCertificate()));
+    results = verifySignedDocument(signedDocument);
+    QVERIFY2(results.front().isCertificateValid(), qPrintable(results.front().getErrors().join('\n')));
+    QVERIFY(results.front().isSignatureValid());
+    QVERIFY(!results.front().hasError());
+    QCOMPARE(results.front().getCertificateInfos().size(), size_t(2));
+
+    // A certificate of a member can't be trusted as an authority
+    QVERIFY(!PDFFireCertificateAuthority::trustAuthority(PDFFireCertificateAuthority::readPublicCertificate(certificate.pkcs12), QByteArray(), &errorMessage));
+
+    // Revoked - the revocation list of the trusted authority is updated at once
+    QVERIFY2(authority.revoke(issued.serialNumber, PDFFireCertificateAuthority::RevocationReason::CessationOfOperation, &errorMessage), qPrintable(errorMessage));
+    QVERIFY(authority.getIssuedCertificates().front().isRevoked());
+    results = verifySignedDocument(signedDocument);
+    QVERIFY(results.front().hasFlag(PDFSignatureVerificationResult::Error_Certificate_Revoked));
+    QVERIFY(results.front().isSignatureValid());
+
+    // The register survives reopening
+    PDFFireCertificateAuthority reopened;
+    QVERIFY2(reopened.open(authorityDirectory, "correct horse battery", &errorMessage), qPrintable(errorMessage));
+    QCOMPARE(reopened.getIssuedCertificates().size(), size_t(1));
+    QVERIFY(reopened.getIssuedCertificates().front().isRevoked());
+    QCOMPARE(reopened.getIssuedCertificates().front().name, QString("Jane Firefighter"));
+
+    PDFFireCertificateAuthority::setTrustedAuthoritiesDirectoriesOverride(QStringList());
+}
+
+void SignatureBuilderTest::certification_data()
+{
+    QTest::addColumn<int>("level");
+    QTest::newRow("no changes") << 1;
+    QTest::newRow("forms and signing") << 2;
+    QTest::newRow("forms, signing, comments") << 3;
+}
+
+void SignatureBuilderTest::certification()
+{
+    // PDF Fire: a certification signature (DocMDP) - the document knows, which changes
+    // are allowed, and a later change is reported (an error, when no change is allowed)
+    QFETCH(int, level);
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    PDFCertificateEntry certificate;
+    QString password;
+    QVERIFY(createTestCertificate(directory, certificate, password));
+
+    PDFDocumentBuilder builder;
+    const auto page = builder.appendPage(QRectF(0, 0, 612, 792));
+    PDFDocument document = builder.build();
+
+    QByteArray certifiedData;
+    PDFDocumentSigner::Parameters parameters;
+    parameters.document = &document;
+    parameters.signFunction = [&](const QByteArray& data, QByteArray& signature)
+    {
+        return PDFSignatureFactory::sign(certificate, password, data, signature);
+    };
+    parameters.createSignatureFieldFunction = [&](PDFDocumentBuilder& signedBuilder, PDFObjectReference signatureDictionary)
+    {
+        const PDFObjectReference field = signedBuilder.createSignatureField("Certification", signatureDictionary, page);
+        PDFFirePermissions::writeCertification(signedBuilder, signatureDictionary, PDFFirePermissions::Certification(level));
+        return field;
+    };
+    QCOMPARE(PDFDocumentSigner::sign(parameters, certifiedData), PDFDocumentSigner::Result::OK);
+
+    // The certification is found, the signature is valid and has no warning
+    const PDFDocument certifiedDocument = readDocument(certifiedData);
+    QCOMPARE(int(PDFFirePermissions::getCertification(&certifiedDocument)), level);
+    QVERIFY(!PDFFirePermissions::canModifyContent(&certifiedDocument));
+    QVERIFY(!PDFFirePermissions::canAssemblePages(&certifiedDocument));
+    QCOMPARE(PDFFirePermissions::canFillForms(&certifiedDocument), level >= 2);
+    QCOMPARE(PDFFirePermissions::canSign(&certifiedDocument), level >= 2);
+    QCOMPARE(PDFFirePermissions::canAnnotate(&certifiedDocument), level == 3);
+    QVERIFY(PDFFirePermissions::canCopyContent(&certifiedDocument));
+    QVERIFY(PDFFirePermissions::isAllowed(&certifiedDocument, PDFSecurityHandler::Permission::PrintHighResolution));
+
+    auto results = verifySignedDocument(certifiedData);
+    QCOMPARE(results.size(), size_t(1));
+    QCOMPARE(int(results.front().getCertification()), level);
+    QVERIFY(results.front().isSignatureValid());
+    QVERIFY(!results.front().hasSignatureWarning());
+
+    // A change after the certification (a page added, an incremental update)
+    PDFDocumentBuilder editBuilder(&certifiedDocument);
+    editBuilder.appendPage(QRectF(0, 0, 500, 600));
+    const PDFDocument editedDocument = editBuilder.build();
+    const QString fileName = directory.filePath("changed.pdf");
+    PDFDocumentWriter writer(nullptr);
+    QVERIFY(writer.writeIncrementalUpdate(fileName, certifiedData, &editedDocument));
+    QFile file(fileName);
+    QVERIFY(file.open(QFile::ReadOnly));
+    results = verifySignedDocument(file.readAll());
+    QCOMPARE(results.size(), size_t(1));
+    if (level == 1)
+    {
+        QVERIFY(results.front().hasFlag(PDFSignatureVerificationResult::Error_Signature_ChangedAfterCertification));
+        QVERIFY(!results.front().isSignatureValid());
+    }
+    else
+    {
+        QVERIFY(results.front().hasFlag(PDFSignatureVerificationResult::Warning_Signature_ChangedAfterCertification));
+        QVERIFY(results.front().isSignatureValid());
+    }
+}
+
+void SignatureBuilderTest::restrictedDocumentPermissions()
+{
+    // PDF Fire: a document with restrictions (only printing allowed), opened without
+    // the owner password, allows no change - not even of its security; opened with
+    // the owner password, it allows everything
+    PDFDocumentBuilder builder;
+    builder.appendPage(QRectF(0, 0, 612, 792));
+    PDFSecurityHandlerFactory::SecuritySettings settings;
+    settings.algorithm = PDFSecurityHandlerFactory::AES_256;
+    settings.ownerPassword = "owner-secret";
+    settings.permissions = uint32_t(PDFSecurityHandler::Permission::PrintLowResolution) | uint32_t(PDFSecurityHandler::Permission::PrintHighResolution);
+    builder.setSecurityHandler(PDFSecurityHandlerFactory::createSecurityHandler(settings));
+    const PDFDocument document = builder.build();
+
+    QBuffer buffer;
+    QVERIFY(buffer.open(QBuffer::WriteOnly));
+    PDFDocumentWriter writer(nullptr);
+    QVERIFY(writer.write(&buffer, &document));
+    buffer.close();
+
+    PDFDocumentReader userReader(nullptr, [](bool* ok) { *ok = false; return QString(); }, false, false);
+    const PDFDocument userDocument = userReader.readFromBuffer(buffer.data());
+    QCOMPARE(userReader.getReadingResult(), PDFDocumentReader::Result::OK);
+    QVERIFY(PDFFirePermissions::isAllowed(&userDocument, PDFSecurityHandler::Permission::PrintHighResolution));
+    QVERIFY(!PDFFirePermissions::canModifyContent(&userDocument));
+    QVERIFY(!PDFFirePermissions::canFillForms(&userDocument));
+    QVERIFY(!PDFFirePermissions::canAnnotate(&userDocument));
+    QVERIFY(!PDFFirePermissions::canCopyContent(&userDocument));
+    QVERIFY(!PDFFirePermissions::canAssemblePages(&userDocument));
+    QVERIFY(!PDFFirePermissions::canChangeSecurity(&userDocument));
+
+    PDFDocumentReader ownerReader(nullptr, [](bool* ok) { *ok = true; return QString("owner-secret"); }, false, true);
+    const PDFDocument ownerDocument = ownerReader.readFromBuffer(buffer.data());
+    QCOMPARE(ownerReader.getReadingResult(), PDFDocumentReader::Result::OK);
+    QVERIFY(PDFFirePermissions::canModifyContent(&ownerDocument));
+    QVERIFY(PDFFirePermissions::canCopyContent(&ownerDocument));
+    QVERIFY(PDFFirePermissions::canChangeSecurity(&ownerDocument));
+
+    // No security at all - everything is allowed
+    PDFDocumentBuilder plainBuilder;
+    plainBuilder.appendPage(QRectF(0, 0, 612, 792));
+    const PDFDocument plainDocument = plainBuilder.build();
+    QVERIFY(PDFFirePermissions::canModifyContent(&plainDocument));
+    QVERIFY(PDFFirePermissions::canChangeSecurity(&plainDocument));
+    QCOMPARE(PDFFirePermissions::getCertification(&plainDocument), PDFFirePermissions::Certification::None);
 }
 
 void SignatureBuilderTest::signatureSizeChanges_data()
@@ -405,6 +717,66 @@ void SignatureBuilderTest::multipleSignatures()
     QVERIFY(results.front().hasSignatureWarning());
     QVERIFY(!results.back().hasSignatureWarning());
     QCOMPARE(results.back().getSignatureFieldQualifiedName(), QString("Third"));
+}
+
+void SignatureBuilderTest::incrementalSaveKeepsSignature()
+{
+    // PDF Fire: an ordinary save of a signed and then edited document. Written as an
+    // incremental update, the signature stays valid - written as a whole, it is lost.
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    PDFCertificateEntry certificate;
+    QString password;
+    QVERIFY(createTestCertificate(directory, certificate, password));
+
+    PDFDocumentBuilder builder;
+    builder.appendPage(QRectF(0, 0, 300, 400));
+    const PDFDocument document = builder.build();
+
+    QByteArray signedData;
+    QCOMPARE(signDocument(document, QByteArray(), certificate, password, "First", signedData), PDFDocumentSigner::Result::OK);
+
+    // Edit the signed document - a page is added
+    const PDFDocument signedDocument = readDocument(signedData);
+    PDFDocumentBuilder editBuilder(&signedDocument);
+    editBuilder.appendPage(QRectF(0, 0, 500, 600));
+    const PDFDocument editedDocument = editBuilder.build();
+    QCOMPARE(editedDocument.getCatalog()->getPageCount(), size_t(2));
+
+    const QString fileName = directory.filePath("saved.pdf");
+    if (qEnvironmentVariableIsSet("PDFFIRE_KEEP_TEST_FILES"))
+    {
+        // The file can be then checked by an independent validator (pdfsig of poppler)
+        directory.setAutoRemove(false);
+        qInfo() << "Saved file:" << fileName;
+    }
+    PDFDocumentWriter writer(nullptr);
+    const PDFOperationResult result = writer.writeIncrementalUpdate(fileName, signedData, &editedDocument);
+    QVERIFY2(result, qPrintable(result.getErrorMessage()));
+
+    QFile file(fileName);
+    QVERIFY(file.open(QFile::ReadOnly));
+    const QByteArray savedData = file.readAll();
+    file.close();
+
+    QVERIFY(savedData.startsWith(signedData));
+    QVERIFY(savedData.size() > signedData.size());
+    QCOMPARE(readDocument(savedData).getCatalog()->getPageCount(), size_t(2));
+
+    const auto results = verifySignedDocument(savedData);
+    QCOMPARE(results.size(), size_t(1));
+    QVERIFY2(results.front().isSignatureValid(), qPrintable(results.front().getErrors().join('\n')));
+
+    // The signature does not cover the appended change, and the validation says so
+    QVERIFY(results.front().hasSignatureWarning());
+
+    // The same document written as a whole: the signature is not valid anymore
+    QBuffer buffer;
+    QVERIFY(buffer.open(QBuffer::WriteOnly));
+    QVERIFY(writer.write(&buffer, &editedDocument));
+    buffer.close();
+    const auto rewrittenResults = verifySignedDocument(buffer.data());
+    QVERIFY(rewrittenResults.empty() || !rewrittenResults.front().isSignatureValid());
 }
 
 void SignatureBuilderTest::signingOverInvalidSignature()

@@ -66,6 +66,10 @@ public:
     static QString getCertificateDirectory();
     static QString generateCertificateFileName();
     static bool isCertificateValid(const PDFCertificateEntry& certificateEntry, QString password);
+
+    /// PDF Fire: name of the owner of the certificate (common name), read with
+    /// the password (a protected certificate shows no name without it)
+    static QString getCertificateOwnerName(const PDFCertificateEntry& certificateEntry, QString password);
 };
 
 class PDF4QTLIBCORESHARED_EXPORT PDFSignatureFactory

@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/pdfplugins/ocrplugin">
+        <file>ocr-recognize-text.svg</file>
+    </qresource>
+</RCC>

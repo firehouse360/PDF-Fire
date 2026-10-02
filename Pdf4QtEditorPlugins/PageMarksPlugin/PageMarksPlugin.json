@@ -1,0 +1,7 @@
+{
+    "Name" : "PageMarks",
+    "Author" : "PDF Fire contributors",
+    "Version" : "1.0.0",
+    "License" : "MIT",
+    "Description" : "Watermarks, headers and footers and Bates numbers - added to the pages as real, searchable text (or an image), and removed again (also those made by Adobe Acrobat)."
+}

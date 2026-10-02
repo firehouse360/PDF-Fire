@@ -21,6 +21,7 @@
 // SOFTWARE.
 
 #include "dimensionsplugin.h"
+#include "pdffirepermissions.h"
 #include "scaledialog.h"
 #include "scalepresetsdialog.h"
 #include "settingsdialog.h"
@@ -812,7 +813,7 @@ void DimensionsPlugin::onDimensionCreated(Dimension dimension)
 
 bool DimensionsPlugin::canCreateAnnotations() const
 {
-    return m_document && m_document->getStorage().getSecurityHandler()->isAllowed(pdf::PDFSecurityHandler::Permission::ModifyInteractiveItems);
+    return pdf::PDFFirePermissions::canAnnotate(m_document);
 }
 
 bool DimensionsPlugin::createDimensionAnnotations(const std::vector<Dimension>& dimensions, std::vector<Dimension>* notCreated)

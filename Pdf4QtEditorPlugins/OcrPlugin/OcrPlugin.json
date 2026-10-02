@@ -1,0 +1,7 @@
+{
+    "Name" : "OCR",
+    "Author" : "PDF Fire contributors",
+    "Version" : "1.0.0",
+    "License" : "MIT",
+    "Description" : "Recognize text (OCR) - makes scanned pages searchable and copyable by adding an invisible text layer, the page looks exactly the same. Uses the Tesseract OCR engine."
+}

@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=PDF Fire
+GenericName=PDF Editor
+Comment=View, edit, sign and protect PDF documents
+Exec=pdf-fire %f
+Icon=pdf-fire
+Terminal=false
+Categories=Office;Viewer;
+MimeType=application/pdf;
+Keywords=pdf;editor;viewer;sign;redact;annotate;form;
+StartupNotify=true
+StartupWMClass=pdf-fire

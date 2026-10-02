@@ -29,6 +29,7 @@
 #include "pdfparser.h"
 #include "pdfstreamfilters.h"
 #include "pdfannotationmanipulator.h"
+#include "pdfsecurityhandler.h"
 
 #include <QBuffer>
 #include <QFontMetricsF>
@@ -64,6 +65,21 @@ PDFObjectReference PDFDocumentBuilder::createSignatureField(QString fieldName,
     }
 
     const PDFObjectReference field = createFormFieldSignature(fieldName, {}, signatureValue);
+
+    // PDF Fire: the field is created with an empty array of kids, and its widget is then
+    // merged into it. A field with /Kids is a non-terminal field for the readers - the
+    // widget was not found (Poppler: "was asked for widget and didn't had one", qpdf:
+    // "widget annotation is not reachable from /AcroForm"). The empty array is removed.
+    if (const PDFDictionary* fieldDictionary = m_storage.getDictionaryFromObject(m_storage.getObjectByReference(field)))
+    {
+        const PDFObject& kids = m_storage.getObject(fieldDictionary->get("Kids"));
+        if (kids.isArray() && kids.getArray()->getCount() == 0)
+        {
+            PDFDictionaryBuilder fieldBuilder(*fieldDictionary);
+            fieldBuilder.removeEntry("Kids");
+            setObject(field, PDFObject::createDictionary(std::move(fieldBuilder)));
+        }
+    }
     if (m_storage.getObjectByReference(appearanceStream).isStream() && !rect.isEmpty())
     {
         createFormFieldWidget(field, page, appearanceStream, rect);
@@ -2006,6 +2022,39 @@ void PDFDocumentBuilder::mergeNames(PDFObjectReference a, PDFObjectReference b)
 
 void PDFDocumentBuilder::appendTo(PDFObjectReference reference, PDFObject object)
 {
+    // PDF Fire: the arrays are concatenated only if both of them are direct objects. If
+    // the target has the array stored as an indirect object (the list of the annotations of
+    // a page is often stored that way), the appended array would REPLACE it - adding one
+    // annotation to a page would silently delete all the annotations the page already had.
+    // So such arrays of the target are made direct first.
+    const PDFDictionary* targetDictionary = m_storage.getDictionaryFromObject(m_storage.getObjectByReference(reference));
+    if (targetDictionary && object.isDictionary())
+    {
+        const PDFDictionary* appendedDictionary = object.getDictionary();
+        PDFDictionaryBuilder resolvedEntries;
+        bool hasResolvedEntries = false;
+
+        for (size_t i = 0; i < appendedDictionary->getCount(); ++i)
+        {
+            const PDFInplaceOrMemoryString& key = appendedDictionary->getKey(i);
+            const PDFObject& targetValue = targetDictionary->get(key.getString());
+            if (appendedDictionary->getValue(i).isArray() && targetValue.isReference())
+            {
+                const PDFObject& resolvedValue = m_storage.getObject(targetValue);
+                if (resolvedValue.isArray())
+                {
+                    resolvedEntries.setEntry(key, resolvedValue);
+                    hasResolvedEntries = true;
+                }
+            }
+        }
+
+        if (hasResolvedEntries)
+        {
+            mergeTo(reference, PDFObject::createDictionary(qMove(resolvedEntries)));
+        }
+    }
+
     m_storage.setObject(reference, PDFObjectManipulator::merge(m_storage.getObject(reference), qMove(object), PDFObjectManipulator::ConcatenateArrays));
 }
 
@@ -2124,6 +2173,29 @@ void PDFDocumentBuilder::setSecurityHandler(PDFSecurityHandlerPointer handler)
     m_storage.updateTrailerDictionary(qMove(updatedTrailerDictionary));
 
     m_storage.setSecurityHandler(qMove(handler));
+}
+
+QByteArray PDFDocumentBuilder::createDocumentId()
+{
+    QByteArray id(16, Qt::Uninitialized);
+    PDFSecurityHandlerFactory::fillWithSecureRandomData(reinterpret_cast<unsigned char*>(id.data()), id.size());
+    return id;
+}
+
+void PDFDocumentBuilder::setDocumentId(const QByteArray& id)
+{
+    PDFObjectFactory objectBuilder;
+
+    objectBuilder.beginDictionary();
+    objectBuilder.beginDictionaryItem("ID");
+    objectBuilder.beginArray();
+    objectBuilder << WrapString(id);
+    objectBuilder << WrapString(id);
+    objectBuilder.endArray();
+    objectBuilder.endDictionaryItem();
+    objectBuilder.endDictionary();
+
+    m_storage.updateTrailerDictionary(objectBuilder.takeObject());
 }
 
 PDFObjectReference PDFDocumentBuilder::getCatalogReference() const

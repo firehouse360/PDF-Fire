@@ -23,6 +23,9 @@
 #include "pdfviewersettingsdialog.h"
 #include "ui_pdfviewersettingsdialog.h"
 
+#include <QComboBox>
+#include <QLabel>
+
 #include "pdfglobal.h"
 #include "pdfutils.h"
 #include "pdfwidgetutils.h"
@@ -35,7 +38,7 @@
 #include <QMessageBox>
 #include <QFileDialog>
 #include <QListWidgetItem>
-#include <QTextToSpeech>
+#include "pdffirenaturalspeech.h"
 #include <QDomDocument>
 #include <QStyledItemDelegate>
 
@@ -105,7 +108,22 @@ PDFViewerSettingsDialog::PDFViewerSettingsDialog(const PDFViewerSettings::Settin
 {
     ui->setupUi(this);
 
-    m_textToSpeechEngines = QTextToSpeech::availableEngines();
+    // PDF Fire: the zoom of a newly opened document - everybody has their own liking
+    m_openZoomComboBox = new QComboBox(ui->uiGroupBox);
+    m_openZoomComboBox->setObjectName("openZoomComboBox");
+    m_openZoomComboBox->addItem(tr("Fit width"), QStringLiteral("fitWidth"));
+    m_openZoomComboBox->addItem(tr("Fit page"), QStringLiteral("fitPage"));
+    m_openZoomComboBox->addItem(tr("Fit height"), QStringLiteral("fitHeight"));
+    for (int percent : { 50, 75, 100, 125, 150, 200 })
+    {
+        m_openZoomComboBox->addItem(tr("%1 %").arg(percent), QString::number(percent));
+    }
+    const int openZoomRow = ui->uiGroupBoxLayout->rowCount();
+    ui->uiGroupBoxLayout->addWidget(new QLabel(tr("Zoom when a document is opened"), ui->uiGroupBox), openZoomRow, 0);
+    ui->uiGroupBoxLayout->addWidget(m_openZoomComboBox, openZoomRow, 1);
+
+    // PDF Fire: the natural voices are the only speech engine
+    m_textToSpeechEngines = QStringList{ QStringLiteral("pdffire") };
 
     new QListWidgetItem(QIcon(":/resources/engine.svg"), tr("Engine"), ui->optionsPagesWidget, EngineSettings);
     new QListWidgetItem(QIcon(":/resources/rendering.svg"), tr("Rendering"), ui->optionsPagesWidget, RenderingSettings);
@@ -237,7 +255,7 @@ PDFViewerSettingsDialog::PDFViewerSettingsDialog(const PDFViewerSettings::Settin
     // Text to speech
     for (const QString& engine : m_textToSpeechEngines)
     {
-        ui->speechEnginesComboBox->addItem(engine, engine);
+        ui->speechEnginesComboBox->addItem(tr("PDF Fire natural voices"), engine);
     }
 
     connect(ui->trustedCertificateStoreTableWidget, &QTableWidget::itemSelectionChanged, this, &PDFViewerSettingsDialog::updateTrustedCertificatesTableActions);
@@ -368,6 +386,7 @@ void PDFViewerSettingsDialog::loadData()
     ui->maximumRecentFileCountEdit->setValue(m_otherSettings.maximumRecentFileCount);
     ui->magnifierSizeEdit->setValue(m_settings.m_magnifierSize);
     ui->magnifierZoomEdit->setValue(m_settings.m_magnifierZoom);
+    m_openZoomComboBox->setCurrentIndex(qMax(0, m_openZoomComboBox->findData(m_settings.m_openZoom)));
     ui->maximumUndoStepsEdit->setValue(m_settings.m_maximumUndoSteps);
     ui->maximumRedoStepsEdit->setValue(m_settings.m_maximumRedoSteps);
     ui->developerModeCheckBox->setChecked(m_settings.m_allowDeveloperMode);
@@ -706,6 +725,10 @@ void PDFViewerSettingsDialog::saveData()
     {
         m_settings.m_magnifierZoom = ui->magnifierZoomEdit->value();
     }
+    else if (sender == m_openZoomComboBox)
+    {
+        m_settings.m_openZoom = m_openZoomComboBox->currentData().toString();
+    }
     else if (sender == ui->foregroundColorEdit)
     {
         m_cmsSettings.foregroundColor = QColor::fromString(ui->foregroundColorEdit->text());
@@ -963,14 +986,11 @@ void PDFViewerSettingsDialog::setSpeechEngine(const QString& engine, const QStri
         return;
     }
 
-    QTextToSpeech textToSpeech(engine, nullptr);
-    textToSpeech.setLocale(QLocale(locale));
-
     if (m_currentSpeechEngine != engine)
     {
         m_currentSpeechEngine = engine;
 
-        QVector<QLocale> locales = textToSpeech.availableLocales();
+        const QList<QLocale> locales = PDFFireNaturalSpeech::getLocales();
         ui->speechLocaleComboBox->setUpdatesEnabled(false);
         ui->speechLocaleComboBox->clear();
         for (const QLocale& currentLocale : locales)
@@ -982,12 +1002,14 @@ void PDFViewerSettingsDialog::setSpeechEngine(const QString& engine, const QStri
 
     m_currentSpeechLocale = locale;
 
-    QVector<QVoice> voices = textToSpeech.availableVoices();
     ui->speechVoiceComboBox->setUpdatesEnabled(false);
     ui->speechVoiceComboBox->clear();
-    for (const QVoice& voice : voices)
+    for (const PDFFireNaturalSpeech::Voice& voice : PDFFireNaturalSpeech::getVoices())
     {
-        ui->speechVoiceComboBox->addItem(QString("%1 (%2, %3)").arg(voice.name(), QVoice::genderName(voice.gender()), QVoice::ageName(voice.age())), voice.name());
+        if (locale.isEmpty() || voice.locale.name() == locale)
+        {
+            ui->speechVoiceComboBox->addItem(voice.name, voice.id);
+        }
     }
     ui->speechVoiceComboBox->setUpdatesEnabled(true);
 }

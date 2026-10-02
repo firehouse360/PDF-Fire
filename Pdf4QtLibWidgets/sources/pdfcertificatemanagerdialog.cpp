@@ -25,6 +25,7 @@
 #include "pdfcreatecertificatedialog.h"
 
 #include "pdfwidgetutils.h"
+#include "pdffirecertificateauthority.h"
 
 #include <QAction>
 #include <QPushButton>
@@ -126,7 +127,31 @@ void PDFCertificateManagerDialog::onImportCertificateClicked()
         {
             if (file.copy(targetFile))
             {
+                // PDF Fire: the imported file contains a private key, only the owner may access it
+                QFile::setPermissions(targetFile, QFile::ReadOwner | QFile::WriteOwner);
                 QMessageBox::information(this, tr("Import Certificate"), tr("Certificate '%1' was successfully imported.").arg(file.fileName()));
+
+                // PDF Fire: a certificate issued by a department authority carries the
+                // certificate of the authority - the member can trust it at once
+                QFile importedFile(targetFile);
+                if (importedFile.open(QFile::ReadOnly))
+                {
+                    PDFCertificateEntry entry;
+                    entry.pkcs12 = importedFile.readAll();
+                    const std::optional<PDFFireSigningPolicy> policy = PDFFireCertificateAuthority::readSigningPolicy(entry, QString());
+                    const QByteArray authority = PDFFireCertificateAuthority::readAuthorityCertificate(entry.pkcs12);
+                    if (policy && !authority.isEmpty() && !PDFFireCertificateAuthority::isAuthorityTrusted(authority) &&
+                        QMessageBox::question(this, tr("Import Certificate"),
+                                              tr("The certificate was issued by %1. Trust %1 on this computer, so the signatures of all its members show as trusted?").arg(policy->authorityName),
+                                              QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes) == QMessageBox::Yes)
+                    {
+                        QString errorMessage;
+                        if (!PDFFireCertificateAuthority::trustAuthority(authority, QByteArray(), &errorMessage))
+                        {
+                            QMessageBox::critical(this, tr("Import Certificate"), errorMessage);
+                        }
+                    }
+                }
             }
             else
             {

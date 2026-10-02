@@ -22,6 +22,7 @@
 
 add_executable(Pdf4QtEditor
     main.cpp
+    pdffiredevtools.cpp
     icon.rc
     app.qrc
 )

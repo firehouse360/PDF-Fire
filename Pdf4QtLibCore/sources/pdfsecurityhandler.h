@@ -518,6 +518,12 @@ public:
     /// \param size Target size
     static QByteArray generateRandomByteArray(QRandomGenerator& generator, int size);
 
+    /// Fills the buffer with data from the cryptographically secure random number
+    /// generator. Throws PDFException, if the generator fails.
+    /// \param data Buffer
+    /// \param size Size of the buffer
+    static void fillWithSecureRandomData(unsigned char* data, int size);
+
     /// Validates security settings
     /// \param settings Settings
     /// \param[out] errorMessage Error message

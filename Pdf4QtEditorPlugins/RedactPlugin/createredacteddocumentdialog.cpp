@@ -83,6 +83,12 @@ bool CreateRedactedDocumentDialog::isCopyingOutline() const
     return ui->copyOutlineCheckBox->isChecked();
 }
 
+bool CreateRedactedDocumentDialog::isKeepingText() const
+{
+    // PDF Fire: new redaction method, which keeps the text outside of the areas
+    return ui->keepTextRadioButton->isChecked();
+}
+
 void CreateRedactedDocumentDialog::on_selectDirectoryButton_clicked()
 {
     QString fileName = QFileDialog::getSaveFileName(this, tr("File Name"), ui->fileNameEdit->text());

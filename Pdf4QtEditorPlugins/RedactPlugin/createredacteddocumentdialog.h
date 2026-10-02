@@ -50,6 +50,9 @@ public:
     bool isCopyingMetadata() const;
     bool isCopyingOutline() const;
 
+    /// PDF Fire: keep the content outside of the redacted areas (text stays searchable)
+    bool isKeepingText() const;
+
 private slots:
     void on_selectDirectoryButton_clicked();
 

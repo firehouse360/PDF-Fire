@@ -66,8 +66,6 @@ int PDFToolEncryptApplication::execute(const PDFToolOptions& options)
         return ErrorEncryptionSettings;
     }
 
-    pdf::PDFSecurityHandlerPointer securityHandler = pdf::PDFSecurityHandlerFactory::createSecurityHandler(settings);
-
     pdf::PDFDocument document;
     QByteArray sourceData;
     if (!readDocument(options, document, &sourceData, true))
@@ -79,7 +77,27 @@ int PDFToolEncryptApplication::execute(const PDFToolOptions& options)
         return ErrorDocumentReading;
     }
 
+    // PDF Fire: the document id is a part of the encryption key for RC4 and AES-128,
+    // so the security handler can be created only when the document is already loaded.
+    settings.id = document.getIdPart(0);
+    const bool isDocumentIdMissing = settings.id.isEmpty();
+    if (isDocumentIdMissing)
+    {
+        // An encrypted document must have an identifier
+        settings.id = pdf::PDFDocumentBuilder::createDocumentId();
+    }
+    pdf::PDFSecurityHandlerPointer securityHandler = pdf::PDFSecurityHandlerFactory::createSecurityHandler(settings);
+    if (!securityHandler)
+    {
+        PDFConsole::writeError(PDFToolTranslationContext::tr("Failed to create the encryption."), options.outputCodec);
+        return ErrorEncryptionSettings;
+    }
+
     pdf::PDFDocumentBuilder builder(&document);
+    if (isDocumentIdMissing)
+    {
+        builder.setDocumentId(settings.id);
+    }
     builder.setSecurityHandler(qMove(securityHandler));
     document = builder.build();
 

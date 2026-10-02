@@ -22,6 +22,8 @@
 
 #include "scannerbackend.h"
 
+#include <atomic>
+
 #include <sane/sane.h>
 
 namespace pdfplugin
@@ -37,6 +39,7 @@ public:
     virtual std::vector<ScannerDevice> devices(QString* errorMessage) override;
     virtual QStringList sources(const QString& deviceId) override;
     virtual ScanResult scan(const ScanSettings& settings) override;
+    virtual void cancel() override;
 
 private:
     bool setOptionInt(SANE_Handle handle, const char* name, int value);
@@ -45,6 +48,8 @@ private:
     QImage readImage(SANE_Handle handle, int dpi, QString* errorMessage);
 
     bool m_initialized = false;
+    std::atomic<SANE_Handle> m_activeHandle = nullptr;
+    std::atomic<bool> m_isCancelled = false;
 };
 
 }   // namespace pdfplugin

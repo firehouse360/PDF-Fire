@@ -1,0 +1,20 @@
+<RCC>
+    <qresource prefix="/pdfplugins/formsplugin">
+        <file>form-edit.svg</file>
+        <file>form-fill.svg</file>
+        <file>form-text.svg</file>
+        <file>form-textbox.svg</file>
+        <file>form-date.svg</file>
+        <file>form-checkbox.svg</file>
+        <file>form-radio.svg</file>
+        <file>form-dropdown.svg</file>
+        <file>form-list.svg</file>
+        <file>form-signature.svg</file>
+        <file>form-detect.svg</file>
+        <file>form-properties.svg</file>
+        <file>form-duplicate.svg</file>
+        <file>form-copy-pages.svg</file>
+        <file>form-delete.svg</file>
+        <file>form-taborder.svg</file>
+    </qresource>
+</RCC>

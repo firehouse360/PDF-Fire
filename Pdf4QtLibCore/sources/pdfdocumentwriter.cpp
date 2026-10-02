@@ -24,6 +24,7 @@
 #include "pdfdocumentreader.h"
 #include "pdfconstants.h"
 #include "pdfvisitor.h"
+#include "pdfexception.h"
 #include "pdfparser.h"
 
 #include <QFile>
@@ -99,10 +100,15 @@ void PDFWriteObjectVisitor::visitReal(PDFReal value)
 
 void PDFWriteObjectVisitor::visitString(PDFStringRef string)
 {
+    // PDF Fire: a carriage return written into a literal string is read back as a line
+    // feed (ISO 32000, 7.3.4.2 - an end-of-line marker in a literal string is treated as
+    // 0x0A), which corrupts binary strings, for example encrypted strings, or the entries
+    // of the encryption dictionary. Such strings must be written in the hexadecimal form.
     QByteArray data = string.getString();
     if (data.indexOf('(') != -1 ||
         data.indexOf(')') != -1 ||
-        data.indexOf('\\') != -1)
+        data.indexOf('\\') != -1 ||
+        data.indexOf('\r') != -1)
     {
         m_device->write("<");
         m_device->write(data.toHex());
@@ -165,7 +171,14 @@ void PDFWriteObjectVisitor::visitDictionary(const PDFDictionary* dictionary)
 
 void PDFWriteObjectVisitor::visitStream(const PDFStream* stream)
 {
-    visitDictionary(stream->getDictionary());
+    // PDF Fire: the length of the stream is always written, and it is always the real
+    // size of the data. Streams created by the library (the appearance streams of the
+    // annotations, for example) have no Length entry in their dictionary at all, which
+    // makes the file invalid - readers have to guess, where such a stream ends.
+    PDFDictionaryBuilder dictionaryBuilder(*stream->getDictionary());
+    dictionaryBuilder.setEntry(PDFInplaceOrMemoryString("Length"), PDFObject::createInteger(PDFInteger(stream->getContent()->size())));
+    const PDFObject dictionaryObject = PDFObject::createDictionary(qMove(dictionaryBuilder));
+    visitDictionary(dictionaryObject.getDictionary());
 
     m_device->write("stream");
     m_device->write("\x0D\x0A");
@@ -199,7 +212,18 @@ PDFOperationResult PDFDocumentWriter::write(const QString& fileName, const PDFDo
 
         if (file.open(QFile::WriteOnly | QFile::Truncate))
         {
-            PDFOperationResult result = write(&file, document);
+            // PDF Fire: encryption of the objects can throw, the exception must not
+            // leave through the caller, which is usually a slot of the application.
+            PDFOperationResult result = true;
+            try
+            {
+                result = write(&file, document);
+            }
+            catch (const PDFException& exception)
+            {
+                result = exception.getMessage();
+            }
+
             if (result)
             {
                 if (!file.commit())
@@ -224,7 +248,15 @@ PDFOperationResult PDFDocumentWriter::write(const QString& fileName, const PDFDo
 
         if (file.open(QFile::WriteOnly | QFile::Truncate))
         {
-            PDFOperationResult result = write(&file, document);
+            PDFOperationResult result = true;
+            try
+            {
+                result = write(&file, document);
+            }
+            catch (const PDFException& exception)
+            {
+                result = exception.getMessage();
+            }
             file.close();
 
             if (!result)
@@ -350,7 +382,10 @@ PDFOperationResult PDFDocumentWriter::write(QIODevice* device, const PDFDocument
     PDFDictionaryBuilder trailerDictionary(*document->getTrailerDictionary());
     PDFDictionaryBuilder newTrailerDictionary;
 
-    for (const char* entry : { "Size", "Root", "Encrypt", "Info", "ID"})
+    // PDF Fire: the size must match the cross-reference table written above, the value
+    // of the source trailer dictionary can be stale (for example after an object was added).
+    newTrailerDictionary.addEntry(PDFInplaceOrMemoryString("Size"), PDFObject::createInteger(PDFInteger(objectCount)));
+    for (const char* entry : { "Root", "Encrypt", "Info", "ID"})
     {
         PDFObject object = trailerDictionary.get(entry);
         if (!object.isNull())
@@ -429,6 +464,48 @@ bool PDFDocumentWriter::findLastCrossReferenceSection(const QByteArray& data, PD
     }
 
     offset = parsedOffset;
+    return true;
+}
+
+PDFOperationResult PDFDocumentWriter::writeIncrementalUpdate(const QString& fileName, const QByteArray& originalData, const PDFDocument* document)
+{
+    Q_ASSERT(document);
+
+    // The update is prepared in the memory first - the original data are usually
+    // the content of the file, which is being replaced.
+    QBuffer buffer;
+    buffer.open(QBuffer::WriteOnly);
+
+    PDFOperationResult result = true;
+    try
+    {
+        result = writeIncrementalUpdate(&buffer, originalData, document);
+    }
+    catch (const PDFException& exception)
+    {
+        result = exception.getMessage();
+    }
+    buffer.close();
+
+    if (!result)
+    {
+        return result;
+    }
+
+    if (!buffer.data().startsWith(originalData))
+    {
+        return tr("Incremental update did not preserve the original document.");
+    }
+
+    QSaveFile file(fileName);
+    file.setDirectWriteFallback(true);
+    if (!file.open(QFile::WriteOnly | QFile::Truncate) ||
+        file.write(buffer.data()) != buffer.data().size() ||
+        !file.commit())
+    {
+        return tr("File '%1' can't be opened for writing. %2").arg(fileName, file.errorString());
+    }
+
     return true;
 }
 

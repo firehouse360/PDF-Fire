@@ -32,7 +32,7 @@
 #include <QComboBox>
 #include <QToolButton>
 #include <QTextBrowser>
-#include <QTextToSpeech>
+#include "pdffirenaturalspeech.h"
 
 #include "pdfdbgheap.h"
 
@@ -92,12 +92,16 @@ void PDFTextToSpeech::setDocument(const pdf::PDFModifiedDocument& document)
 
 void PDFTextToSpeech::updateVoices()
 {
-    QVector<QVoice> voices = m_textToSpeech->availableVoices();
+    // PDF Fire: the natural voices of the chosen language
+    const QString locale = m_speechLocaleComboBox->currentData().toString();
     m_speechVoiceComboBox->setUpdatesEnabled(false);
     m_speechVoiceComboBox->clear();
-    for (const QVoice& voice : voices)
+    for (const PDFFireNaturalSpeech::Voice& voice : PDFFireNaturalSpeech::getVoices())
     {
-        m_speechVoiceComboBox->addItem(QString("%1 (%2, %3)").arg(voice.name(), QVoice::genderName(voice.gender()), QVoice::ageName(voice.age())), voice.name());
+        if (locale.isEmpty() || voice.locale.name() == locale)
+        {
+            m_speechVoiceComboBox->addItem(voice.name, voice.id);
+        }
     }
     m_speechVoiceComboBox->setUpdatesEnabled(true);
 }
@@ -123,39 +127,25 @@ void PDFTextToSpeech::setSettings(const PDFViewerSettings* viewerSettings)
 
     const PDFViewerSettings::Settings& settings = viewerSettings->getSettings();
 
-    // Jakub Melka: We do not require the engine to be selected in the settings. If it is
-    // not set, or if it is not available anymore, then we use the default engine of the
-    // platform - otherwise the speech would not work at all until the user selects the
-    // engine manually in the settings dialog.
-    const QStringList availableEngines = QTextToSpeech::availableEngines();
-    QString engine = settings.m_speechEngine;
-    if (!engine.isEmpty() && !availableEngines.contains(engine))
-    {
-        engine = QString();
-    }
-
+    // PDF Fire: the natural voices (Kokoro) are the only speech engine - they come with
+    // PDF Fire and work offline
     m_requestedLocale = settings.m_speechLocale;
     m_requestedVoice = settings.m_speechVoice;
 
-    if (!availableEngines.isEmpty())
-    {
-        m_textToSpeech = new QTextToSpeech(engine, this);
-        connect(m_textToSpeech, &QTextToSpeech::stateChanged, this, &PDFTextToSpeech::onEngineStateChanged);
-        connect(m_textToSpeech, &QTextToSpeech::errorOccurred, this, [this](QTextToSpeech::ErrorReason, const QString& errorString) { onEngineError(errorString); });
-        m_state = m_document ? Ready : NoDocument;
+    m_textToSpeech = new PDFFireNaturalSpeech(this);
+    connect(m_textToSpeech, &PDFFireNaturalSpeech::stateChanged, this, &PDFTextToSpeech::onEngineStateChanged);
+    connect(m_textToSpeech, &PDFFireNaturalSpeech::errorOccurred, this, &PDFTextToSpeech::onEngineError);
 
-        // Jakub Melka: Engine can be initialized asynchronously - available locales/voices
-        // can be queried only when the engine becomes ready. If it is already ready, then
-        // the lists are filled immediately.
+    if (!PDFFireNaturalSpeech::getVoiceDirectory().isEmpty())
+    {
+        m_state = m_document ? Ready : NoDocument;
         onEngineStateChanged();
     }
     else
     {
-        // Set state to invalid, no speech engine is available
-        m_state = Invalid;
-
         m_speechLocaleComboBox->clear();
         m_speechVoiceComboBox->clear();
+        onEngineError(tr("The natural voices of PDF Fire are not installed."));
     }
 
     if (m_textToSpeech)
@@ -172,7 +162,7 @@ void PDFTextToSpeech::updateEngineLists()
 {
     Q_ASSERT(m_textToSpeech);
 
-    QVector<QLocale> locales = m_textToSpeech->availableLocales();
+    const QList<QLocale> locales = PDFFireNaturalSpeech::getLocales();
     m_speechLocaleComboBox->setUpdatesEnabled(false);
     m_speechLocaleComboBox->clear();
     for (const QLocale& locale : locales)
@@ -192,15 +182,15 @@ void PDFTextToSpeech::onEngineStateChanged()
         return;
     }
 
-    const QTextToSpeech::State state = m_textToSpeech->state();
+    const PDFFireNaturalSpeech::State state = m_textToSpeech->state();
 
-    if (state == QTextToSpeech::Error)
+    if (state == PDFFireNaturalSpeech::Error)
     {
         onEngineError(m_textToSpeech->errorString());
         return;
     }
 
-    if (!m_engineListsInitialized && state == QTextToSpeech::Ready)
+    if (!m_engineListsInitialized && state == PDFFireNaturalSpeech::Ready)
     {
         m_engineListsInitialized = true;
         m_engineErrorMessage = QString();
@@ -349,7 +339,9 @@ void PDFTextToSpeech::updateUI()
     m_speechVoiceComboBox->setEnabled(enableControls && m_speechVoiceComboBox->count() > 0);
     m_speechRateEdit->setEnabled(enableControls);
     m_speechVolumeEdit->setEnabled(enableControls);
-    m_speechPitchEdit->setEnabled(enableControls);
+    // PDF Fire: the natural voices have their own pitch - it can't be changed
+    m_speechPitchEdit->setEnabled(false);
+    m_speechPitchEdit->setToolTip(tr("The natural voices have their own pitch."));
     m_speechPlayButton->setEnabled(enablePlay);
     m_speechPauseButton->setEnabled(enablePause);
     m_speechStopButton->setEnabled(enableStop);
@@ -363,6 +355,9 @@ void PDFTextToSpeech::stop()
         case Playing:
         case Paused:
         {
+            // PDF Fire: the reader stops first - the engine reports, that it is ready,
+            // and the reader must not continue with the next text then
+            m_state = Ready;
             m_textToSpeech->stop();
             m_currentTextFlowIndex = 0;
             m_currentPage = 0;
@@ -453,7 +448,6 @@ void PDFTextToSpeech::onLocaleChanged()
 {
     if (m_textToSpeech)
     {
-        m_textToSpeech->setLocale(QLocale(m_speechLocaleComboBox->currentData().toString()));
         updateVoices();
 
         if (m_speechVoiceComboBox->currentIndex() == -1)
@@ -467,13 +461,10 @@ void PDFTextToSpeech::onVoiceChanged()
 {
     if (m_textToSpeech)
     {
-        QString voice = m_speechVoiceComboBox->currentData().toString();
-        for (const QVoice& voiceObject : m_textToSpeech->availableVoices())
+        const QString voice = m_speechVoiceComboBox->currentData().toString();
+        if (!voice.isEmpty())
         {
-            if (voiceObject.name() == voice)
-            {
-                m_textToSpeech->setVoice(voiceObject);
-            }
+            m_textToSpeech->setVoice(voice);
         }
     }
 }
@@ -495,7 +486,6 @@ void PDFTextToSpeech::onPitchChanged(int pitch)
     {
         pdf::PDFLinearInterpolation<double> interpolation(m_speechPitchEdit->minimum(), m_speechPitchEdit->maximum(), -1.0, 1.0);
         double value = interpolation(pitch);
-        m_textToSpeech->setPitch(value);
         m_speechPitchValueLabel->setText(QString::number(value, 'f', 2));
     }
 }
@@ -517,9 +507,9 @@ void PDFTextToSpeech::onPlayClicked()
     {
         case Paused:
         {
-            m_textToSpeech->resume();
             m_state = Playing;
-            if (m_textToSpeech->state() == QTextToSpeech::Ready)
+            m_textToSpeech->resume();
+            if (m_textToSpeech->state() == PDFFireNaturalSpeech::Ready)
             {
                 updatePlay();
             }
@@ -548,8 +538,8 @@ void PDFTextToSpeech::onPauseClicked()
 
     if (m_state == Playing)
     {
-        m_textToSpeech->pause();
         m_state = Paused;
+        m_textToSpeech->pause();
         updateUI();
     }
 }
@@ -578,8 +568,8 @@ void PDFTextToSpeech::updatePlay()
         return;
     }
 
-    QTextToSpeech::State state = m_textToSpeech->state();
-    if (state == QTextToSpeech::Ready)
+    PDFFireNaturalSpeech::State state = m_textToSpeech->state();
+    if (state == PDFFireNaturalSpeech::Ready)
     {
         if (m_currentPage == -1)
         {
@@ -610,7 +600,7 @@ void PDFTextToSpeech::updatePlay()
             m_state = Ready;
         }
     }
-    else if (state == QTextToSpeech::Error)
+    else if (state == PDFFireNaturalSpeech::Error)
     {
         onEngineError(m_textToSpeech->errorString());
     }

@@ -21,6 +21,7 @@
 // SOFTWARE.
 
 #include "pdfcertificatemanager.h"
+#include "pdffirecertificateauthority.h"
 
 #include <QDir>
 #include <QFile>
@@ -149,8 +150,12 @@ void PDFCertificateManager::createCertificate(const NewCertificateInfo& info)
 
             if (!info.fileName.isEmpty())
             {
+                // PDF Fire: the file contains a private key, so only the owner may access it.
+                // The file is created with these permissions from the start - an existing
+                // file would keep its own, so it is removed first.
+                QFile::remove(info.fileName);
                 QFile file(info.fileName);
-                if (file.open(QFile::WriteOnly | QFile::Truncate))
+                if (file.open(QFile::WriteOnly | QFile::NewOnly, QFile::ReadOwner | QFile::WriteOwner))
                 {
                     file.write(pksMemoryBuffer->data, pksMemoryBuffer->length);
                     file.close();
@@ -199,6 +204,18 @@ PDFCertificateEntries PDFCertificateManager::getCertificates(PDFCertificateUsage
                 if (certificatePtr)
                 {
                     X509_free(certificatePtr);
+                }
+
+                // PDF Fire: a certificate issued by a department authority is stored
+                // without encryption (only its key is encrypted), so the name of the
+                // member is shown before the password is typed
+                if (!isParsed)
+                {
+                    const QByteArray publicCertificate = PDFFireCertificateAuthority::readPublicCertificate(data);
+                    if (std::optional<PDFCertificateInfo> info = PDFCertificateInfo::getCertificateInfo(publicCertificate))
+                    {
+                        entry.info = qMove(*info);
+                    }
                 }
 
                 entry.pkcs12 = data;
@@ -261,6 +278,36 @@ bool PDFCertificateManager::isCertificateValid(const PDFCertificateEntry& certif
     return pkcs12data.isEmpty();
 }
 
+QString PDFCertificateManager::getCertificateOwnerName(const PDFCertificateEntry& certificateEntry, QString password)
+{
+    QString name = certificateEntry.info.getName(PDFCertificateInfo::CommonName);
+    if (!name.isEmpty() || certificateEntry.pkcs12.isEmpty())
+    {
+        return name;
+    }
+
+    openssl_ptr<BIO> pksBuffer(BIO_new(BIO_s_mem()), &BIO_free_all);
+    BIO_write(pksBuffer.get(), certificateEntry.pkcs12.constData(), certificateEntry.pkcs12.length());
+    openssl_ptr<PKCS12> pkcs12(d2i_PKCS12_bio(pksBuffer.get(), nullptr), &PKCS12_free);
+    if (pkcs12)
+    {
+        const QByteArray passwordByteArray = password.toUtf8();
+        X509* certificatePtr = nullptr;
+        EVP_PKEY* keyPtr = nullptr;
+        if (PKCS12_parse(pkcs12.get(), passwordByteArray.isEmpty() ? nullptr : passwordByteArray.constData(), &keyPtr, &certificatePtr, nullptr) == 1)
+        {
+            if (std::optional<PDFCertificateInfo> info = PDFCertificateInfo::getCertificateInfo(certificatePtr))
+            {
+                name = info->getName(PDFCertificateInfo::CommonName);
+            }
+        }
+        X509_free(certificatePtr);
+        EVP_PKEY_free(keyPtr);
+    }
+
+    return name;
+}
+
 bool PDFSignatureFactory::sign(const PDFCertificateEntry& certificateEntry,
                                QString password,
                                QByteArray data,
@@ -305,13 +352,13 @@ bool PDFSignatureFactory::sign(const PDFCertificateEntry& certificateEntry,
                     PKCS7_free(signature);
                     EVP_PKEY_free(key);
                     X509_free(certificate);
-                    sk_X509_free(certificates);
+                    sk_X509_pop_free(certificates, X509_free);
                     return true;
                 }
 
                 EVP_PKEY_free(key);
                 X509_free(certificate);
-                sk_X509_free(certificates);
+                sk_X509_pop_free(certificates, X509_free);
                 return false;
             }
         }

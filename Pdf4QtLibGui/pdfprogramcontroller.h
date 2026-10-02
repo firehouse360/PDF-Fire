@@ -30,6 +30,7 @@
 #include "pdfdocumentpropertiesdialog.h"
 #include "pdfplugin.h"
 #include "pdfbookmarkmanager.h"
+#include "pdfundoredomanager.h"
 
 #include <QObject>
 #include <QAction>
@@ -208,6 +209,7 @@ public:
         BookmarkExport,
         BookmarkImport,
         BookmarkGenerateAutomatically,
+        CreateArrow,            ///< PDF Fire
         LastAction
     };
 
@@ -297,7 +299,7 @@ public:
     };
     Q_DECLARE_FLAGS(Features, Feature)
 
-    void openDocument(const QString& fileName);
+    virtual void openDocument(const QString& fileName) override;
     void setDocument(pdf::PDFModifiedDocument document, std::vector<pdf::PDFSignatureVerificationResult> signatureVerificationResult, bool isCurrentSaved);
     void closeDocument();
 
@@ -310,6 +312,18 @@ public:
     PDFBookmarkManager* getBookmarkManager() const { return m_bookmarkManager; }
     PDFTextToSpeech* getTextToSpeech() const { return m_textToSpeech; }
     const std::vector<pdf::PDFSignatureVerificationResult>* getSignatures() const { return &m_signatures; }
+
+    // PDF Fire: new documents and operations with the pages of the opened
+    // document, see pdfprogramcontroller_pages.cpp
+    void newDocument();
+    void insertBlankPage(pdf::PDFInteger position);
+    void insertPagesFromFile(pdf::PDFInteger position);
+    void deletePages(const std::vector<pdf::PDFInteger>& pages);
+    void rotatePages(const std::vector<pdf::PDFInteger>& pages, bool right);
+    void movePages(const std::vector<pdf::PDFInteger>& pages, bool towardsEnd);
+    void extractPages(const std::vector<pdf::PDFInteger>& pages);
+    bool canModifyPages() const;
+    pdf::PDFInteger getCurrentPageIndex() const;
 
     void initialize(Features features,
                     QMainWindow* mainWindow,
@@ -336,6 +350,27 @@ public:
     bool canClose() const;
     bool askForSaveDocumentBeforeClose();
 
+    /// PDF Fire: document tabs. Several documents are open at once; one of them is
+    /// shown (the program works with it), the others are kept with their state
+    /// (the undo history, the page, the zoom) and are shown again by their tab.
+    struct DocumentTabInfo
+    {
+        QString title;
+        QString toolTip;
+        bool isModified = false;
+    };
+
+    std::vector<DocumentTabInfo> getDocumentTabs() const;
+    int getCurrentDocumentTab() const { return m_currentTab; }
+    void switchToDocumentTab(int index);
+
+    /// Closes the tab (asks to save its modified document); false - cancelled
+    bool closeDocumentTab(int index);
+
+    /// Asks to save every modified document (before the application is closed);
+    /// false - cancelled
+    bool askForSaveAllDocumentsBeforeClose();
+
     virtual QString getOriginalFileName() const override;
     virtual pdf::PDFTextSelection getSelectedText() const override;
     virtual QMainWindow* getMainWindow() const override;
@@ -345,6 +380,9 @@ public:
 
 signals:
     void queryPasswordRequest(QString* password, bool* ok);
+
+    /// PDF Fire: the tabs of the documents have changed
+    void documentTabsChanged();
 
 private:
 
@@ -431,6 +469,7 @@ private:
 
     void setPageLayout(pdf::PageLayout pageLayout);
     void updateFileInfo(const QString& fileName);
+    void applyPageOperation(const pdf::PDFOperationResult& result, pdf::PDFDocument&& document, pdf::PDFInteger pageToShow);
     void updateFileWatcher(bool forceDisable = false);
 
     enum SettingFlag
@@ -481,11 +520,40 @@ private:
     PDFActionComboBox* m_actionComboBox;
 
     PDFFileInfo m_fileInfo;
+
+    /// PDF Fire: a document of a tab
+    struct DocumentTab
+    {
+        pdf::PDFDocumentPointer document;
+        PDFFileInfo fileInfo;
+        std::vector<pdf::PDFSignatureVerificationResult> signatures;
+        PDFUndoRedoManager::State undoRedoState;
+        bool isSignatureLossConfirmed = false;
+        pdf::PDFInteger pageIndex = 0;
+        pdf::PDFReal zoom = 0.0;
+    };
+
+    /// Stores the shown document into its tab
+    void storeCurrentDocumentTab();
+
+    /// Shows the document of the tab
+    void restoreDocumentTab(int index);
+
+    /// Prepares a new tab for a document being opened or created
+    void prepareNewDocumentTab();
+
+    std::vector<DocumentTab> m_tabs;
+    int m_currentTab = -1;
+    int m_previousTab = -1;
     QFileSystemWatcher m_fileWatcher;
     pdf::PDFCertificateStore m_certificateStore;
     std::vector<pdf::PDFSignatureVerificationResult> m_signatures;
 
     bool m_isBusy;
+
+    /// PDF Fire: user has already confirmed, that the signatures of the current
+    /// document are lost by saving it, so the question is not asked again.
+    bool m_isSignatureLossConfirmed;
     bool m_isFactorySettingsBeingRestored;
     pdf::PDFProgress* m_progress;
 

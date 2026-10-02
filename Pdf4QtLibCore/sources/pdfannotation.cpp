@@ -1444,6 +1444,16 @@ void PDFAnnotationManager::drawWidgetAnnotationHighlight(QRectF annotationRectan
                 return;
             }
 
+            // PDF Fire: a signature, which is already signed, is not a field to be filled
+            // in - it is not highlighted (the highlight covered the signature)
+            if (const PDFFormFieldSignature* signatureField = dynamic_cast<const PDFFormFieldSignature*>(formField))
+            {
+                if (!signatureField->getSignature().getContents().isEmpty())
+                {
+                    return;
+                }
+            }
+
             QColor color;
             if (flags.testFlag(PDFFormManager::HighlightFields))
             {
@@ -1994,8 +2004,9 @@ void PDFTextAnnotation::draw(AnnotationDrawParameters& parameters) const
                                                                                              QColor::fromRgbF(1.0, 0.0, 0.0, getFillOpacity());
     fillColor = parameters.colorConvertor.convert(fillColor, false, false);
 
-    constexpr const PDFReal rectSize = 32.0;
-    constexpr const PDFReal penWidth = 2.0;
+    // PDF Fire: the icon was 32 points, which is much bigger than in other viewers
+    constexpr const PDFReal rectSize = 20.0;
+    constexpr const PDFReal penWidth = 1.25;
 
     QPainter& painter = *parameters.painter;
     painter.setCompositionMode(getCompositionMode());
@@ -2015,7 +2026,7 @@ void PDFTextAnnotation::draw(AnnotationDrawParameters& parameters) const
     painter.drawEllipse(ellipseRectangle);
 
     QFont font = painter.font();
-    font.setPixelSize(16.0);
+    font.setPixelSize(10.0);
 
     QString text = getTextForIcon(m_iconName);
 

@@ -151,6 +151,11 @@ public:
 
     PDFDrawWidgetProxy* getProxy() const { return m_proxy; }
 
+signals:
+    /// PDF Fire: a signature field, which is not signed yet, was clicked - it
+    /// can be signed with a certificate
+    void unsignedSignatureFieldClicked(pdf::PDFObjectReference widget);
+
 protected:
     virtual void updateFieldValues() override;
     virtual void onDocumentReset() override;

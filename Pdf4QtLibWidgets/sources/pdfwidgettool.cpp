@@ -21,6 +21,7 @@
 // SOFTWARE.
 
 #include "pdfwidgettool.h"
+#include "pdffirepermissions.h"
 #include "pdfdrawwidget.h"
 #include "pdfcompiler.h"
 #include "pdfwidgetutils.h"
@@ -42,6 +43,14 @@
 #include <QStylePainter>
 #include <QStyleOptionTitleBar>
 #include <QVector2D>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QFileDialog>
+#include <QMessageBox>
+#include <QPointer>
+#include <QStandardPaths>
+#include <QTimer>
+#include <QVBoxLayout>
 
 #include <algorithm>
 
@@ -81,7 +90,7 @@ void PDFWidgetTool::setDocument(const PDFModifiedDocument& document)
     {
         // We must turn off the tool, if we are changing the document. We turn off tool,
         // only if whole document is being reset.
-        if (document.hasReset())
+        if (document.hasReset() && !(m_keepActiveOnReset && document.getDocument() && document.hasPreserveView()))
         {
             setActive(false);
         }
@@ -908,7 +917,7 @@ QString PDFSelectTextTool::getSelectedText(const std::vector<PDFInteger>& pageIn
     }
 
     // Jakub Melka: we must obey document permissions
-    if (!getDocument()->getStorage().getSecurityHandler()->isAllowed(PDFSecurityHandler::Permission::CopyContent))
+    if (!PDFFirePermissions::canCopyContent(getDocument()))
     {
         return QString();
     }
@@ -1751,6 +1760,63 @@ PDFScreenshotTool::PDFScreenshotTool(PDFDrawWidgetProxy* proxy, QAction* action,
     connect(m_pickTool, &PDFPickTool::rectanglePicked, this, &PDFScreenshotTool::onRectanglePicked);
 }
 
+/// PDF Fire: shows the captured image (a screenshot, an extracted image) - it was
+/// copied to the clipboard, and it can be saved into a file. A note in the status
+/// bar alone was easy to miss, so the tools looked like they did nothing.
+static void showCapturedImage(QWidget* parentWidget, const QImage& image, const QString& text, const QString& defaultFileName)
+{
+    QPointer<QWidget> parent(parentWidget);
+    QTimer::singleShot(0, parentWidget, [parent, image, text, defaultFileName]()
+    {
+        if (!parent)
+        {
+            return;
+        }
+
+        QDialog dialog(parent->window());
+        dialog.setWindowTitle(QObject::tr("Copied to the Clipboard"));
+        QVBoxLayout* layout = new QVBoxLayout(&dialog);
+        QLabel* preview = new QLabel(&dialog);
+        preview->setAlignment(Qt::AlignCenter);
+        preview->setPixmap(QPixmap::fromImage(image.width() > 420 || image.height() > 300 ? image.scaled(420, 300, Qt::KeepAspectRatio, Qt::SmoothTransformation) : image));
+        preview->setStyleSheet(QStringLiteral("QLabel { border: 1px solid palette(mid); }"));
+        layout->addWidget(preview);
+        QLabel* label = new QLabel(text + QStringLiteral("\n") + QObject::tr("Paste it into another program (Ctrl+V), or save it as a file."), &dialog);
+        label->setWordWrap(true);
+        layout->addWidget(label);
+
+        QDialogButtonBox* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+        QPushButton* saveButton = buttons->addButton(QObject::tr("Save As..."), QDialogButtonBox::AcceptRole);
+        saveButton->setObjectName("saveCapturedImageButton");
+        saveButton->setDefault(true);
+        QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+        layout->addWidget(buttons);
+
+        if (dialog.exec() != QDialog::Accepted || !parent)
+        {
+            return;
+        }
+
+        const QString directory = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
+        const QString fileName = QFileDialog::getSaveFileName(parent->window(), QObject::tr("Save Image"), QDir(directory).filePath(defaultFileName),
+                                                              QObject::tr("PNG image (*.png);;JPEG image (*.jpg *.jpeg)"));
+        if (!fileName.isEmpty() && !image.save(fileName))
+        {
+            QMessageBox::critical(parent->window(), QObject::tr("Save Image"), QObject::tr("The image can't be saved as '%1'.").arg(fileName));
+        }
+    });
+}
+
+void PDFScreenshotTool::updateActions()
+{
+    if (QAction* action = getAction())
+    {
+        action->setChecked(isActive());
+        action->setEnabled(PDFFirePermissions::canCopyContent(getDocument()));
+    }
+}
+
 void PDFScreenshotTool::onRectanglePicked(PDFInteger pageIndex, QRectF pageRectangle)
 {
     PDFWidgetSnapshot snapshot = getProxy()->getSnapshot();
@@ -1769,6 +1835,8 @@ void PDFScreenshotTool::onRectanglePicked(PDFInteger pageIndex, QRectF pageRecta
 
             QApplication::clipboard()->setImage(image, QClipboard::Clipboard);
             Q_EMIT messageDisplayRequest(tr("Page contents of size %1 x %2 pixels were copied to the clipboard.").arg(image.width()).arg(image.height()), 5000);
+            showCapturedImage(getProxy()->getWidget(), image, tr("The selected area (%1 x %2 pixels) was copied to the clipboard.").arg(image.width()).arg(image.height()),
+                              tr("screenshot-page-%1.png").arg(pageIndex + 1));
         }
     }
 }
@@ -1790,7 +1858,7 @@ void PDFExtractImageTool::updateActions()
     if (QAction* action = getAction())
     {
         action->setChecked(isActive());
-        action->setEnabled(getDocument() && getDocument()->getStorage().getSecurityHandler()->isAllowed(PDFSecurityHandler::Permission::CopyContent));
+        action->setEnabled(PDFFirePermissions::canCopyContent(getDocument()));
     }
 }
 
@@ -1800,6 +1868,8 @@ void PDFExtractImageTool::onImagePicked(const QImage& image)
     {
         QApplication::clipboard()->setImage(image, QClipboard::Clipboard);
         Q_EMIT messageDisplayRequest(tr("Image of size %1 x %2 pixels was copied to the clipboard.").arg(image.width()).arg(image.height()), 5000);
+        showCapturedImage(getProxy()->getWidget(), image, tr("The image (%1 x %2 pixels, its original size) was copied to the clipboard.").arg(image.width()).arg(image.height()),
+                          tr("image.png"));
     }
 }
 

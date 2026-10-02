@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/pdffire">
+        <file alias="mark.png">resources/pdffire-mark.png</file>
+    </qresource>
+</RCC>

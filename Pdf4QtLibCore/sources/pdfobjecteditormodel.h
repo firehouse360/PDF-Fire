@@ -193,7 +193,9 @@ public:
     /// \param index Attribute index
     QVariant getMaximumValue(size_t index) const;
 
-    const PDFObjectStorage* getStorage() const { return m_storage; }
+    /// Returns the storage of the document. PDF Fire: if the model is used without
+    /// a document, then an empty storage is returned - never a null pointer.
+    const PDFObjectStorage* getStorage() const;
 
 signals:
     void editedObjectChanged();

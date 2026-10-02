@@ -110,6 +110,20 @@ public:
     /// Sets current pages (for example, selects the correct thumbnail)
     void setCurrentPages(const std::vector<pdf::PDFInteger>& currentPages);
 
+    /// PDF Fire: returns the pages selected in the thumbnails (sorted). The list is
+    /// empty, if the thumbnails are not displayed, or no page is selected.
+    std::vector<pdf::PDFInteger> getSelectedThumbnailPages() const;
+
+    /// PDF Fire: the content of the side panel can be collapsed, so only the column
+    /// of the buttons stays visible. A click on the button of the displayed page
+    /// collapses the panel, a click on any button expands it again.
+    bool isCollapsed() const { return m_isCollapsed; }
+    void setCollapsed(bool collapsed);
+
+    /// PDF Fire: sets the actions offered by the context menu of the thumbnails.
+    /// Several thumbnails can be selected from then on.
+    void setThumbnailActions(const QList<QAction*>& actions);
+
     /// Returns list of actions operating on the currently selected outline item
     /// (available only when outline editing is enabled). These are the same
     /// actions used to build the outline item's context menu, so they can be
@@ -130,6 +144,10 @@ signals:
     /// to work with it - for example a new outline item has been created and its
     /// title is being edited in place.
     void sidebarVisibilityRequested();
+
+    /// PDF Fire: emitted, when the content of the side panel is collapsed (only
+    /// the column of the buttons stays), or expanded again
+    void collapsedChanged(bool collapsed);
 
 private:
     void updateGUI(Page preferredPage);
@@ -243,6 +261,7 @@ private:
     std::vector<pdf::PDFCertificateInfo> m_certificateInfos;
     std::vector<std::pair<pdf::PDFObjectReference, pdf::PDFInteger>> m_markupAnnotations;
     Page m_currentPage = Invalid;
+    bool m_isCollapsed = false;
     bool m_bookmarkChangeInProgress = false;
     bool m_notesSelectionChangeInProgress = false;
 

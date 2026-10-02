@@ -181,16 +181,23 @@ void PDFWidgetUtils::style(QWidget* widget)
     }
 }
 
+// PDF Fire: the color scheme chosen explicitly (by the settings, or by the command
+// line). Not every platform lets the application change the color scheme of the style
+// hints, the choice of the user would be silently ignored there.
+static std::optional<bool> s_isDarkThemeChosen;
+
 void PDFWidgetUtils::setDarkTheme(bool isLightTheme, bool isDarkTheme)
 {
     if (isLightTheme)
     {
         QApplication::styleHints()->setColorScheme(Qt::ColorScheme::Light);
+        s_isDarkThemeChosen = false;
     }
 
     if (isDarkTheme)
     {
         QApplication::styleHints()->setColorScheme(Qt::ColorScheme::Dark);
+        s_isDarkThemeChosen = true;
     }
 
     if (PDFWidgetUtils::isDarkTheme())
@@ -269,6 +276,11 @@ void PDFWidgetUtils::setDarkTheme(bool isLightTheme, bool isDarkTheme)
 
 bool PDFWidgetUtils::isDarkTheme()
 {
+    if (s_isDarkThemeChosen.has_value())
+    {
+        return s_isDarkThemeChosen.value();
+    }
+
     Qt::ColorScheme colorScheme = QApplication::styleHints()->colorScheme();
     return colorScheme == Qt::ColorScheme::Dark;
 }

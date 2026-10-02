@@ -23,6 +23,7 @@
 #include "pdftexteditpseudowidget.h"
 #include "pdfpainterutils.h"
 
+#include <QFontMetricsF>
 #include <QStyle>
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -408,9 +409,16 @@ void PDFTextEditPseudowidget::setAppearance(const PDFAnnotationDefaultAppearance
 {
     // Set appearance
     qreal fontSize = appearance.getFontSize();
-    if (qFuzzyIsNull(fontSize))
+    m_isAutomaticFontSize = qFuzzyIsNull(fontSize);
+    if (m_isAutomaticFontSize)
     {
-        fontSize = rect.height();
+        // PDF Fire: the automatic size was the height of the field - the text was
+        // taller than the field and a longer text was cut off (PDF4QT #184). The size
+        // follows the readers now: about two thirds of the height of a one-line field
+        // (at most 12), the size 10 in a field of several lines; a text longer than
+        // the field is made smaller (see updateTextLayout).
+        fontSize = isMultiline() ? qMin<qreal>(10.0, qMax<qreal>(rect.height() * 0.66, 4.0)) : qBound<qreal>(4.0, rect.height() * 0.66, 12.0);
+        m_automaticFontSize = fontSize;
     }
 
     QFont font(appearance.getFontName());
@@ -849,6 +857,23 @@ void PDFTextEditPseudowidget::updateTextLayout()
     else
     {
         m_displayText = m_editText;
+    }
+
+    // PDF Fire: a one-line text of the automatic size is made smaller to fit the field
+    if (m_isAutomaticFontSize && !isMultiline() && m_automaticFontSize > 0.0)
+    {
+        QFont font = m_textLayout.font();
+        font.setPixelSize(qCeil(m_automaticFontSize));
+        const qreal availableWidth = qMax<qreal>(m_widgetRect.width() - 4.0, 1.0);
+        const qreal textWidth = QFontMetricsF(font).horizontalAdvance(m_displayText);
+        if (textWidth > availableWidth)
+        {
+            font.setPixelSize(qMax(4, qFloor(m_automaticFontSize * availableWidth / textWidth)));
+        }
+        if (font.pixelSize() != m_textLayout.font().pixelSize())
+        {
+            m_textLayout.setFont(font);
+        }
     }
 
     // Perform text layout

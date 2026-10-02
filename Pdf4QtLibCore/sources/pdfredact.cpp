@@ -25,6 +25,7 @@
 #include "pdfdocumentbuilder.h"
 #include "pdfoptimizer.h"
 #include "pdfpathboolean.h"
+#include "pdffireredaction.h"
 #include "pdfdbgheap.h"
 
 namespace pdf
@@ -46,10 +47,47 @@ PDFRedact::PDFRedact(const PDFDocument* document,
 
 }
 
+void PDFRedact::writeOutlinedPage(PDFDocumentBuilder* builder, PDFRenderer* renderer, size_t pageIndex, PDFObjectReference newPageReference)
+{
+    const PDFPage* page = m_document->getCatalog()->getPage(pageIndex);
+
+    PDFPrecompiledPage compiledPage;
+    renderer->compile(&compiledPage, pageIndex);
+
+    PDFPageContentStreamBuilder contentStreamBuilder(builder);
+
+    QPainterPath redactPath;
+
+    for (const PDFObjectReference& annotationReference : page->getAnnotations())
+    {
+        PDFAnnotationPtr annotation = PDFAnnotation::parse(&m_document->getStorage(), annotationReference);
+        if (!annotation || annotation->getType() != AnnotationType::Redact)
+        {
+            continue;
+        }
+
+        // We have redact annotation here
+        const PDFRedactAnnotation* redactAnnotation = dynamic_cast<const PDFRedactAnnotation*>(annotation.get());
+        Q_ASSERT(redactAnnotation);
+
+        redactPath = PDFPathBoolean::unite(redactPath, redactAnnotation->getRedactionRegion().getPath());
+    }
+
+    QTransform matrix;
+    matrix.translate(0, page->getMediaBox().height());
+    matrix.scale(1.0, -1.0);
+
+    QPainter* painter = contentStreamBuilder.begin(newPageReference);
+    compiledPage.redact(redactPath, matrix, m_redactFillColor);
+    compiledPage.draw(painter, QRectF(), matrix, PDFRenderer::None, 1.0);
+    contentStreamBuilder.end(painter);
+}
+
 PDFDocument PDFRedact::perform(Options options)
 {
     PDFDocumentBuilder builder;
     builder.createDocument();
+    m_messages.clear();
 
     PDFRenderer renderer(m_document,
                          m_fontCache,
@@ -59,16 +97,16 @@ PDFDocument PDFRedact::perform(Options options)
                          *m_meshQualitySettings);
 
     std::map<PDFObjectReference, PDFObjectReference> mapOldPageRefToNewPageRef;
+    std::vector<PDFObjectReference> newPageReferences;
 
+    // PDF Fire: all pages are created first, so links can point to any page
     for (size_t i = 0; i < m_document->getCatalog()->getPageCount(); ++i)
     {
         const PDFPage* page = m_document->getCatalog()->getPage(i);
 
-        PDFPrecompiledPage compiledPage;
-        renderer.compile(&compiledPage, i);
-
         PDFObjectReference newPageReference = builder.appendPage(page->getMediaBox());
         mapOldPageRefToNewPageRef[page->getPageReference()] = newPageReference;
+        newPageReferences.push_back(newPageReference);
 
         if (!page->getCropBox().isEmpty())
         {
@@ -87,34 +125,35 @@ PDFDocument PDFRedact::perform(Options options)
             builder.setPageArtBox(newPageReference, page->getArtBox());
         }
         builder.setPageRotation(newPageReference, page->getPageRotation());
+    }
 
-        PDFPageContentStreamBuilder contentStreamBuilder(&builder);
-
-        QPainterPath redactPath;
-
-        for (const PDFObjectReference& annotationReference : page->getAnnotations())
+    if (options.testFlag(KeepTextSearchable))
+    {
+        // PDF Fire: the content outside of the redacted areas is kept as it is (text stays
+        // searchable). A page, which can't be filtered safely, is converted to outlines.
+        PDFFireRedaction redaction(m_document, m_fontCache, m_cms, m_meshQualitySettings, &builder);
+        for (size_t i = 0; i < newPageReferences.size(); ++i)
         {
-            PDFAnnotationPtr annotation = PDFAnnotation::parse(&m_document->getStorage(), annotationReference);
-            if (!annotation || annotation->getType() != AnnotationType::Redact)
+            const PDFPage* page = m_document->getCatalog()->getPage(i);
+            const QPainterPath area = PDFFireRedaction::getRedactionArea(m_document, page);
+
+            QString failureReason;
+            if (!redaction.writePageContent(i, area, newPageReferences[i], m_redactFillColor, &failureReason))
             {
-                continue;
+                writeOutlinedPage(&builder, &renderer, i, newPageReferences[i]);
+                m_messages << PDFTranslationContext::tr("Page %1 was converted to outlines (its text is not searchable): %2").arg(i + 1).arg(failureReason);
             }
 
-            // We have redact annotation here
-            const PDFRedactAnnotation* redactAnnotation = dynamic_cast<const PDFRedactAnnotation*>(annotation.get());
-            Q_ASSERT(redactAnnotation);
-
-            redactPath = PDFPathBoolean::unite(redactPath, redactAnnotation->getRedactionRegion().getPath());
+            redaction.writeAnnotations(i, area, newPageReferences[i], mapOldPageRefToNewPageRef);
         }
-
-        QTransform matrix;
-        matrix.translate(0, page->getMediaBox().height());
-        matrix.scale(1.0, -1.0);
-
-        QPainter* painter = contentStreamBuilder.begin(newPageReference);
-        compiledPage.redact(redactPath, matrix, m_redactFillColor);
-        compiledPage.draw(painter, QRectF(), matrix, PDFRenderer::None, 1.0);
-        contentStreamBuilder.end(painter);
+        redaction.copyOptionalContentProperties();
+    }
+    else
+    {
+        for (size_t i = 0; i < newPageReferences.size(); ++i)
+        {
+            writeOutlinedPage(&builder, &renderer, i, newPageReferences[i]);
+        }
     }
 
     if (options.testFlag(CopyTitle))

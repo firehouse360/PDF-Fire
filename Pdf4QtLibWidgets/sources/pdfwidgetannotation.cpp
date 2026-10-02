@@ -5127,6 +5127,9 @@ void PDFWidgetAnnotationManager::createWidgetsForMarkupAnnotations(QWidget* pare
                     "margin-top: 3ex; "
                     "background-color: rgb(%1, %2, %3); "
                     "}"
+                    // PDF Fire: the background is always light, so the text must be dark - the text
+                    // color of the application palette is light in the dark theme (unreadable here)
+                    "QGroupBox QLabel { color: rgb(24, 26, 30); background: transparent; } "
                     "QGroupBox::title { "
                     "subcontrol-origin: margin; "
                     "subcontrol-position: top center; "

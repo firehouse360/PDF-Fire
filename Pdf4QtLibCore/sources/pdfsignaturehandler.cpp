@@ -26,6 +26,7 @@
 #include "pdfform.h"
 #include "pdfutils.h"
 #include "pdfsignaturehandler_impl.h"
+#include "pdffirecertificateauthority.h"
 
 #if defined(PDF4QT_COMPILER_MINGW) || defined(PDF4QT_COMPILER_GCC)
 #pragma GCC diagnostic push
@@ -52,6 +53,8 @@
 #include <QMutexLocker>
 #include <QStandardPaths>
 
+#include "pdfparser.h"
+#include <cctype>
 #include "pdfdbgheap.h"
 
 #include <array>
@@ -108,6 +111,13 @@ PDFSignatureReference PDFSignatureReference::parse(const PDFObjectStorage* stora
         result.m_transformParams = dictionary->get("TransformParams");
         result.m_data = dictionary->get("Data");
         result.m_digestMethod = loader.readNameFromDictionary(dictionary, "DigestMethod");
+
+        // PDF Fire: the permissions of a certification (P is 2, when it is missing)
+        if (result.m_transformMethod == PDFSignatureReference::TransformMethod::DocMDP)
+        {
+            const PDFDictionary* parameters = storage->getDictionaryFromObject(result.m_transformParams);
+            result.m_docMDPPermissions = qBound(PDFInteger(1), parameters ? loader.readIntegerFromDictionary(parameters, "P", 2) : PDFInteger(2), PDFInteger(3));
+        }
     }
 
     return result;
@@ -171,6 +181,7 @@ PDFSignature PDFSignature::parse(const PDFObjectStorage* storage, PDFObject obje
         result.m_V = loader.readIntegerFromDictionary(dictionary, "V", 0);
         result.m_propBuild = dictionary->get("Prop_Build");
         result.m_propTime = loader.readIntegerFromDictionary(dictionary, "Prop_AuthTime", 0);
+        result.m_signingRecord = loader.readTextStringFromDictionary(dictionary, "PDFFire_SigningRecord", QString());
 
         constexpr const std::array<std::pair<const char*, AuthentificationType>, 3> authentificationTypes = {
             std::pair<const char*, AuthentificationType>{ "PIN", AuthentificationType::PIN },
@@ -312,6 +323,19 @@ void PDFSignatureVerificationResult::addCertificateRevokedError()
     m_errors << PDFTranslationContext::tr("Certificate has been revoked.");
 }
 
+void PDFSignatureVerificationResult::addCertificateRevokedError(const QDateTime& revocationDate)
+{
+    m_flags.setFlag(Error_Certificate_Revoked);
+    m_errors << PDFTranslationContext::tr("Certificate was revoked on %1.").arg(QLocale::system().toString(revocationDate.toLocalTime(), QLocale::ShortFormat));
+}
+
+void PDFSignatureVerificationResult::addCertificateRevokedAfterTimestampWarning(const QDateTime& revocationDate)
+{
+    m_flags.setFlag(Warning_Certificate_RevokedAfterTimestamp);
+    m_warnings << PDFTranslationContext::tr("Certificate was revoked on %1, after this signature was made (the time is attested by a timestamp) - the signature stays valid.")
+                  .arg(QLocale::system().toString(revocationDate.toLocalTime(), QLocale::ShortFormat));
+}
+
 void PDFSignatureVerificationResult::addCertificateOtherError(int error)
 {
     m_flags.setFlag(Error_Certificate_Other);
@@ -352,6 +376,15 @@ void PDFSignatureVerificationResult::addSignatureDataCoveredBySignatureMissingEr
 {
     m_flags.setFlag(Error_Signature_DataCoveredBySignatureMissing);
     m_errors << PDFTranslationContext::tr("Data covered by signature are not present.");
+}
+
+void PDFSignatureVerificationResult::addSignatureByteRangeInvalidError()
+{
+    if (!m_flags.testFlag(Error_Signature_ByteRangeInvalid))
+    {
+        m_flags.setFlag(Error_Signature_ByteRangeInvalid);
+        m_errors << PDFTranslationContext::tr("Byte range of the signature is not valid - the signature must cover the document from its start, except the signature value itself.");
+    }
 }
 
 void PDFSignatureVerificationResult::addSignatureNotCoveredBytesWarning(PDFInteger count)
@@ -433,6 +466,47 @@ QDateTime PDFSignatureVerificationResult::getSignatureDate() const
 void PDFSignatureVerificationResult::setSignatureDate(const QDateTime& signatureDate)
 {
     m_signatureDate = signatureDate;
+}
+
+void PDFSignatureVerificationResult::setSignatureDetails(const PDFSignature& signature)
+{
+    m_reason = signature.getReason();
+    m_location = signature.getLocation();
+    m_contactInfo = signature.getContactInfo();
+    m_signingRecord = signature.getSigningRecord();
+
+    m_certification = 0;
+    for (const PDFSignatureReference& reference : signature.getReferences())
+    {
+        if (reference.getDocMDPPermissions() > 0)
+        {
+            m_certification = reference.getDocMDPPermissions();
+        }
+    }
+}
+
+void PDFSignatureVerificationResult::verifyCertification()
+{
+    // PDF Fire: the bytes after the certification are a later revision of the
+    // document. A certification, which allows no changes, is broken by it; the
+    // other certifications allow some changes, which are not analysed here.
+    if (m_certification == 0 || !m_flags.testFlag(Warning_Signature_NotCoveredBytes))
+    {
+        return;
+    }
+
+    if (m_certification == 1)
+    {
+        m_flags.setFlag(Error_Signature_ChangedAfterCertification);
+        m_flags.setFlag(Signature_OK, false);
+        m_errors << PDFTranslationContext::tr("The document was changed after it was certified - the certification allows no changes.");
+    }
+    else
+    {
+        m_flags.setFlag(Warning_Signature_ChangedAfterCertification);
+        m_warnings << (m_certification == 2 ? PDFTranslationContext::tr("The document was changed after it was certified. The certification allows only filling in forms and signing - check, that only these changes were made.")
+                                            : PDFTranslationContext::tr("The document was changed after it was certified. The certification allows only filling in forms, signing and comments - check, that only these changes were made."));
+    }
 }
 
 QDateTime PDFSignatureVerificationResult::getTimestampDate() const
@@ -533,6 +607,7 @@ void PDFPublicKeySignatureHandler::initializeResult(PDFSignatureVerificationResu
     result.setSignatureFieldReference(signatureFieldReference);
     result.setSignatureFieldQualifiedName(signatureFieldQualifiedName);
     result.setSignatureHandler(m_signatureField->getSignature().getSubfilter());
+    result.setSignatureDetails(m_signatureField->getSignature());
 }
 
 STACK_OF(X509)* PDFPublicKeySignatureHandler::getCertificates(PKCS7* pkcs7)
@@ -736,29 +811,71 @@ BIO* PDFPublicKeySignatureHandler::getSignedDataBuffer(pdf::PDFSignatureVerifica
         bytesCoveredBySignature.addInterval(startOffset, endOffset - 1);
     }
 
-    // Jakub Melka: We must find byte string, which corresponds to signature.
-    // We find only first occurence, because second one should not exist - because
-    // it will mean that signature must be covered by itself.
-    QByteArray hexContents = contents.toHex();
-    int index = sourceData.indexOf(hexContents);
-    if (index == -1)
+    // PDF Fire: the byte ranges must have the structure required by ISO 32000 (12.8.1):
+    // two ranges, the first one starts at the beginning of the file, and the gap between
+    // them is exactly the value of this signature - the hexadecimal string of the entry
+    // Contents, with its delimiters. Anything else lets somebody hide content, which is
+    // not signed, in a document reported as validly signed (signature wrapping), so it is
+    // an error. The gap was formerly found by searching the file for the first occurrence
+    // of the signature value, wherever it was, and any mismatch was only a warning.
+    std::vector<PDFSignature::ByteRange> nonEmptyByteRanges;
+    for (const PDFSignature::ByteRange& byteRange : byteRanges)
     {
-        index = sourceData.indexOf(hexContents.toUpper());
+        if (byteRange.size > 0)
+        {
+            nonEmptyByteRanges.push_back(byteRange);
+        }
     }
-    if (index != -1)
-    {
-        int firstByteIndex = index;
-        int lastByteIndex = index + hexContents.size() - 1;
 
-        if (firstByteIndex > 0 && sourceData[firstByteIndex - 1] == '<')
+    bool isByteRangeValid = nonEmptyByteRanges.size() == 2 &&
+                            nonEmptyByteRanges[0].offset == 0 &&
+                            nonEmptyByteRanges[1].offset > nonEmptyByteRanges[0].size;
+
+    if (isByteRangeValid)
+    {
+        const PDFInteger gapStart = nonEmptyByteRanges[0].size;
+        const PDFInteger gapEnd = nonEmptyByteRanges[1].offset;  // The byte following the gap
+        const QByteArray gap = sourceData.mid(gapStart, gapEnd - gapStart);
+
+        isByteRangeValid = gap.size() >= 2 && gap.front() == '<' && gap.back() == '>';
+
+        if (isByteRangeValid)
         {
-            --firstByteIndex;
+            QByteArray hexDigits;
+            hexDigits.reserve(gap.size());
+
+            for (qsizetype i = 1; i < gap.size() - 1 && isByteRangeValid; ++i)
+            {
+                const char character = gap[i];
+                if (std::isxdigit(static_cast<unsigned char>(character)))
+                {
+                    hexDigits.push_back(character);
+                }
+                else if (!PDFLexicalAnalyzer::isWhitespace(character))
+                {
+                    isByteRangeValid = false;
+                }
+            }
+
+            if (hexDigits.size() % 2 == 1)
+            {
+                // The missing last digit of a hexadecimal string is zero
+                hexDigits.push_back('0');
+            }
+
+            isByteRangeValid = isByteRangeValid && QByteArray::fromHex(hexDigits) == contents;
         }
-        if (lastByteIndex + 1 < sourceData.size() && sourceData[lastByteIndex + 1] == '>')
+
+        if (isByteRangeValid)
         {
-            ++lastByteIndex;
+            bytesCoveredBySignature.addInterval(gapStart, gapEnd - 1);
         }
-        bytesCoveredBySignature.addInterval(firstByteIndex, lastByteIndex);
+    }
+
+    if (!isByteRangeValid)
+    {
+        result.addSignatureByteRangeInvalidError();
+        return nullptr;
     }
 
     // We add a warning, that this signature doesn't cover whole source byte range
@@ -878,6 +995,8 @@ PDFSignatureVerificationResult PDFSignatureHandler_adbe_pkcs7_detached::verify()
     initializeResult(result);
     verifyCertificate(result);
     verifySignature(result);
+    verifyTrustedAuthorityRevocation(result);
+    result.verifyCertification();
     result.validate();
     return result;
 }
@@ -888,6 +1007,8 @@ PDFSignatureVerificationResult PDFSignatureHandler_ETSI_CAdES_detached::verify()
     initializeResult(result);
     verifyCertificateCAdES(result, X509_PURPOSE_SMIME_SIGN);
     verifySignature(result);
+    verifyTrustedAuthorityRevocation(result);
+    result.verifyCertification();
     result.validate();
     return result;
 }
@@ -1841,8 +1962,123 @@ void PDFPublicKeySignatureHandler::verifySignatureTimestampAttribute(STACK_OF(PK
 #endif
 #endif
 
+void pdf::PDFPublicKeySignatureHandler::verifyTrustedAuthorityRevocation(PDFSignatureVerificationResult& result) const
+{
+    // PDF Fire: the revocation lists of the trusted department authorities are
+    // stored next to their certificates (they are not downloaded). A signature
+    // made before the revocation stays valid, when its time is attested by a
+    // timestamp authority - the time written by the signer can't be trusted.
+    const std::vector<QByteArray> revocationLists = PDFFireCertificateAuthority::getTrustedAuthorityRevocationLists();
+    if (revocationLists.empty() || result.hasFlag(PDFSignatureVerificationResult::Error_Certificate_Revoked))
+    {
+        return;
+    }
+
+    PDFOpenSSLGlobalLock lock;
+
+    const QByteArray& content = m_signatureField->getSignature().getContents();
+    const unsigned char* data = convertByteArrayToUcharPtr(content);
+    PKCS7* pkcs7 = d2i_PKCS7(nullptr, &data, content.size());
+    if (!pkcs7)
+    {
+        return;
+    }
+
+    STACK_OF(PKCS7_SIGNER_INFO)* signerInfo = PKCS7_get_signer_info(pkcs7);
+    STACK_OF(X509)* certificates = getCertificates(pkcs7);
+    if (signerInfo && certificates && sk_PKCS7_SIGNER_INFO_num(signerInfo) > 0)
+    {
+        PKCS7_ISSUER_AND_SERIAL* issuerAndSerial = sk_PKCS7_SIGNER_INFO_value(signerInfo, 0)->issuer_and_serial;
+        X509* signer = X509_find_by_issuer_and_serial(certificates, issuerAndSerial->issuer, issuerAndSerial->serial);
+
+        // The issuer, whose key signs the revocation list, must be a trusted authority
+        std::vector<X509*> authorities;
+        for (const QByteArray& certificateData : PDFFireCertificateAuthority::getTrustedAuthorityCertificates())
+        {
+            const unsigned char* pointer = convertByteArrayToUcharPtr(certificateData);
+            if (X509* authority = d2i_X509(nullptr, &pointer, certificateData.size()))
+            {
+                authorities.push_back(authority);
+            }
+        }
+
+        for (const QByteArray& crlData : revocationLists)
+        {
+            if (!signer)
+            {
+                break;
+            }
+
+            const unsigned char* pointer = convertByteArrayToUcharPtr(crlData);
+            X509_CRL* crl = d2i_X509_CRL(nullptr, &pointer, crlData.size());
+            if (!crl)
+            {
+                continue;
+            }
+
+            bool isRevoked = false;
+            QDateTime revocationDate;
+            if (X509_NAME_cmp(X509_CRL_get_issuer(crl), X509_get_issuer_name(signer)) == 0)
+            {
+                for (X509* authority : authorities)
+                {
+                    EVP_PKEY* publicKey = X509_get_pubkey(authority);
+                    const bool isAuthorityOfList = X509_NAME_cmp(X509_get_subject_name(authority), X509_CRL_get_issuer(crl)) == 0 &&
+                                                   X509_CRL_verify(crl, publicKey) == 1;
+                    EVP_PKEY_free(publicKey);
+                    if (!isAuthorityOfList)
+                    {
+                        continue;
+                    }
+
+                    X509_REVOKED* revoked = nullptr;
+                    if (X509_CRL_get0_by_serial(crl, &revoked, X509_get_serialNumber(signer)) == 1 && revoked)
+                    {
+                        isRevoked = true;
+                        revocationDate = getDateTimeFromASN(X509_REVOKED_get0_revocationDate(revoked));
+                    }
+                    break;
+                }
+            }
+            X509_CRL_free(crl);
+
+            if (isRevoked)
+            {
+                const QDateTime timestampDate = result.getTimestampDate();
+                if (timestampDate.isValid() && revocationDate.isValid() && timestampDate < revocationDate)
+                {
+                    result.addCertificateRevokedAfterTimestampWarning(revocationDate);
+                }
+                else
+                {
+                    result.addCertificateRevokedError(revocationDate);
+                }
+                break;
+            }
+        }
+
+        for (X509* authority : authorities)
+        {
+            X509_free(authority);
+        }
+    }
+
+    PKCS7_free(pkcs7);
+}
+
 void pdf::PDFPublicKeySignatureHandler::addTrustedCertificates(X509_STORE* store) const
 {
+    // PDF Fire: the certificates of the trusted department authorities
+    for (const QByteArray& certificateData : PDFFireCertificateAuthority::getTrustedAuthorityCertificates())
+    {
+        const unsigned char* pointer = convertByteArrayToUcharPtr(certificateData);
+        if (X509* certificate = d2i_X509(nullptr, &pointer, certificateData.size()))
+        {
+            X509_STORE_add_cert(store, certificate);
+            X509_free(certificate);
+        }
+    }
+
     if (m_parameters.store)
     {
         const PDFCertificateEntries& certificates = m_parameters.store->getCertificates();

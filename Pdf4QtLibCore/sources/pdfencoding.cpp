@@ -2328,8 +2328,10 @@ QDateTime PDFEncoding::convertToDateTime(const QByteArray& stream)
 
 QByteArray PDFEncoding::convertDateTimeToString(QDateTime dateTime)
 {
+    // PDF Fire: the time is in UTC, so it must say so ('Z') - without it, the readers
+    // take it as the local time, and show it shifted by the offset of the time zone
     QDateTime utcDateTime = dateTime.toUTC();
-    QString convertedDateTime = QString("D:%1").arg(utcDateTime.toString("yyyyMMddhhmmss"));
+    QString convertedDateTime = QString("D:%1Z").arg(utcDateTime.toString("yyyyMMddhhmmss"));
     return convertedDateTime.toLatin1();
 }
 

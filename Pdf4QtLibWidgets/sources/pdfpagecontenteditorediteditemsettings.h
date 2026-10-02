@@ -27,7 +27,10 @@
 #include <QPen>
 #include <QBrush>
 
+class QCheckBox;
 class QComboBox;
+class QDoubleSpinBox;
+class QLabel;
 
 namespace Ui
 {
@@ -85,7 +88,17 @@ private:
     void setPenColor(QColor color);
     void setBrushColor(QColor color);
 
+    // PDF Fire: the text is edited as a plain text, the markup is shown on request
+    void onShowMarkupToggled(bool showMarkup);
+    QString getEditedTextMarkup() const;
+
     Ui::PDFPageContentEditorEditedItemSettings* ui;
+    QCheckBox* m_showMarkupCheckBox = nullptr;
+    QDoubleSpinBox* m_fontSizeEdit = nullptr;
+    QLabel* m_fontNameLabel = nullptr;
+    QLabel* m_textHintLabel = nullptr;
+    QString m_textMarkup;           ///< Markup of the text, when the plain text was displayed
+    double m_loadedFontSize = 0.0;  ///< Size of the font, as it was displayed at the start
     QImage m_image;
     bool m_imageChanged = false;
     QPen m_pen;

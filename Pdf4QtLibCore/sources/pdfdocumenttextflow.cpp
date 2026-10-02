@@ -399,20 +399,24 @@ void PDFStructureTreeTextContentProcessor::performOutputCharacter(const PDFTextC
 {
     if (!isContentSuppressed())
     {
-        if (!info.character.isNull() && info.character != QChar(QChar::SoftHyphen))
+        // PDF Fire: a glyph standing for several characters (a ligature like "ti") adds
+        // all of them - every character has the bounding rectangle of the glyph
+        const QString text = !info.text.isEmpty() ? info.text : QString(info.character);
+        if ((!info.character.isNull() && info.character != QChar(QChar::SoftHyphen)) || !info.text.isEmpty())
         {
-            m_currentText.push_back(info.character);
+            m_currentText += text;
 
             QPainterPath worldPath = info.matrix.map(info.outline);
+            QRectF boundingRect;
             if (!worldPath.isEmpty())
             {
-                QRectF boundingRect = worldPath.controlPointRect();
+                boundingRect = worldPath.controlPointRect();
                 m_currentBoundingBox = m_currentBoundingBox.united(boundingRect);
-                m_characterBoundingRects.push_back(boundingRect);
             }
-            else
+
+            for (qsizetype i = 0; i < text.size(); ++i)
             {
-                m_characterBoundingRects.push_back(QRectF());
+                m_characterBoundingRects.push_back(boundingRect);
             }
         }
     }

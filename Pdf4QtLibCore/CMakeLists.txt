@@ -109,6 +109,24 @@ add_library(Pdf4QtLibCore SHARED
     sources/pdfplugin.h
     sources/pdfprogress.cpp
     sources/pdfprogress.h
+    sources/pdffireeditedtext.cpp
+    sources/pdffireeditedtext.h
+    sources/pdffireformfields.cpp
+    sources/pdffireformfields.h
+    sources/pdffireembeddedfont.cpp
+    sources/pdffireembeddedfont.h
+    sources/pdffireredaction.cpp
+    sources/pdffireredaction.h
+    sources/pdffirepermissions.cpp
+    sources/pdffirepermissions.h
+    sources/pdffirecertificateauthority.cpp
+    sources/pdffirecertificateauthority.h
+    sources/pdffiresigningrecord.cpp
+    sources/pdffiresigningrecord.h
+    sources/pdffiresmtpclient.cpp
+    sources/pdffiresmtpclient.h
+    sources/pdffirepageoperations.cpp
+    sources/pdffirepageoperations.h
     sources/pdfredact.cpp
     sources/pdfredact.h
     sources/pdfsecurityhandler.cpp

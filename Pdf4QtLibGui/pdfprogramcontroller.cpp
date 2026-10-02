@@ -21,6 +21,7 @@
 // SOFTWARE.
 
 #include "pdfprogramcontroller.h"
+#include "pdffirepermissions.h"
 #include "pdfdrawwidget.h"
 #include "pdfannotation.h"
 #include "pdfform.h"
@@ -57,6 +58,9 @@
 #include <QMenu>
 #include <QPrinter>
 #include <QPrintDialog>
+#include "pdffireprintdialog.h"
+#include "pdffireemaildialog.h"
+#include <QBuffer>
 #include <QMessageBox>
 #include <QDesktopServices>
 #include <QApplication>
@@ -413,6 +417,7 @@ PDFProgramController::PDFProgramController(QObject* parent) :
     m_bookmarkManager(nullptr),
     m_actionComboBox(nullptr),
     m_isBusy(false),
+    m_isSignatureLossConfirmed(false),
     m_isFactorySettingsBeingRestored(false),
     m_progress(nullptr),
     m_loadAllPlugins(false),
@@ -785,6 +790,18 @@ void PDFProgramController::performPrint()
         printerMode = QPrinter::ScreenResolution;
     }
 
+    // PDF Fire: printing with a preview and the options of the page sizing
+    {
+        QPrinter printer(printerMode);
+        std::vector<pdf::PDFInteger> currentPages = m_pdfWidget->getDrawWidget()->getCurrentPages();
+        PDFFirePrintDialog printDialog(m_pdfDocument.data(), m_pdfWidget->getDrawWidgetProxy(), &printer, qMove(currentPages), m_mainWindow);
+        if (printDialog.exec() == QDialog::Accepted)
+        {
+            PDFFirePrintDialog::printPages(&printer, m_pdfDocument.data(), m_pdfWidget->getDrawWidgetProxy(), printDialog.getOptions(), m_progress);
+        }
+        return;
+    }
+
     // Run print dialog
     QPrinter printer(printerMode);
     QPrintDialog printDialog(&printer, m_mainWindow);
@@ -1082,7 +1099,13 @@ void PDFProgramController::onActionTriggered(const pdf::PDFAction* action)
 
             case pdf::ActionType::ResetForm:
             {
-                m_formManager->performResetAction(dynamic_cast<const pdf::PDFActionResetForm*>(action));
+                // PDF Fire: the action being executed is the current one of the action list,
+                // not its head. The form manager does not exist, if forms are not enabled.
+                const pdf::PDFActionResetForm* resetFormAction = dynamic_cast<const pdf::PDFActionResetForm*>(currentAction);
+                if (m_formManager && resetFormAction)
+                {
+                    m_formManager->performResetAction(resetFormAction);
+                }
                 break;
             }
 
@@ -1156,6 +1179,12 @@ void PDFProgramController::initializeToolManager()
     {
         pdf::PDFCreateLineTypeTool* createPolygonTool = new pdf::PDFCreateLineTypeTool(m_pdfWidget->getDrawWidgetProxy(), m_toolManager, pdf::PDFCreateLineTypeTool::Type::Polygon, action, this);
         m_toolManager->addTool(createPolygonTool);
+    }
+    if (QAction* action = m_actionManager->getAction(PDFActionManager::CreateArrow))
+    {
+        // PDF Fire: an arrow pointing something out
+        pdf::PDFCreateLineTypeTool* createArrowTool = new pdf::PDFCreateLineTypeTool(m_pdfWidget->getDrawWidgetProxy(), m_toolManager, pdf::PDFCreateLineTypeTool::Type::Arrow, action, this);
+        m_toolManager->addTool(createArrowTool);
     }
     if (QAction* action = m_actionManager->getAction(PDFActionManager::CreateEllipse))
     {
@@ -1265,6 +1294,13 @@ void PDFProgramController::performSave()
         return;
     }
 
+    // PDF Fire: a new document has no file yet, the user must choose one
+    if (m_fileInfo.originalFileName.isEmpty())
+    {
+        performSaveAs();
+        return;
+    }
+
     saveDocument(m_fileInfo.originalFileName);
 }
 
@@ -1311,6 +1347,110 @@ bool PDFProgramController::askForWriteUnwrittenChanges()
 
 void PDFProgramController::saveDocument(const QString& fileName)
 {
+    // PDF Fire: the document is always written as a whole, which invalidates every digital
+    // signature it contains. The user must know about it before the signatures are lost.
+    // PDF Fire: redaction marks, which were not applied, are only annotations - the
+    // marked content is still in the document and it is saved with it.
+    if (m_pdfDocument)
+    {
+        int redactionMarkCount = 0;
+        pdf::PDFDocumentDataLoaderDecorator loader(m_pdfDocument.data());
+        const size_t pageCount = m_pdfDocument->getCatalog()->getPageCount();
+        for (size_t i = 0; i < pageCount; ++i)
+        {
+            for (const pdf::PDFObjectReference& annotationReference : m_pdfDocument->getCatalog()->getPage(i)->getAnnotations())
+            {
+                const pdf::PDFDictionary* dictionary = m_pdfDocument->getDictionaryFromObject(m_pdfDocument->getObjectByReference(annotationReference));
+                if (dictionary && loader.readNameFromDictionary(dictionary, "Subtype") == "Redact")
+                {
+                    ++redactionMarkCount;
+                }
+            }
+        }
+
+        if (redactionMarkCount > 0)
+        {
+            const QString message = tr("This document contains %n redaction mark(s) which are not applied. "
+                                       "The content under the marks is still in the document - it can be selected, copied and read.\n\n"
+                                       "To remove it, use Protect > Apply Redactions, which saves a redacted copy.\n\n"
+                                       "Save this document with the marks only?", nullptr, redactionMarkCount);
+            if (QMessageBox::warning(m_mainWindow, tr("Redactions Are Not Applied"), message, QMessageBox::Save | QMessageBox::Cancel, QMessageBox::Cancel) != QMessageBox::Save)
+            {
+                return;
+            }
+        }
+    }
+
+    // The signatures are counted in the document itself - the list of the verified
+    // signatures is empty, if the verification is turned off in the settings.
+    int signatureCount = 0;
+    if (m_pdfDocument && !m_isSignatureLossConfirmed)
+    {
+        const pdf::PDFForm form = pdf::PDFForm::parse(m_pdfDocument.data(), m_pdfDocument->getCatalog()->getFormObject());
+        auto countSignature = [&signatureCount](const pdf::PDFFormField* field)
+        {
+            if (field->getFieldType() == pdf::PDFFormField::FieldType::Signature && !field->getValue().isNull())
+            {
+                ++signatureCount;
+            }
+        };
+        form.apply(countSignature);
+    }
+
+    // A signed document is saved as an incremental update of the file it was read from:
+    // the signed bytes are not touched, the changes are appended after them. So the
+    // signatures stay valid (a validator reports, that the document was changed after
+    // it was signed, which is true). Only if that is not possible, the document is
+    // written as a whole, and the user is asked first.
+    if (signatureCount > 0 && !m_fileInfo.absoluteFilePath.isEmpty())
+    {
+        QFile originalFile(m_fileInfo.absoluteFilePath);
+        if (originalFile.open(QFile::ReadOnly))
+        {
+            const QByteArray originalData = originalFile.readAll();
+            originalFile.close();
+
+            updateFileWatcher(true);
+            pdf::PDFDocumentWriter incrementalWriter(nullptr);
+            const pdf::PDFOperationResult incrementalResult = incrementalWriter.writeIncrementalUpdate(fileName, originalData, m_pdfDocument.data());
+            if (incrementalResult)
+            {
+                if (m_undoRedoManager)
+                {
+                    m_undoRedoManager->setIsCurrentSaved(true);
+                }
+
+                updateFileInfo(fileName);
+                updateTitle();
+
+                if (m_recentFileManager)
+                {
+                    m_recentFileManager->addRecentFile(fileName);
+                }
+
+                updateFileWatcher();
+                return;
+            }
+            updateFileWatcher();
+        }
+    }
+
+    if (signatureCount > 0)
+    {
+        const bool isOriginalFileOverwritten = QFileInfo(fileName) == QFileInfo(m_fileInfo.originalFileName);
+        const QString message = isOriginalFileOverwritten ? tr("This document contains %n digital signature(s). Saving rewrites the whole file, "
+                                                               "so the signature(s) will no longer be valid and cannot be restored. "
+                                                               "Use Save As to keep the signed original.\n\nSave anyway?", nullptr, signatureCount)
+                                                          : tr("This document contains %n digital signature(s). The signature(s) will not be valid "
+                                                               "in the saved copy. The original file is not changed.\n\nSave anyway?", nullptr, signatureCount);
+        if (QMessageBox::warning(m_mainWindow, tr("Save Signed Document"), message, QMessageBox::Save | QMessageBox::Cancel, QMessageBox::Cancel) != QMessageBox::Save)
+        {
+            return;
+        }
+
+        m_isSignatureLossConfirmed = true;
+    }
+
     updateFileWatcher(true);
 
     pdf::PDFDocumentWriter writer(nullptr);
@@ -1479,6 +1619,26 @@ void PDFProgramController::onActionSendByEMailTriggered()
     if (subject.isEmpty())
     {
         subject = m_fileInfo.fileName;
+    }
+
+    // PDF Fire: the document is sent through a mail server set in PDF Fire - opening the
+    // mail client of the system fails, where no client is installed or configured. The
+    // document is sent as it is now, with the changes which are not saved yet.
+    {
+        QBuffer buffer;
+        buffer.open(QBuffer::WriteOnly);
+        pdf::PDFDocumentWriter writer(nullptr);
+        const pdf::PDFOperationResult writeResult = writer.write(&buffer, m_pdfDocument.data());
+        if (!writeResult)
+        {
+            QMessageBox::critical(m_mainWindow, tr("Error"), writeResult.getErrorMessage());
+            return;
+        }
+
+        const QString attachmentName = m_fileInfo.fileName.isEmpty() ? tr("document.pdf") : m_fileInfo.fileName;
+        PDFFireEmailDialog dialog(buffer.data(), attachmentName, subject, m_mainWindow);
+        dialog.exec();
+        return;
     }
 
     if (!PDFSendMail::sendMail(m_mainWindow, subject, m_fileInfo.originalFileName))
@@ -1675,7 +1835,16 @@ void PDFProgramController::onActionEncryptionTriggered()
         onDocumentModified(qMove(document));
     }
 
-    PDFEncryptionSettingsDialog dialog(m_pdfDocument->getIdPart(0), m_mainWindow);
+    // PDF Fire: an encrypted document must have an identifier, and the identifier is
+    // a part of the encryption key - a new one is created, if the document has none.
+    QByteArray documentId = m_pdfDocument->getIdPart(0);
+    const bool isDocumentIdMissing = documentId.isEmpty();
+    if (isDocumentIdMissing)
+    {
+        documentId = pdf::PDFDocumentBuilder::createDocumentId();
+    }
+
+    PDFEncryptionSettingsDialog dialog(documentId, m_mainWindow);
     if (dialog.exec() == QDialog::Accepted)
     {
         pdf::PDFSecurityHandlerPointer updatedSecurityHandler = dialog.getUpdatedSecurityHandler();
@@ -1722,6 +1891,10 @@ void PDFProgramController::onActionEncryptionTriggered()
         }
 
         pdf::PDFDocumentBuilder builder(m_pdfDocument.data());
+        if (isDocumentIdMissing && updatedSecurityHandler->getMode() != pdf::EncryptionMode::None)
+        {
+            builder.setDocumentId(documentId);
+        }
         builder.setSecurityHandler(qMove(updatedSecurityHandler));
 
         pdf::PDFDocumentPointer pointer(new pdf::PDFDocument(builder.build()));
@@ -1964,8 +2137,7 @@ void PDFProgramController::updateActionsAvailability()
         const pdf::PDFSecurityHandler* securityHandler = storage.getSecurityHandler();
         canPrint = securityHandler->isAllowed(pdf::PDFSecurityHandler::Permission::PrintLowResolution) ||
                    securityHandler->isAllowed(pdf::PDFSecurityHandler::Permission::PrintHighResolution);
-        canModify = securityHandler->isAllowed(pdf::PDFSecurityHandler::Permission::Modify) ||
-                    securityHandler->isAllowed(pdf::PDFSecurityHandler::Permission::Assemble);
+        canModify = pdf::PDFFirePermissions::canAssemblePages(m_pdfDocument.data());
     }
 
     m_actionManager->setEnabled(PDFActionManager::Open, !isBusy);
@@ -1981,13 +2153,18 @@ void PDFProgramController::updateActionsAvailability()
     m_actionManager->setEnabled(PDFActionManager::Find, hasValidDocument);
     m_actionManager->setEnabled(PDFActionManager::Print, hasValidDocument && canPrint);
     m_actionManager->setEnabled(PDFActionManager::RenderToImages, hasValidDocument && canPrint);
-    m_actionManager->setEnabled(PDFActionManager::Optimize, hasValidDocument);
-    m_actionManager->setEnabled(PDFActionManager::OptimizeImages, hasValidDocument);
-    m_actionManager->setEnabled(PDFActionManager::Sanitize, hasValidDocument);
-    m_actionManager->setEnabled(PDFActionManager::RemoveExternalLinks, hasValidDocument);
+    // PDF Fire: these change the document - not on a protected or certified document
+    const bool canModifyContent = hasDocument && pdf::PDFFirePermissions::canModifyContent(m_pdfDocument.data());
+    m_actionManager->setEnabled(PDFActionManager::Optimize, hasValidDocument && canModifyContent);
+    m_actionManager->setEnabled(PDFActionManager::OptimizeImages, hasValidDocument && canModifyContent);
+    m_actionManager->setEnabled(PDFActionManager::Sanitize, hasValidDocument && canModifyContent);
+    m_actionManager->setEnabled(PDFActionManager::RemoveExternalLinks, hasValidDocument && canModifyContent);
     m_actionManager->setEnabled(PDFActionManager::PageGeometry, hasValidDocument && canModify);
-    m_actionManager->setEnabled(PDFActionManager::CreateBitonalDocument, hasValidDocument);
-    m_actionManager->setEnabled(PDFActionManager::Encryption, hasValidDocument);
+    m_actionManager->setEnabled(PDFActionManager::CreateBitonalDocument, hasValidDocument && canModifyContent);
+    // PDF Fire: only the owner (the document opened with the owner password, or a
+    // document without security) may change the security - otherwise anybody could
+    // remove the restrictions
+    m_actionManager->setEnabled(PDFActionManager::Encryption, hasValidDocument && pdf::PDFFirePermissions::canChangeSecurity(m_pdfDocument.data()));
     m_actionManager->setEnabled(PDFActionManager::Save, hasValidDocument);
     m_actionManager->setEnabled(PDFActionManager::SaveAs, hasValidDocument);
     m_actionManager->setEnabled(PDFActionManager::Properties, hasDocument);
@@ -2110,6 +2287,23 @@ void PDFProgramController::updateFileWatcher(bool forceDisable)
 
 void PDFProgramController::openDocument(const QString& fileName)
 {
+    // PDF Fire: a document, which is open in a tab, is shown; another one is opened
+    // in a new tab (the shown document stays open in its tab)
+    const QString absoluteFilePath = QFileInfo(fileName).absoluteFilePath();
+    if (m_pdfDocument && m_fileInfo.absoluteFilePath == absoluteFilePath)
+    {
+        return;
+    }
+    for (int i = 0; i < int(m_tabs.size()); ++i)
+    {
+        if (i != m_currentTab && m_tabs[i].fileInfo.absoluteFilePath == absoluteFilePath && m_tabs[i].document)
+        {
+            switchToDocumentTab(i);
+            return;
+        }
+    }
+    prepareNewDocumentTab();
+
     // First close old document
     closeDocument();
 
@@ -2180,6 +2374,7 @@ void PDFProgramController::onDocumentReadingFinished()
 
             m_pdfDocument = qMove(result.document);
             m_signatures = qMove(result.signatures);
+            m_isSignatureLossConfirmed = false;
             pdf::PDFModifiedDocument document(m_pdfDocument.data(), m_optionalContentActivity);
             setDocument(document, m_signatures, true);
 
@@ -2235,7 +2430,25 @@ void PDFProgramController::onDocumentReadingFinished()
         case pdf::PDFDocumentReader::Result::Cancelled:
             break; // Do nothing, user cancelled the document reading
     }
+
+    // PDF Fire: the new tab of a document, which was not opened, is removed - the
+    // document shown before is shown again
+    if (!m_pdfDocument && m_currentTab >= 0 && m_currentTab < int(m_tabs.size()) && m_tabs.size() > 1)
+    {
+        const int failedTab = m_currentTab;
+        const int previousTab = m_previousTab;
+        m_tabs.erase(m_tabs.begin() + failedTab);
+        m_currentTab = -1;
+        int tabToShow = previousTab >= 0 ? previousTab : 0;
+        if (tabToShow > failedTab)
+        {
+            --tabToShow;
+        }
+        restoreDocumentTab(qBound(0, tabToShow, int(m_tabs.size()) - 1));
+    }
+
     updateActionsAvailability();
+    Q_EMIT documentTabsChanged();
 }
 
 void PDFProgramController::onDocumentModified(pdf::PDFModifiedDocument document)
@@ -2351,10 +2564,22 @@ void PDFProgramController::setDocument(pdf::PDFModifiedDocument document, std::v
 
         QSettings settings(QSettings::IniFormat, QSettings::UserScope, QCoreApplication::organizationName(), QCoreApplication::applicationName());
         settings.beginGroup("PageLayoutPerDocumentSettings");
-        QString pageLayoutStored = settings.value(m_fileInfo.absoluteFilePath, pdf::PDFPageLayoutUtils::convertPageLayoutToString(catalog->getPageLayout())).toString();
+        // PDF Fire: a new document has no file, so it has no stored page layout
+        const QString defaultPageLayout = pdf::PDFPageLayoutUtils::convertPageLayoutToString(catalog->getPageLayout());
+        QString pageLayoutStored = m_fileInfo.absoluteFilePath.isEmpty() ? defaultPageLayout : settings.value(m_fileInfo.absoluteFilePath, defaultPageLayout).toString();
         settings.endGroup();
 
-        const pdf::PageLayout pageLayout = pdf::PDFPageLayoutUtils::convertStringToPageLayout(pageLayoutStored, catalog->getPageLayout());
+        pdf::PageLayout pageLayout = pdf::PDFPageLayoutUtils::convertStringToPageLayout(pageLayoutStored, catalog->getPageLayout());
+
+        // PDF Fire: a document is scrolled continuously, page after page with a gap between
+        // them, as in Acrobat, Word and LibreOffice. "Single page" (one page at a time - the
+        // wheel jumped to the next page without warning) is the default of PDF for documents,
+        // which do not ask for any layout, and it was remembered for every opened document;
+        // it is used only when chosen in the View tab during the work.
+        if (pageLayout == pdf::PageLayout::SinglePage)
+        {
+            pageLayout = pdf::PageLayout::OneColumn;
+        }
         setPageLayout(pageLayout);
         updatePageLayoutActions();
 
@@ -2434,6 +2659,12 @@ void PDFProgramController::updateTitle()
             title = m_fileInfo.fileName;
         }
 
+        if (title.isEmpty())
+        {
+            // PDF Fire: a new document, which was not saved yet
+            title = tr("Untitled");
+        }
+
         if (m_undoRedoManager && !m_undoRedoManager->isCurrentSaved())
         {
             title += "*";
@@ -2445,6 +2676,9 @@ void PDFProgramController::updateTitle()
     {
         m_mainWindow->setWindowTitle(QApplication::applicationDisplayName());
     }
+
+    // PDF Fire: the tab shows the name and the modification too
+    Q_EMIT documentTabsChanged();
 }
 
 void PDFProgramController::updatePageLayoutActions()
@@ -2582,6 +2816,19 @@ void PDFProgramController::loadPlugins()
     static_assert(false, "Implement this for another OS!");
 #endif
 
+    // PDF Fire: a plugin added by a newer version (like the form maker) is enabled,
+    // even when the user has a saved list of the enabled plugins - otherwise the new
+    // feature would be silently missing (PDF4QT users report plugins they cannot
+    // find). The plugins, which the application has already seen, are remembered;
+    // only the plugins never seen before are enabled this way, so a plugin disabled
+    // by the user stays disabled.
+    QSettings pluginSettings(QSettings::IniFormat, QSettings::UserScope, QCoreApplication::organizationName(), QCoreApplication::applicationName());
+    pluginSettings.beginGroup("Plugins");
+    const QStringList upstreamPlugins = { "AudioBook", "Dimensions", "Editor", "ObjectInspector", "OutputPreview", "Redact", "Scanner", "Signature", "SoftProofing" };
+    const QStringList knownPlugins = pluginSettings.value("KnownPlugins", upstreamPlugins).toStringList();
+    QStringList seenPlugins;
+    bool isEnabledPluginAdded = false;
+
     for (const QString& availablePlugin : availablePlugins)
     {
         QString pluginFileName = directory.absoluteFilePath(availablePlugin);
@@ -2594,6 +2841,12 @@ void PDFProgramController::loadPlugins()
             m_plugins.back().pluginFileWithPath = pluginFileName;
 
             QString pluginName = m_plugins.back().name;
+            seenPlugins << pluginName;
+            if (!m_loadAllPlugins && !knownPlugins.contains(pluginName) && !m_enabledPlugins.contains(pluginName))
+            {
+                m_enabledPlugins << pluginName;
+                isEnabledPluginAdded = true;
+            }
             if (!m_enabledPlugins.contains(pluginName) && !m_loadAllPlugins)
             {
                 loader.unload();
@@ -2613,6 +2866,21 @@ void PDFProgramController::loadPlugins()
         }
     }
     m_loadAllPlugins = false;
+
+    QStringList allKnownPlugins = knownPlugins;
+    for (const QString& pluginName : seenPlugins)
+    {
+        if (!allKnownPlugins.contains(pluginName))
+        {
+            allKnownPlugins << pluginName;
+        }
+    }
+    pluginSettings.setValue("KnownPlugins", allKnownPlugins);
+    if (isEnabledPluginAdded && pluginSettings.contains("EnabledPlugins"))
+    {
+        pluginSettings.setValue("EnabledPlugins", m_enabledPlugins);
+    }
+    pluginSettings.endGroup();
 
     auto comparator = [](const std::pair<pdf::PDFPluginInfo, pdf::PDFPlugin*>& l, const std::pair<pdf::PDFPluginInfo, pdf::PDFPlugin*>& r)
     {
@@ -2814,10 +3082,202 @@ void PDFProgramController::onActionOpenTriggered()
 
 void PDFProgramController::onActionCloseTriggered()
 {
+    // PDF Fire: Close closes the tab of the shown document
+    if (m_currentTab >= 0)
+    {
+        closeDocumentTab(m_currentTab);
+        return;
+    }
+
     if (askForSaveDocumentBeforeClose())
     {
         closeDocument();
     }
+}
+
+std::vector<PDFProgramController::DocumentTabInfo> PDFProgramController::getDocumentTabs() const
+{
+    std::vector<DocumentTabInfo> result;
+    for (int i = 0; i < int(m_tabs.size()); ++i)
+    {
+        const bool isCurrent = (i == m_currentTab);
+        const PDFFileInfo& fileInfo = isCurrent ? m_fileInfo : m_tabs[i].fileInfo;
+
+        DocumentTabInfo info;
+        info.title = fileInfo.fileName.isEmpty() ? tr("Untitled") : fileInfo.fileName;
+        info.toolTip = fileInfo.absoluteFilePath.isEmpty() ? info.title : fileInfo.absoluteFilePath;
+        info.isModified = isCurrent ? (m_undoRedoManager && !m_undoRedoManager->isCurrentSaved()) : !m_tabs[i].undoRedoState.isCurrentSaved;
+        result.push_back(info);
+    }
+    return result;
+}
+
+void PDFProgramController::storeCurrentDocumentTab()
+{
+    if (m_currentTab < 0 || m_currentTab >= int(m_tabs.size()))
+    {
+        return;
+    }
+
+    // Changes held by a plugin (an edited page content) are written to the document,
+    // so they stay with it
+    for (const auto& plugin : m_loadedPlugins)
+    {
+        if (plugin.second->hasUnwrittenChanges())
+        {
+            plugin.second->writeUnwrittenChanges();
+        }
+    }
+
+    DocumentTab& tab = m_tabs[m_currentTab];
+    tab.document = m_pdfDocument;
+    tab.fileInfo = m_fileInfo;
+    tab.signatures = m_signatures;
+    tab.isSignatureLossConfirmed = m_isSignatureLossConfirmed;
+    tab.undoRedoState = m_undoRedoManager ? m_undoRedoManager->takeState() : PDFUndoRedoManager::State();
+
+    const std::vector<pdf::PDFInteger> pages = m_pdfWidget->getDrawWidget()->getCurrentPages();
+    tab.pageIndex = pages.empty() ? 0 : pages.front();
+    tab.zoom = m_pdfWidget->getDrawWidgetProxy()->getZoom();
+}
+
+void PDFProgramController::restoreDocumentTab(int index)
+{
+    if (index < 0 || index >= int(m_tabs.size()))
+    {
+        return;
+    }
+
+    DocumentTab tab = m_tabs[index];
+    m_tabs[index].undoRedoState = PDFUndoRedoManager::State();
+    m_previousTab = m_currentTab;
+    m_currentTab = index;
+
+    updateFileInfo(tab.fileInfo.originalFileName);
+    m_fileInfo = tab.fileInfo;
+    updateFileWatcher(false);
+    m_signatures = tab.signatures;
+    m_isSignatureLossConfirmed = tab.isSignatureLossConfirmed;
+    m_pdfDocument = tab.document;
+
+    if (m_pdfDocument)
+    {
+        pdf::PDFModifiedDocument document(m_pdfDocument, m_optionalContentActivity, pdf::PDFModifiedDocument::ModificationFlags(pdf::PDFModifiedDocument::Reset | pdf::PDFModifiedDocument::PreserveView));
+        setDocument(document, m_signatures, tab.undoRedoState.isCurrentSaved);
+    }
+
+    if (m_undoRedoManager)
+    {
+        m_undoRedoManager->restoreState(std::move(tab.undoRedoState));
+    }
+
+    if (m_pdfDocument)
+    {
+        if (tab.zoom > 0.0)
+        {
+            m_pdfWidget->getDrawWidgetProxy()->zoom(tab.zoom);
+        }
+        m_pdfWidget->getDrawWidgetProxy()->goToPage(tab.pageIndex);
+    }
+
+    updateTitle();
+    updateActionsAvailability();
+    Q_EMIT documentTabsChanged();
+}
+
+void PDFProgramController::prepareNewDocumentTab()
+{
+    if (m_pdfDocument)
+    {
+        storeCurrentDocumentTab();
+        m_tabs.emplace_back();
+        m_previousTab = m_currentTab;
+        m_currentTab = int(m_tabs.size()) - 1;
+
+        // The shown document is kept in its tab; the program is cleared for the new one
+        // (the history was taken by the tab)
+        closeDocument();
+    }
+    else if (m_tabs.empty())
+    {
+        m_tabs.emplace_back();
+        m_previousTab = -1;
+        m_currentTab = 0;
+    }
+
+    Q_EMIT documentTabsChanged();
+}
+
+void PDFProgramController::switchToDocumentTab(int index)
+{
+    if (index == m_currentTab || index < 0 || index >= int(m_tabs.size()) || !canClose())
+    {
+        return;
+    }
+
+    storeCurrentDocumentTab();
+    restoreDocumentTab(index);
+}
+
+bool PDFProgramController::closeDocumentTab(int index)
+{
+    if (index < 0 || index >= int(m_tabs.size()))
+    {
+        return true;
+    }
+
+    if (index != m_currentTab)
+    {
+        switchToDocumentTab(index);
+    }
+
+    if (!canClose() || !askForWriteUnwrittenChanges() || !askForSaveDocumentBeforeClose())
+    {
+        Q_EMIT documentTabsChanged();
+        return false;
+    }
+
+    const int closedTab = m_currentTab;
+    const int previousTab = m_previousTab;
+    closeDocument();
+    m_tabs.erase(m_tabs.begin() + closedTab);
+    m_currentTab = -1;
+
+    if (!m_tabs.empty())
+    {
+        // The tab shown before, otherwise the neighbour
+        int tabToShow = (previousTab >= 0 && previousTab != closedTab) ? previousTab : closedTab;
+        if (tabToShow > closedTab)
+        {
+            --tabToShow;
+        }
+        restoreDocumentTab(qBound(0, tabToShow, int(m_tabs.size()) - 1));
+    }
+
+    Q_EMIT documentTabsChanged();
+    return true;
+}
+
+bool PDFProgramController::askForSaveAllDocumentsBeforeClose()
+{
+    // Every modified document is shown and the user is asked about it
+    const int tabCount = int(m_tabs.size());
+    for (int i = 0; i < tabCount; ++i)
+    {
+        const bool isModified = (i == m_currentTab) ? (m_undoRedoManager && !m_undoRedoManager->isCurrentSaved()) : !m_tabs[i].undoRedoState.isCurrentSaved;
+        if (!isModified)
+        {
+            continue;
+        }
+
+        switchToDocumentTab(i);
+        if (!askForSaveDocumentBeforeClose())
+        {
+            return false;
+        }
+    }
+
+    return askForSaveDocumentBeforeClose();
 }
 
 void PDFProgramController::onActionGetSource()

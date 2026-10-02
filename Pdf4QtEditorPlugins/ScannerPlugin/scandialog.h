@@ -24,8 +24,11 @@
 
 #include <QDialog>
 
+#include <functional>
+
 #include <memory>
 
+class QCheckBox;
 class QComboBox;
 class QDialogButtonBox;
 class QLabel;
@@ -45,11 +48,25 @@ public:
 
     std::vector<ScannedPage> takePages();
 
+    /// PDF Fire: the text recognition (OCR) of the scanned pages - offered, when it is installed
+    void setOcrAvailable(bool available);
+    bool isOcrRequested() const;
+
 private:
     void reloadDevices();
     void updateSources();
+
+    /// PDF Fire: runs the work of the scanner in another thread - searching the network
+    /// and scanning take long, and the window must not freeze meanwhile (a frozen
+    /// window is offered to be killed by the desktop)
+    void runInBackground(const QString& message, bool isCancellable, const std::function<void()>& work);
     void scan();
     ScanSettings getSettings() const;
+
+    /// PDF Fire: is the chosen source a document feeder (it scans until it is empty)?
+    bool isFeederSource() const;
+    void updateScanButtons();
+    void removeLastPage();
 
     std::unique_ptr<ScannerBackend> m_backend;
     std::vector<ScannerDevice> m_devices;
@@ -61,6 +78,9 @@ private:
     QSpinBox* m_resolutionSpinBox = nullptr;
     QSpinBox* m_pageCountSpinBox = nullptr;
     QLabel* m_statusLabel = nullptr;
+    QCheckBox* m_ocrCheckBox = nullptr;
+    QLabel* m_previewLabel = nullptr;
+    QPushButton* m_removeLastButton = nullptr;
     QPushButton* m_reloadButton = nullptr;
     QPushButton* m_scanButton = nullptr;
     QDialogButtonBox* m_buttonBox = nullptr;

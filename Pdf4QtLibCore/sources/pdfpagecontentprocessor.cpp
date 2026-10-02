@@ -816,6 +816,17 @@ void PDFPageContentProcessor::processForm(const QTransform& matrix,
         return;
     }
 
+    // PDF Fire: a form, which draws itself (directly or through other forms), would
+    // recurse until the stack overflows - a damaged or malicious document crashed the
+    // application. The nesting is limited.
+    constexpr int MAXIMAL_FORM_NESTING_LEVEL = 32;
+    if (m_formNestingLevel >= MAXIMAL_FORM_NESTING_LEVEL)
+    {
+        m_errorList.push_back(PDFRenderError(RenderErrorType::Error, PDFTranslationContext::tr("Forms are nested too deep (a form draws itself) - the rest is not drawn.")));
+        return;
+    }
+    PDFTemporaryValueChange formNestingGuard(&m_formNestingLevel, m_formNestingLevel + 1);
+
     PDFPageContentProcessorStateGuard guard(this);
     PDFTemporaryValueChange structuralParentChangeGuard(&m_structuralParentKey, formStructuralParent);
 
@@ -3369,11 +3380,12 @@ void PDFPageContentProcessor::drawText(const TextSequence& textSequence)
                             }
                         }
 
-                        if (!item.character.isNull())
+                        if (!item.character.isNull() || !item.text.isEmpty())
                         {
                             // Output character
                             PDFTextCharacterInfo info;
                             info.character = item.character;
+                            info.text = item.text;
                             info.isVerticalWritingSystem = !isHorizontalWritingSystem;
                             info.advance = item.advance;
                             info.fontSize = fontSize;
@@ -3454,11 +3466,12 @@ void PDFPageContentProcessor::drawText(const TextSequence& textSequence)
 
                     processContent(*item.characterContentStream);
 
-                    if (!item.character.isNull())
+                    if (!item.character.isNull() || !item.text.isEmpty())
                     {
                         // Output character
                         PDFTextCharacterInfo info;
                         info.character = item.character;
+                        info.text = item.text;
                         info.isVerticalWritingSystem = !isHorizontalWritingSystem;
                         info.advance = item.advance;
                         info.fontSize = fontSize;

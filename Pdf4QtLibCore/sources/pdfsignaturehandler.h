@@ -61,6 +61,10 @@ public:
     const PDFObject& getData() const { return m_data; }
     const QByteArray& getDigestMethod() const { return m_digestMethod; }
 
+    /// PDF Fire: the permissions of a certification (DocMDP, P: 1 = no changes,
+    /// 2 = form filling and signing, 3 = also comments), 0 for other references
+    PDFInteger getDocMDPPermissions() const { return m_docMDPPermissions; }
+
     /// Tries to parse the signature reference. No exception is thrown, in case of error,
     /// invalid signature reference object is returned.
     /// \param storage Object storage
@@ -72,6 +76,7 @@ private:
     PDFObject m_transformParams;
     PDFObject m_data;
     QByteArray m_digestMethod;
+    PDFInteger m_docMDPPermissions = 0;
 };
 
 /// Signature dictionary. Contains digital signature. This signature can be validated by signature validator.
@@ -136,6 +141,9 @@ public:
     PDFInteger getPropTime() const { return m_propTime; }
     AuthentificationType getAuthentificationType() const { return m_propType; }
 
+    /// PDF Fire: the signing record (audit trail) written by PDF Fire, empty if none
+    const QString& getSigningRecord() const { return m_signingRecord; }
+
 private:
     Type m_type = Type::Invalid;
     QByteArray m_filter;    ///< Preferred signature handler name
@@ -156,6 +164,7 @@ private:
     PDFObject m_propBuild;
     PDFInteger m_propTime = 0;
     AuthentificationType m_propType = AuthentificationType::Invalid;
+    QString m_signingRecord; ///< PDF Fire: signing record (audit trail)
 };
 
 class PDF4QTLIBCORESHARED_EXPORT PDFSignatureVerificationResult
@@ -209,16 +218,22 @@ public:
         Warning_Certificate_QualifiedStatement          = 0x00800000,  ///< Qualified certificate statement not verified
         Warning_Certificate_UnableToGetCRL              = 0x01000000,  ///< Unable to get CRL
         Warning_Signature_TimestampNotVerified          = 0x02000000,  ///< Timestamp of the signature could not be verified
+        Error_Signature_ByteRangeInvalid                = 0x04000000,  ///< PDF Fire: byte ranges of the signature do not have the required structure
+        Warning_Certificate_RevokedAfterTimestamp       = 0x08000000,  ///< PDF Fire: certificate was revoked after the timestamped signature was made
+        Error_Signature_ChangedAfterCertification       = 0x10000000,  ///< PDF Fire: the document was changed, the certification allows no changes
+        Warning_Signature_ChangedAfterCertification     = 0x20000000,  ///< PDF Fire: the document was changed after the certification (allowed changes only?)
 
         Error_Certificates_Mask = Error_Certificate_Invalid | Error_Certificate_NoSignatures | Error_Certificate_Missing | Error_Certificate_Generic |
                                   Error_Certificate_Expired | Error_Certificate_SelfSigned | Error_Certificate_SelfSignedChain | Error_Certificate_TrustedNotFound |
                                   Error_Certificate_Revoked | Error_Certificate_Other,
 
         Error_Signatures_Mask = Error_Signature_Invalid | Error_Signature_SourceCertificateMissing | Error_Signature_NoSignaturesFound |
-                                Error_Signature_DigestFailure | Error_Signature_DataOther | Error_Signature_DataCoveredBySignatureMissing,
+                                Error_Signature_DigestFailure | Error_Signature_DataOther | Error_Signature_DataCoveredBySignatureMissing |
+                                Error_Signature_ByteRangeInvalid | Error_Signature_ChangedAfterCertification,
 
-        Warning_Certificates_Mask = Warning_Certificate_CRLValidityTimeExpired | Warning_Certificate_QualifiedStatement | Warning_Certificate_UnableToGetCRL,
-        Warning_Signatures_Mask = Warning_Signature_NotCoveredBytes | Warning_Signature_TimestampNotVerified,
+        Warning_Certificates_Mask = Warning_Certificate_CRLValidityTimeExpired | Warning_Certificate_QualifiedStatement | Warning_Certificate_UnableToGetCRL |
+                                    Warning_Certificate_RevokedAfterTimestamp,
+        Warning_Signatures_Mask = Warning_Signature_NotCoveredBytes | Warning_Signature_TimestampNotVerified | Warning_Signature_ChangedAfterCertification,
 
         Warnings_Mask = Warning_Certificates_Mask | Warning_Signatures_Mask
     };
@@ -240,6 +255,11 @@ public:
     void addCertificateSelfSignedInChainError();
     void addCertificateTrustedNotFoundError();
     void addCertificateRevokedError();
+
+    /// PDF Fire: the certificate was revoked (on the date), the signature was made
+    /// before (its time is attested by a timestamp authority)
+    void addCertificateRevokedError(const QDateTime& revocationDate);
+    void addCertificateRevokedAfterTimestampWarning(const QDateTime& revocationDate);
     void addCertificateOtherError(int error);
     void addInvalidSignatureError();
     void addSignatureNoSignaturesFoundError();
@@ -247,6 +267,7 @@ public:
     void addSignatureDigestFailureError();
     void addSignatureDataOtherError();
     void addSignatureDataCoveredBySignatureMissingError();
+    void addSignatureByteRangeInvalidError();
 
     void addSignatureNotCoveredBytesWarning(PDFInteger count);
     void addSignatureTimestampNotVerifiedWarning();
@@ -302,6 +323,20 @@ public:
     const PDFClosedIntervalSet& getBytesCoveredBySignature() const;
     void setBytesCoveredBySignature(const PDFClosedIntervalSet& bytesCoveredBySignature);
 
+    /// PDF Fire: the details of the signature dictionary, shown to the user
+    const QString& getReason() const { return m_reason; }
+    const QString& getLocation() const { return m_location; }
+    const QString& getContactInfo() const { return m_contactInfo; }
+    const QString& getSigningRecord() const { return m_signingRecord; }
+    void setSignatureDetails(const PDFSignature& signature);
+
+    /// PDF Fire: the certification of the document by this signature (DocMDP
+    /// permissions 1-3), 0 = an ordinary (approval) signature
+    PDFInteger getCertification() const { return m_certification; }
+
+    /// PDF Fire: checks the changes made after the certification
+    void verifyCertification();
+
 private:
     PDFSignature::Type m_type = PDFSignature::Type::Invalid;
     VerificationFlags m_flags = None;
@@ -315,6 +350,11 @@ private:
     QByteArray m_signatureHandler;
     PDFCertificateInfos m_certificateInfos;
     PDFClosedIntervalSet m_bytesCoveredBySignature;
+    QString m_reason;
+    QString m_location;
+    QString m_contactInfo;
+    QString m_signingRecord;
+    PDFInteger m_certification = 0;
 };
 
 /// Signature handler. Can verify both certificate and signature validity.

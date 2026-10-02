@@ -35,6 +35,8 @@ class DocumentWriterTest : public QObject
 
 private slots:
     void objectStreamValidation();
+    void streamLengthIsWritten();
+    void annotationsInIndirectArrayAreKept();
     void incrementalUpdateOfClassicTable();
     void incrementalUpdateOfCrossReferenceStream();
     void incrementalUpdateRejectsUnreadableOriginal();
@@ -72,6 +74,88 @@ PDFDocument DocumentWriterTest::read(const QByteArray& data)
 {
     PDFDocumentReader reader(nullptr, nullptr, false, false);
     return reader.readFromBuffer(data);
+}
+
+void DocumentWriterTest::streamLengthIsWritten()
+{
+    // PDF Fire: a highlight annotation gets an appearance stream created by the library,
+    // whose dictionary has no Length entry. The written file must have it, with the real
+    // size of the data - for every stream of the file.
+    PDFDocumentBuilder builder;
+    const PDFObjectReference page = builder.appendPage(QRectF(0, 0, 300, 400));
+    const PDFObjectReference annotation = builder.createAnnotationHighlight(page, QRectF(50, 300, 200, 20), Qt::yellow);
+    builder.updateAnnotationAppearanceStreams(annotation);
+    const PDFDocument document = builder.build();
+
+    const QByteArray data = write(document);
+
+    int streamCount = 0;
+    qsizetype position = 0;
+    while ((position = data.indexOf("stream\r\n", position)) != -1)
+    {
+        if (position >= 3 && data.mid(position - 3, 3) == "end")
+        {
+            // This is the keyword endstream
+            position += 6;
+            continue;
+        }
+
+        const qsizetype dictionaryStart = data.lastIndexOf(" obj", position);
+        QVERIFY(dictionaryStart != -1);
+        const QByteArray dictionary = data.mid(dictionaryStart, position - dictionaryStart);
+        const qsizetype lengthPosition = dictionary.indexOf("/Length ");
+        QVERIFY2(lengthPosition != -1, dictionary.constData());
+
+        const qsizetype length = dictionary.mid(lengthPosition + 8).trimmed().split(' ').front().toLongLong();
+        const qsizetype dataStart = position + 8;
+        QCOMPARE(data.mid(dataStart + length, 11), QByteArray("\r\nendstream"));
+
+        ++streamCount;
+        position = dataStart + length;
+    }
+
+    QVERIFY(streamCount > 0);
+    QCOMPARE(read(data).getCatalog()->getPage(0)->getAnnotations().size(), size_t(1));
+}
+
+void DocumentWriterTest::annotationsInIndirectArrayAreKept()
+{
+    // PDF Fire: a page, whose list of annotations is an indirect object (as many producers
+    // write it), already has an annotation. A new annotation must be added to the list,
+    // it must not replace it.
+    PDFDocumentBuilder builder;
+    const PDFObjectReference page = builder.appendPage(QRectF(0, 0, 300, 400));
+    const PDFObjectReference existingAnnotation = builder.createAnnotationHighlight(page, QRectF(50, 300, 200, 20), Qt::yellow);
+
+    // Move the array of the annotations to an indirect object
+    PDFObjectFactory arrayFactory;
+    arrayFactory.beginArray();
+    arrayFactory << existingAnnotation;
+    arrayFactory.endArray();
+    const PDFObjectReference annotationArray = builder.addObject(arrayFactory.takeObject());
+
+    PDFObjectFactory pageFactory;
+    pageFactory.beginDictionary();
+    pageFactory.beginDictionaryItem("Annots");
+    pageFactory << annotationArray;
+    pageFactory.endDictionaryItem();
+    pageFactory.endDictionary();
+    builder.mergeTo(page, pageFactory.takeObject());
+
+    const PDFDocument document = builder.build();
+    QCOMPARE(document.getCatalog()->getPage(0)->getAnnotations().size(), size_t(1));
+
+    PDFDocumentBuilder editBuilder(&document);
+    const PDFObjectReference newAnnotation = editBuilder.createAnnotationHighlight(page, QRectF(50, 100, 200, 20), Qt::green);
+    const PDFDocument edited = editBuilder.build();
+
+    const std::vector<PDFObjectReference>& annotations = edited.getCatalog()->getPage(0)->getAnnotations();
+    QCOMPARE(annotations.size(), size_t(2));
+    QVERIFY(std::find(annotations.cbegin(), annotations.cend(), existingAnnotation) != annotations.cend());
+    QVERIFY(std::find(annotations.cbegin(), annotations.cend(), newAnnotation) != annotations.cend());
+
+    // And it survives the file
+    QCOMPARE(read(write(edited)).getCatalog()->getPage(0)->getAnnotations().size(), size_t(2));
 }
 
 QByteArray DocumentWriterTest::createCrossReferenceStreamDocument()

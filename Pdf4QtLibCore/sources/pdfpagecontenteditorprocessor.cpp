@@ -1506,7 +1506,16 @@ QString PDFEditedPageContentElementText::createItemsAsText(const PDFPageContentP
                     }
                     else if (textItem.cid != 0)
                     {
-                        text += QString("<character cid=\"%1\"/>").arg(textItem.cid);
+                        // PDF Fire: a glyph standing for several characters (a ligature like
+                        // "ti") keeps its text, so the text can be read and edited
+                        if (!textItem.text.isEmpty())
+                        {
+                            text += QString("<character cid=\"%1\" text=\"%2\"/>").arg(textItem.cid).arg(textItem.text.toHtmlEscaped());
+                        }
+                        else
+                        {
+                            text += QString("<character cid=\"%1\"/>").arg(textItem.cid);
+                        }
                     }
                     else if (textItem.isAdvance())
                     {

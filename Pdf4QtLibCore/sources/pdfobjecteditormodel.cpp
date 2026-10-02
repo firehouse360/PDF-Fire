@@ -28,6 +28,20 @@
 namespace pdf
 {
 
+// PDF Fire: the model is also used without a document (the storage is a null pointer then).
+// Calling a member function on the null pointer is undefined behaviour, and it crashes as
+// soon as the edited object contains a reference. An empty storage is used instead.
+static const PDFObjectStorage* getStorageOrEmpty(const PDFObjectStorage* storage)
+{
+    static const PDFObjectStorage emptyStorage;
+    return storage ? storage : &emptyStorage;
+}
+
+const PDFObjectStorage* PDFObjectEditorAbstractModel::getStorage() const
+{
+    return getStorageOrEmpty(m_storage);
+}
+
 PDFObjectEditorAbstractModel::PDFObjectEditorAbstractModel(QObject* parent) :
     BaseClass(parent),
     m_storage(nullptr),
@@ -214,15 +228,15 @@ PDFObject PDFObjectEditorAbstractModel::getValue(size_t index, bool resolveArray
         return PDFObject();
     }
 
-    PDFDocumentDataLoaderDecorator loader(m_storage);
+    PDFDocumentDataLoaderDecorator loader(getStorageOrEmpty(m_storage));
 
-    if (const PDFDictionary* dictionary = m_storage->getDictionaryFromObject(m_editedObject))
+    if (const PDFDictionary* dictionary = getStorageOrEmpty(m_storage)->getDictionaryFromObject(m_editedObject))
     {
         const int pathDepth = dictionaryAttribute.size() - 1;
 
         for (int i = 0; i < pathDepth; ++i)
         {
-            dictionary = m_storage->getDictionaryFromObject(dictionary->get(dictionaryAttribute[i]));
+            dictionary = getStorageOrEmpty(m_storage)->getDictionaryFromObject(dictionary->get(dictionaryAttribute[i]));
             if (!dictionary)
             {
                 return PDFObject();
@@ -232,7 +246,7 @@ PDFObject PDFObjectEditorAbstractModel::getValue(size_t index, bool resolveArray
         const size_t arrayIndex = m_attributes.at(index).arrayIndex;
         if (arrayIndex && resolveArrayIndex)
         {
-            PDFObject object = m_storage->getObject(dictionary->get(dictionaryAttribute.back()));
+            PDFObject object = getStorageOrEmpty(m_storage)->getObject(dictionary->get(dictionaryAttribute.back()));
             if (object.isArray())
             {
                 const PDFArray* arrayObject = object.getArray();
@@ -286,7 +300,7 @@ PDFObject PDFObjectEditorAbstractModel::writeAttributeValueToObject(size_t attri
     if (arrayIndex)
     {
         PDFArrayBuilder array;
-        PDFObject arrayObject = m_storage->getObject(getValue(attribute, false));
+        PDFObject arrayObject = getStorageOrEmpty(m_storage)->getObject(getValue(attribute, false));
         if (arrayObject.isArray())
         {
             array = PDFArrayBuilder(*arrayObject.getArray());
@@ -801,7 +815,7 @@ PDFObject PDFObjectEditorAnnotationsModel::writeFreeTextDefaultAppearanceAttribu
         QString newFont = fontFamily;
         if (m_storage)
         {
-            PDFDocumentDataLoaderDecorator loader(m_storage);
+            PDFDocumentDataLoaderDecorator loader(getStorageOrEmpty(m_storage));
             newFont = loader.readTextString(value, newFont);
         }
         else if (value.isString())
@@ -822,7 +836,7 @@ PDFObject PDFObjectEditorAnnotationsModel::writeFreeTextDefaultAppearanceAttribu
         }
         else if (m_storage)
         {
-            PDFDocumentDataLoaderDecorator loader(m_storage);
+            PDFDocumentDataLoaderDecorator loader(getStorageOrEmpty(m_storage));
             fontSize = loader.readNumber(value, fontSize);
         }
         fontSize = qMax(fontSize, PDFReal(1.0));

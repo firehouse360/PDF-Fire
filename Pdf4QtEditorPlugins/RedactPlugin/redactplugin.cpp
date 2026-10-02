@@ -21,6 +21,7 @@
 // SOFTWARE.
 
 #include "redactplugin.h"
+#include "pdffirepermissions.h"
 #include "createredacteddocumentdialog.h"
 
 #include "pdfdrawwidget.h"
@@ -106,9 +107,11 @@ QString RedactPlugin::getPluginMenuName() const
 
 void RedactPlugin::updateActions()
 {
-    m_actionRedactTextSelection->setEnabled(m_document);
-    m_actionRedactPage->setEnabled(m_document);
-    m_actionCreateRedactedDocument->setEnabled(m_document);
+    // PDF Fire: redaction changes the content - not on a protected or certified document
+    const bool canModify = pdf::PDFFirePermissions::canModifyContent(m_document);
+    m_actionRedactTextSelection->setEnabled(canModify);
+    m_actionRedactPage->setEnabled(canModify);
+    m_actionCreateRedactedDocument->setEnabled(canModify);
 }
 
 void RedactPlugin::onRedactTextSelectionTriggered()
@@ -199,6 +202,7 @@ void RedactPlugin::onCreateRedactedDocumentTriggered()
         options.setFlag(pdf::PDFRedact::CopyTitle, dialog.isCopyingTitle());
         options.setFlag(pdf::PDFRedact::CopyMetadata, dialog.isCopyingMetadata());
         options.setFlag(pdf::PDFRedact::CopyOutline, dialog.isCopyingOutline());
+        options.setFlag(pdf::PDFRedact::KeepTextSearchable, dialog.isKeepingText()); // PDF Fire: text outside the areas stays text
 
         pdf::PDFDocument redactedDocument = redactProcessor.perform(options);
         pdf::PDFDocumentWriter writer(m_widget->getDrawWidgetProxy()->getProgress());
@@ -206,6 +210,30 @@ void RedactPlugin::onCreateRedactedDocumentTriggered()
         if (!result)
         {
             QMessageBox::critical(m_widget, tr("Error"), result.getErrorMessage());
+        }
+        else
+        {
+            // PDF Fire: the redaction is written into a new file, the opened document is
+            // not changed - its marks are still only marks. The user must know both.
+            QString message = tr("The redacted copy was saved to:\n%1\n\n"
+                                 "The marked content is removed from that copy. The document which is opened now "
+                                 "is not changed - it still contains the original content under the marks.").arg(dialog.getFileName());
+
+            // PDF Fire: pages, which could not be filtered, were converted to outlines - the user
+            // should know, why their text is not searchable
+            const QStringList& messages = redactProcessor.getMessages();
+            if (!messages.isEmpty())
+            {
+                const int shownCount = 10;
+                QStringList shownMessages = messages.mid(0, shownCount);
+                if (messages.size() > shownCount)
+                {
+                    shownMessages << tr("... and %1 more pages.").arg(messages.size() - shownCount);
+                }
+                message += QString("\n\n") + shownMessages.join("\n");
+            }
+
+            QMessageBox::information(m_widget, tr("Redactions Applied"), message);
         }
     }
 }

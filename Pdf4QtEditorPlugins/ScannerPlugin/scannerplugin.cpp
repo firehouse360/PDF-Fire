@@ -21,6 +21,10 @@
 
 #include "scandialog.h"
 #include "scannedpdfbuilder.h"
+#include <QTimer>
+#include <QPointer>
+#include <QMenu>
+#include <QMainWindow>
 
 #include "pdfdocumentbuilder.h"
 #include "pdfdrawwidget.h"
@@ -63,11 +67,30 @@ QString ScannerPlugin::getPluginMenuName() const
 
 void ScannerPlugin::onScanTriggered()
 {
+    // PDF Fire: the text recognition is done by the OCR plugin, if it is installed
+    QAction* recognizeTextAction = nullptr;
+    if (QMainWindow* mainWindow = m_dataExchangeInterface ? m_dataExchangeInterface->getMainWindow() : nullptr)
+    {
+        for (QMenu* menu : mainWindow->findChildren<QMenu*>())
+        {
+            for (QAction* action : menu->actions())
+            {
+                if (action->objectName() == QLatin1String("ocrplugin_RecognizeText"))
+                {
+                    recognizeTextAction = action;
+                }
+            }
+        }
+    }
+
     ScanDialog dialog(m_widget);
+    dialog.setOcrAvailable(recognizeTextAction != nullptr);
     if (dialog.exec() != QDialog::Accepted)
     {
         return;
     }
+    const bool isOcrRequested = dialog.isOcrRequested();
+    const pdf::PDFInteger firstNewPage = m_document ? pdf::PDFInteger(m_document->getCatalog()->getPageCount()) : 0;
 
     std::vector<ScannedPage> pages = dialog.takePages();
     if (pages.empty())
@@ -83,7 +106,8 @@ void ScannerPlugin::onScanTriggered()
 
         if (modifier.finalize())
         {
-            pdf::PDFModifiedDocument::ModificationFlags flags = modifier.getFlags() | pdf::PDFModifiedDocument::PreserveView;
+            // PDF Fire: the import of the scanned pages can be undone
+            pdf::PDFModifiedDocument::ModificationFlags flags = modifier.getFlags() | pdf::PDFModifiedDocument::PreserveView | pdf::PDFModifiedDocument::PreserveUndoRedo;
             Q_EMIT m_widget->getToolManager()->documentModified(pdf::PDFModifiedDocument(modifier.getDocument(), nullptr, flags));
         }
     }
@@ -94,6 +118,25 @@ void ScannerPlugin::onScanTriggered()
 
         pdf::PDFDocumentPointer document(new pdf::PDFDocument(builder.build()));
         Q_EMIT m_widget->getToolManager()->documentModified(pdf::PDFModifiedDocument(document, nullptr, pdf::PDFModifiedDocument::Reset));
+    }
+
+    // The new pages are recognized (in the background, with a progress) after they are shown
+    if (isOcrRequested && recognizeTextAction)
+    {
+        QVariantList newPages;
+        for (size_t i = 0; i < pages.size(); ++i)
+        {
+            newPages << QVariant::fromValue<qlonglong>(firstNewPage + qlonglong(i));
+        }
+        QPointer<QAction> action(recognizeTextAction);
+        QTimer::singleShot(0, this, [action, newPages]()
+        {
+            if (action)
+            {
+                action->setProperty("pdffire_automaticPages", newPages);
+                action->trigger();
+            }
+        });
     }
 }
 

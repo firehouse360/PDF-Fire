@@ -74,21 +74,6 @@ public:
     /// Sets flag, if document was saved
     void setIsCurrentSaved(bool newIsCurrentSaved = true);
 
-signals:
-    /// This signals are emitted, when undo/redo action availability has
-    /// been changed (for example, user pressed undo/redo action)
-    void undoRedoStateChanged();
-
-    /// This signal is being emitted, when user performs undo/redo action.
-    /// Before signal is emitted, this object is in corrected state, as action
-    /// is performed.
-    /// \param document Document
-    void documentChangeRequest(pdf::PDFModifiedDocument document);
-
-private:
-    /// Clamps undo/redo steps so they fit the limits
-    void clampUndoRedoSteps();
-
     struct UndoRedoItem
     {
         explicit inline UndoRedoItem() = default;
@@ -104,6 +89,37 @@ private:
         pdf::PDFDocumentPointer newDocument;
         pdf::PDFModifiedDocument::ModificationFlags flags = pdf::PDFModifiedDocument::None;
     };
+
+    /// PDF Fire: the undo/redo history of a document - kept by its tab, while
+    /// another document is shown
+    struct State
+    {
+        std::vector<UndoRedoItem> undoSteps;
+        std::vector<UndoRedoItem> redoSteps;
+        bool isCurrentSaved = true;
+    };
+
+    /// Takes the history out of the manager (the manager is cleared)
+    State takeState();
+
+    /// Puts the history of a document back
+    void restoreState(State state);
+
+signals:
+    /// This signals are emitted, when undo/redo action availability has
+    /// been changed (for example, user pressed undo/redo action)
+    void undoRedoStateChanged();
+
+    /// This signal is being emitted, when user performs undo/redo action.
+    /// Before signal is emitted, this object is in corrected state, as action
+    /// is performed.
+    /// \param document Document
+    void documentChangeRequest(pdf::PDFModifiedDocument document);
+
+private:
+    /// Clamps undo/redo steps so they fit the limits
+    void clampUndoRedoSteps();
+
 
     size_t m_undoLimit = 0;
     size_t m_redoLimit = 0;

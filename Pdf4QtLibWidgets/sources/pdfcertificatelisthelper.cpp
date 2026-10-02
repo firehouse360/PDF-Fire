@@ -99,6 +99,15 @@ void PDFCertificateListHelper::fillComboBox(QComboBox* comboBox, const PDFCertif
             model->setItem(i, 2, new QStandardItem(entry.info.getNotValidBefore().toLocalTime().toString()));
             model->setItem(i, 3, new QStandardItem(entry.info.getNotValidAfter().toLocalTime().toString()));
         }
+        else if (!commonName.isEmpty())
+        {
+            // PDF Fire: a certificate issued by a department authority shows the
+            // name of the member before the password is typed
+            model->setItem(i, 0, new QStandardItem(commonName));
+            model->setItem(i, 1, new QStandardItem(tr("%1, password protected").arg(entry.pkcs12fileName)));
+            model->setItem(i, 2, new QStandardItem(entry.info.getNotValidBefore().toLocalTime().toString()));
+            model->setItem(i, 3, new QStandardItem(entry.info.getNotValidAfter().toLocalTime().toString()));
+        }
         else
         {
             model->setItem(i, 0, new QStandardItem(entry.pkcs12fileName));

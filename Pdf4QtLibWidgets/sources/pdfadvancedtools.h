@@ -171,7 +171,8 @@ public:
         Line,
         PolyLine,
         Polygon,
-        Rectangle
+        Rectangle,
+        Arrow       ///< PDF Fire: a line with an arrowhead at its end
     };
 
     explicit PDFCreateLineTypeTool(PDFDrawWidgetProxy* proxy, PDFToolManager* toolManager, Type type, QAction* action, QObject* parent);
@@ -431,6 +432,9 @@ private:
 
 public:
     explicit PDFCreateInsertPageNumbersTool(PDFDrawWidgetProxy* proxy, PDFToolManager* toolManager, QAction* action, QObject* parent);
+
+protected:
+    virtual void updateActions() override;
 
 private:
     void onRectanglePicked(pdf::PDFInteger pageIndex, QRectF pageRectangle);

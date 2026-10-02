@@ -24,6 +24,7 @@
 #include <QByteArray>
 #include <QObject>
 
+#include <algorithm>
 #include <cstring>
 
 namespace pdfplugin
@@ -87,6 +88,28 @@ std::vector<ScannerDevice> SaneScannerBackend::devices(QString* errorMessage)
         result.push_back(std::move(device));
     }
 
+    // PDF Fire: one network scanner is often found by several drivers. The driver
+    // "airscan" is the most reliable for network scanners, the old driver "escl"
+    // the least (it prints raw data to the terminal while searching) - the
+    // first device is chosen in the dialog, so the reliable ones go first.
+    auto getRank = [](const ScannerDevice& device)
+    {
+        if (device.id.startsWith(QLatin1String("airscan:")))
+        {
+            return 0;
+        }
+        if (device.id.startsWith(QLatin1String("escl:")))
+        {
+            return 3;
+        }
+        if (device.id.startsWith(QLatin1String("hpaio:")))
+        {
+            return 1;
+        }
+        return 2;
+    };
+    std::stable_sort(result.begin(), result.end(), [&getRank](const ScannerDevice& left, const ScannerDevice& right) { return getRank(left) < getRank(right); });
+
     return result;
 }
 
@@ -130,6 +153,7 @@ ScanResult SaneScannerBackend::scan(const ScanSettings& settings)
         return result;
     }
 
+    m_isCancelled = false;
     SANE_Handle handle = nullptr;
     SANE_Status status = sane_open(settings.deviceId.toLocal8Bit().constData(), &handle);
     if (status != SANE_STATUS_GOOD)
@@ -137,6 +161,7 @@ ScanResult SaneScannerBackend::scan(const ScanSettings& settings)
         result.errorMessage = QString::fromLocal8Bit(sane_strstatus(status));
         return result;
     }
+    m_activeHandle = handle;
 
     setOptionInt(handle, SANE_NAME_SCAN_RESOLUTION, settings.resolutionDpi);
     setOptionString(handle, SANE_NAME_SCAN_MODE, colorModeToScannerName(settings.colorMode));
@@ -145,11 +170,16 @@ ScanResult SaneScannerBackend::scan(const ScanSettings& settings)
         setOptionString(handle, SANE_NAME_SCAN_SOURCE, settings.source);
     }
 
-    for (int pageIndex = 0; pageIndex < settings.pageCount; ++pageIndex)
+    for (int pageIndex = 0; pageIndex < settings.pageCount && !m_isCancelled; ++pageIndex)
     {
         status = sane_start(handle);
         if (status == SANE_STATUS_NO_DOCS && pageIndex > 0)
         {
+            break;
+        }
+        if (status == SANE_STATUS_NO_DOCS)
+        {
+            result.errorMessage = QObject::tr("There is no paper in the document feeder.");
             break;
         }
         if (status != SANE_STATUS_GOOD)
@@ -161,6 +191,12 @@ ScanResult SaneScannerBackend::scan(const ScanSettings& settings)
         QString errorMessage;
         QImage image = readImage(handle, settings.resolutionDpi, &errorMessage);
         sane_cancel(handle);
+
+        if (m_isCancelled)
+        {
+            result.errorMessage = QObject::tr("The scanning was cancelled.");
+            break;
+        }
 
         if (image.isNull())
         {
@@ -175,8 +211,20 @@ ScanResult SaneScannerBackend::scan(const ScanSettings& settings)
         result.pages.push_back(std::move(page));
     }
 
+    m_activeHandle = nullptr;
     sane_close(handle);
     return result;
+}
+
+void SaneScannerBackend::cancel()
+{
+    // SANE allows sane_cancel to be called from another thread - the running
+    // sane_read returns SANE_STATUS_CANCELLED then
+    m_isCancelled = true;
+    if (SANE_Handle handle = m_activeHandle.load())
+    {
+        sane_cancel(handle);
+    }
 }
 
 bool SaneScannerBackend::setOptionInt(SANE_Handle handle, const char* name, int value)
@@ -251,7 +299,7 @@ QImage SaneScannerBackend::readImage(SANE_Handle handle, int dpi, QString* error
         return QImage();
     }
 
-    if (parameters.lines <= 0 || parameters.pixels_per_line <= 0)
+    if (parameters.pixels_per_line <= 0 || parameters.bytes_per_line <= 0)
     {
         if (errorMessage)
         {
@@ -260,12 +308,45 @@ QImage SaneScannerBackend::readImage(SANE_Handle handle, int dpi, QString* error
         return QImage();
     }
 
-    QByteArray rawData(parameters.bytes_per_line * parameters.lines, Qt::Uninitialized);
-    int offset = 0;
-    while (offset < rawData.size())
+    // PDF Fire: the size is computed in 64 bits and limited (a broken driver can
+    // report anything); a page of unknown length (lines = -1, document feeders)
+    // is read in parts, until the end of the page
+    constexpr qint64 MAXIMAL_IMAGE_BYTES = qint64(1) << 30;
+    const bool isLengthKnown = parameters.lines > 0;
+    const qint64 expectedSize = isLengthKnown ? qint64(parameters.bytes_per_line) * qint64(parameters.lines) : qint64(parameters.bytes_per_line) * 1024;
+    if (expectedSize > MAXIMAL_IMAGE_BYTES)
     {
+        if (errorMessage)
+        {
+            *errorMessage = QObject::tr("The scanned image would be too large (%1 MB). Choose a lower resolution.").arg(expectedSize / (1024 * 1024));
+        }
+        return QImage();
+    }
+
+    QByteArray rawData(qsizetype(expectedSize), Qt::Uninitialized);
+    qsizetype offset = 0;
+    while (true)
+    {
+        if (offset == rawData.size())
+        {
+            if (isLengthKnown)
+            {
+                break;
+            }
+            if (rawData.size() * 2 > MAXIMAL_IMAGE_BYTES)
+            {
+                if (errorMessage)
+                {
+                    *errorMessage = QObject::tr("The scanned image is too large. Choose a lower resolution.");
+                }
+                return QImage();
+            }
+            rawData.resize(rawData.size() * 2);
+        }
+
         SANE_Int bytesRead = 0;
-        status = sane_read(handle, reinterpret_cast<SANE_Byte*>(rawData.data() + offset), rawData.size() - offset, &bytesRead);
+        const SANE_Int maximalLength = SANE_Int(qMin<qsizetype>(rawData.size() - offset, 1 << 24));
+        status = sane_read(handle, reinterpret_cast<SANE_Byte*>(rawData.data() + offset), maximalLength, &bytesRead);
         if (status == SANE_STATUS_EOF)
         {
             break;
@@ -284,6 +365,24 @@ QImage SaneScannerBackend::readImage(SANE_Handle handle, int dpi, QString* error
         }
 
         offset += bytesRead;
+    }
+
+    if (!isLengthKnown)
+    {
+        parameters.lines = int(offset / parameters.bytes_per_line);
+        if (parameters.lines <= 0)
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QObject::tr("The scanner sent no image.");
+            }
+            return QImage();
+        }
+    }
+    else if (offset < qsizetype(parameters.bytes_per_line) * parameters.lines)
+    {
+        // A shorter page than reported: the rest is white
+        memset(rawData.data() + offset, 0xFF, rawData.size() - offset);
     }
 
     QImage image;

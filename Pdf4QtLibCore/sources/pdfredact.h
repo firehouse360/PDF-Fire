@@ -26,8 +26,11 @@
 #include "pdfdocument.h"
 #include "pdfrenderer.h"
 
+#include <QStringList>
+
 namespace pdf
 {
+class PDFDocumentBuilder;
 
 /// Create redacted document from the document, which have redact annotations.
 /// Redacted document has removed content marked by these annotations, and
@@ -47,14 +50,23 @@ public:
         None            = 0x0000,
         CopyTitle       = 0x0001,
         CopyMetadata    = 0x0002,
-        CopyOutline     = 0x0004
+        CopyOutline     = 0x0004,
+        KeepTextSearchable = 0x0008  ///< PDF Fire: content outside of the areas is kept (text stays text), see PDFFireRedaction
     };
     Q_DECLARE_FLAGS(Options, Option)
 
 
     pdf::PDFDocument perform(Options options);
 
+    /// PDF Fire: messages about the pages, which had to be converted to outlines
+    /// (when the content of the page could not be filtered safely)
+    const QStringList& getMessages() const { return m_messages; }
+
 private:
+    /// PDF Fire: writes the page converted to outlines (the original method)
+    void writeOutlinedPage(PDFDocumentBuilder* builder, PDFRenderer* renderer, size_t pageIndex, PDFObjectReference newPageReference);
+
+    QStringList m_messages;
     const PDFDocument* m_document;
     const PDFFontCache* m_fontCache;
     const PDFCMS* m_cms;

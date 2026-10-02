@@ -707,9 +707,25 @@ SystemFontData PDFSystemFontInfoStorage::loadFont(const CIDSystemInfo* cidSystem
         }
 
         case StandardFontType::Symbol:
+        {
+#ifdef Q_OS_UNIX
+            // PDF Fire: the URW clone of Symbol (fonts-urw-base35)
+            fontName = "Standard Symbols PS";
+#else
+            fontName = "Symbol";
+#endif
+            break;
+        }
+
         case StandardFontType::ZapfDingbats:
         {
+#ifdef Q_OS_UNIX
+            // PDF Fire: the URW clone of ZapfDingbats (fonts-urw-base35). The "Symbol"
+            // font has no check mark, so the checked check boxes were drawn empty.
+            fontName = "D050000L";
+#else
             fontName = "Symbol";
+#endif
             break;
         }
 
@@ -1481,6 +1497,9 @@ public:
     virtual QString getPostScriptName() const override { return m_postScriptName; }
     virtual CharacterInfos getCharacterInfos() const override;
 
+    /// PDF Fire: the glyph of a symbol font by its name or by the character code
+    GID getSymbolFontGlyphIndex(const PDFSimpleFont* font, CID cid) const;
+
     static constexpr const PDFReal PIXEL_SIZE_MULTIPLIER = 100.0;
 
 private:
@@ -1575,6 +1594,44 @@ PDFRealizedFontImpl::~PDFRealizedFontImpl()
     }
 }
 
+GID PDFRealizedFontImpl::getSymbolFontGlyphIndex(const PDFSimpleFont* font, CID cid) const
+{
+    // PDF Fire: a font, which is not embedded and was replaced by a system font - the
+    // glyph is found by its name (ZapfDingbats: "a20" is the check mark of a check box),
+    // then by the character code itself (the fonts of symbols map the codes, not the
+    // Unicode characters). Without it, the checked check boxes were drawn empty.
+    const QByteArray& glyphName = (*font->getGlyphNames())[cid];
+    if (!glyphName.isEmpty() && FT_HAS_GLYPH_NAMES(m_face))
+    {
+        if (const FT_UInt glyphIndex = FT_Get_Name_Index(m_face, glyphName.constData()))
+        {
+            return glyphIndex;
+        }
+    }
+
+    const StandardFontType standardFontType = font->getStandardFontType();
+    if (standardFontType == StandardFontType::ZapfDingbats || standardFontType == StandardFontType::Symbol)
+    {
+        FT_CharMap currentCharMap = m_face->charmap;
+        for (FT_Int i = 0; i < m_face->num_charmaps; ++i)
+        {
+            if (FT_Set_Charmap(m_face, m_face->charmaps[i]) == 0)
+            {
+                for (const FT_ULong code : { FT_ULong(cid), FT_ULong(cid) + 0xF000 })
+                {
+                    if (const FT_UInt glyphIndex = FT_Get_Char_Index(m_face, code))
+                    {
+                        FT_Set_Charmap(m_face, currentCharMap);
+                        return glyphIndex;
+                    }
+                }
+            }
+        }
+        FT_Set_Charmap(m_face, currentCharMap);
+    }
+    return 0;
+}
+
 void PDFRealizedFontImpl::fillTextSequence(const QByteArray& byteArray, TextSequence& textSequence, PDFRenderErrorReporter* reporter)
 {
     switch (m_parentFont->getFontType())
@@ -1603,12 +1660,25 @@ void PDFRealizedFontImpl::fillTextSequence(const QByteArray& byteArray, TextSequ
                     }
                 }
 
+                if (!glyphIndex)
+                {
+                    glyphIndex = getSymbolFontGlyphIndex(font, cid);
+                }
+
                 const PDFReal glyphWidth = font->getGlyphAdvance(cid);
 
                 if (glyphIndex)
                 {
                     const Glyph& glyph = getGlyph(glyphIndex);
                     textSequence.items.emplace_back(&glyph.glyph, font->getUnicode(cid), glyph.advance, cid);
+
+                    // PDF Fire: a code standing for several characters (a ligature)
+                    QString multiCharacterText = font->getMultiCharacterText(cid);
+                    if (!multiCharacterText.isEmpty())
+                    {
+                        textSequence.items.back().character = QChar();
+                        textSequence.items.back().text = qMove(multiCharacterText);
+                    }
                 }
                 else
                 {
@@ -1687,6 +1757,10 @@ void PDFRealizedFontImpl::fillTextSequence(const QByteArray& byteArray, TextSequ
                     const PDFReal advance = m_isEmbedded ? glyph.advance
                                                          : glyphWidth * m_pixelSize * FONT_WIDTH_MULTIPLIER;
                     textSequence.items.emplace_back(&glyph.glyph, character, advance, cid);
+                    if (character.isNull())
+                    {
+                        textSequence.items.back().text = toUnicode->getMultiCharacterText(mappedCode.code, mappedCode.byteCount);
+                    }
                 }
                 else
                 {
@@ -2339,6 +2413,7 @@ PDFFontPointer PDFFont::createFont(const PDFObject& object, QByteArray fontId, c
     PDFEncoding::Encoding encoding = PDFEncoding::Encoding::Invalid;
     encoding::EncodingTable simpleFontEncodingTable = { };
     encoding::EncodingTable simpleFontToUnicodeTable = { };
+    std::map<CID, QString> simpleFontMultiCharacterTexts; // PDF Fire
     bool hasToUnicode = false;
     GlyphIndices glyphIndexArray = { };
     GlyphNames glyphNameArray = { };
@@ -2455,6 +2530,10 @@ PDFFontPointer PDFFont::createFont(const PDFObject& object, QByteArray fontId, c
                 }
 
                 hasToUnicode = toUnicodeCMap.isValid();
+                for (const auto& item : toUnicodeCMap.getMultiCharacterTexts())
+                {
+                    simpleFontMultiCharacterTexts[item.first.first] = item.second;
+                }
                 if (hasToUnicode)
                 {
                     for (size_t i = 0; i < simpleFontToUnicodeTable.size(); ++i)
@@ -2938,10 +3017,18 @@ PDFFontPointer PDFFont::createFont(const PDFObject& object, QByteArray fontId, c
     {
         case FontType::Type1:
         case FontType::MMType1:
-            return PDFFontPointer(new PDFType1Font(fontType, qMove(fontId), qMove(cidSystemInfo), qMove(fontDescriptor), qMove(name), qMove(baseFont), firstChar, lastChar, qMove(widths), encoding, simpleFontEncodingTable, simpleFontToUnicodeTable, hasToUnicode, standardFont, glyphIndexArray, qMove(glyphNameArray)));
+            {
+                PDFType1Font* type1Font = new PDFType1Font(fontType, qMove(fontId), qMove(cidSystemInfo), qMove(fontDescriptor), qMove(name), qMove(baseFont), firstChar, lastChar, qMove(widths), encoding, simpleFontEncodingTable, simpleFontToUnicodeTable, hasToUnicode, standardFont, glyphIndexArray, qMove(glyphNameArray));
+                type1Font->setMultiCharacterTexts(qMove(simpleFontMultiCharacterTexts));
+                return PDFFontPointer(type1Font);
+            }
 
         case FontType::TrueType:
-            return PDFFontPointer(new PDFTrueTypeFont(qMove(cidSystemInfo), qMove(fontId), qMove(fontDescriptor), qMove(name), qMove(baseFont), firstChar, lastChar, qMove(widths), encoding, simpleFontEncodingTable, simpleFontToUnicodeTable, hasToUnicode, standardFont, glyphIndexArray, qMove(glyphNameArray)));
+            {
+                PDFTrueTypeFont* trueTypeFont = new PDFTrueTypeFont(qMove(cidSystemInfo), qMove(fontId), qMove(fontDescriptor), qMove(name), qMove(baseFont), firstChar, lastChar, qMove(widths), encoding, simpleFontEncodingTable, simpleFontToUnicodeTable, hasToUnicode, standardFont, glyphIndexArray, qMove(glyphNameArray));
+                trueTypeFont->setMultiCharacterTexts(qMove(simpleFontMultiCharacterTexts));
+                return PDFFontPointer(trueTypeFont);
+            }
 
         default:
         {
@@ -2983,6 +3070,12 @@ PDFSimpleFont::PDFSimpleFont(CIDSystemInfo cidSystemInfo,
     m_standardFontType(standardFontType)
 {
 
+}
+
+QString PDFSimpleFont::getMultiCharacterText(CID cid) const
+{
+    auto it = m_multiCharacterTexts.find(cid);
+    return it != m_multiCharacterTexts.cend() ? it->second : QString();
 }
 
 QChar PDFSimpleFont::getUnicode(CID cid) const
@@ -3417,6 +3510,7 @@ PDFFontCMap PDFFontCMap::createFromName(const QByteArray& name)
 PDFFontCMap PDFFontCMap::createFromData(const QByteArray& data)
 {
     Entries entries;
+    std::map<std::pair<unsigned int, unsigned int>, QString> multiCharacterTexts;
     entries.reserve(1024); // Arbitrary number, we have enough memory, better than perform reallocation each time
 
     std::vector<PDFFontCMap> additionalMappings;
@@ -3601,6 +3695,22 @@ PDFFontCMap PDFFontCMap::createFromData(const QByteArray& data)
                     CID cid = fetchUnicode(token2);
 
                     entries.emplace_back(code.first, code.first, code.second, cid);
+
+                    // PDF Fire: a code mapped to several UTF-16 units - a ligature ("ti", "ffi"),
+                    // or a character outside of the basic plane. It was lost (mapped to nothing).
+                    if (token2.type == PDFLexicalAnalyzer::TokenType::String)
+                    {
+                        const QByteArray bytes = token2.data.toByteArray();
+                        if (bytes.size() > 2 && bytes.size() % 2 == 0)
+                        {
+                            QString text;
+                            for (qsizetype i = 0; i < bytes.size(); i += 2)
+                            {
+                                text += QChar(char16_t((static_cast<unsigned char>(bytes[i]) << 8) | static_cast<unsigned char>(bytes[i + 1])));
+                            }
+                            multiCharacterTexts[code] = text;
+                        }
+                    }
                 }
             }
         }
@@ -3664,7 +3774,9 @@ PDFFontCMap PDFFontCMap::createFromData(const QByteArray& data)
     std::sort(entries.begin(), entries.end());
     entries = optimize(entries);
 
-    return PDFFontCMap(qMove(entries), vertical, false);
+    PDFFontCMap result(qMove(entries), vertical, false);
+    result.m_multiCharacterTexts = qMove(multiCharacterTexts);
+    return result;
 }
 
 QByteArray PDFFontCMap::serialize() const
@@ -3792,6 +3904,30 @@ QByteArray PDFFontCMap::encode(CID cid) const
     }
 
     return byteArray;
+}
+
+QString PDFFontCMap::getMultiCharacterText(unsigned int code, unsigned int byteCount) const
+{
+    if (m_multiCharacterTexts.empty())
+    {
+        return QString();
+    }
+
+    if (byteCount != 0)
+    {
+        auto it = m_multiCharacterTexts.find(std::make_pair(code, byteCount));
+        return it != m_multiCharacterTexts.cend() ? it->second : QString();
+    }
+
+    for (const auto& item : m_multiCharacterTexts)
+    {
+        if (item.first.first == code)
+        {
+            return item.second;
+        }
+    }
+
+    return QString();
 }
 
 QChar PDFFontCMap::getToUnicode(CID cid) const

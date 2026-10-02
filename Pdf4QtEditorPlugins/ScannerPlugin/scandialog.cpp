@@ -22,12 +22,19 @@
 #include "pdfwidgetutils.h"
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QComboBox>
+#include <QSettings>
 #include <QDialogButtonBox>
 #include <QFormLayout>
 #include <QLabel>
 #include <QMessageBox>
+#include <QEventLoop>
+#include <QProgressDialog>
+#include <QPixmap>
 #include <QPushButton>
+#include <QThread>
+#include <QTimer>
 #include <QSpinBox>
 #include <QVBoxLayout>
 
@@ -59,37 +66,93 @@ ScanDialog::ScanDialog(QWidget* parent) :
     m_resolutionSpinBox->setValue(300);
     m_resolutionSpinBox->setSuffix(tr(" dpi"));
 
-    m_pageCountSpinBox->setRange(1, 999);
-    m_pageCountSpinBox->setValue(1);
+    // PDF Fire: no page count - a document feeder scans until it is empty, a flatbed
+    // scans one page per click (Add Page), and the pages are collected until Done
+    m_pageCountSpinBox->setVisible(false);
+    m_previewLabel = new QLabel(this);
+    m_previewLabel->setAlignment(Qt::AlignCenter);
+    m_previewLabel->setMinimumHeight(160);
+    m_removeLastButton = new QPushButton(tr("Remove Last Page"), this);
+    m_ocrCheckBox = new QCheckBox(tr("Make the scanned pages searchable (recognize the text - OCR)"), this);
+    m_ocrCheckBox->setChecked(QSettings().value(QStringLiteral("ScannerPlugin/RecognizeText"), true).toBool());
+    m_ocrCheckBox->setVisible(false);
 
     QFormLayout* formLayout = new QFormLayout();
     formLayout->addRow(tr("Device:"), m_deviceComboBox);
     formLayout->addRow(tr("Source:"), m_sourceComboBox);
     formLayout->addRow(tr("Color mode:"), m_colorModeComboBox);
     formLayout->addRow(tr("Resolution:"), m_resolutionSpinBox);
-    formLayout->addRow(tr("Pages:"), m_pageCountSpinBox);
 
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
     mainLayout->addLayout(formLayout);
     mainLayout->addWidget(m_reloadButton);
+    mainLayout->addWidget(m_ocrCheckBox);
     mainLayout->addWidget(m_statusLabel);
+    mainLayout->addWidget(m_previewLabel);
+    mainLayout->addWidget(m_removeLastButton);
     mainLayout->addWidget(m_buttonBox);
 
     connect(m_reloadButton, &QPushButton::clicked, this, &ScanDialog::reloadDevices);
     connect(m_deviceComboBox, qOverload<int>(&QComboBox::currentIndexChanged), this, &ScanDialog::updateSources);
     connect(m_scanButton, &QPushButton::clicked, this, &ScanDialog::scan);
+    connect(m_removeLastButton, &QPushButton::clicked, this, &ScanDialog::removeLastPage);
+    connect(m_sourceComboBox, qOverload<int>(&QComboBox::currentIndexChanged), this, &ScanDialog::updateScanButtons);
     connect(m_buttonBox, &QDialogButtonBox::accepted, this, &ScanDialog::accept);
     connect(m_buttonBox, &QDialogButtonBox::rejected, this, &ScanDialog::reject);
 
     m_buttonBox->button(QDialogButtonBox::Ok)->setEnabled(false);
+    updateScanButtons();
 
     pdf::PDFWidgetUtils::scaleWidget(this, QSize(520, 260));
     pdf::PDFWidgetUtils::style(this);
 
-    reloadDevices();
+    // The search starts after the dialog is shown (it can take a while)
+    QTimer::singleShot(0, this, &ScanDialog::reloadDevices);
+}
+
+void ScanDialog::runInBackground(const QString& message, bool isCancellable, const std::function<void()>& work)
+{
+    QProgressDialog progress(message, isCancellable ? tr("Cancel") : QString(), 0, 0, this);
+    progress.setWindowTitle(windowTitle());
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setMinimumDuration(300);
+    if (!isCancellable)
+    {
+        progress.setCancelButton(nullptr);
+    }
+
+    QEventLoop loop;
+    QThread* thread = QThread::create(work);
+    connect(thread, &QThread::finished, &loop, &QEventLoop::quit);
+    connect(&progress, &QProgressDialog::canceled, this, [this, &progress]()
+    {
+        progress.setLabelText(tr("Cancelling..."));
+        if (m_backend)
+        {
+            m_backend->cancel();
+        }
+    });
+
+    QApplication::setOverrideCursor(Qt::BusyCursor);
+    thread->start();
+    loop.exec();
+    thread->wait();
+    delete thread;
+    QApplication::restoreOverrideCursor();
 }
 
 ScanDialog::~ScanDialog() = default;
+
+void ScanDialog::setOcrAvailable(bool available)
+{
+    m_ocrCheckBox->setVisible(available);
+}
+
+bool ScanDialog::isOcrRequested() const
+{
+    QSettings().setValue(QStringLiteral("ScannerPlugin/RecognizeText"), m_ocrCheckBox->isChecked());
+    return m_ocrCheckBox->isVisible() && m_ocrCheckBox->isChecked();
+}
 
 std::vector<ScannedPage> ScanDialog::takePages()
 {
@@ -112,7 +175,9 @@ void ScanDialog::reloadDevices()
     }
 
     QString errorMessage;
-    m_devices = m_backend->devices(&errorMessage);
+    std::vector<ScannerDevice> devices;
+    runInBackground(tr("Looking for scanners (also on the network)..."), false, [this, &devices, &errorMessage]() { devices = m_backend->devices(&errorMessage); });
+    m_devices = std::move(devices);
 
     for (const ScannerDevice& device : m_devices)
     {
@@ -145,7 +210,9 @@ void ScanDialog::updateSources()
         return;
     }
 
-    const QStringList sources = m_backend->sources(m_deviceComboBox->currentData().toString());
+    QStringList sources;
+    const QString deviceId = m_deviceComboBox->currentData().toString();
+    runInBackground(tr("Connecting to the scanner..."), false, [this, &sources, deviceId]() { sources = m_backend->sources(deviceId); });
     if (sources.empty())
     {
         m_sourceComboBox->addItem(tr("Default"), QString());
@@ -165,11 +232,9 @@ void ScanDialog::scan()
         return;
     }
 
-    QApplication::setOverrideCursor(Qt::WaitCursor);
-    setEnabled(false);
-    ScanResult result = m_backend->scan(getSettings());
-    setEnabled(true);
-    QApplication::restoreOverrideCursor();
+    ScanResult result;
+    const ScanSettings settings = getSettings();
+    runInBackground(tr("Scanning... (a page can take a minute)"), true, [this, &result, settings]() { result = m_backend->scan(settings); });
 
     if (!result)
     {
@@ -177,9 +242,60 @@ void ScanDialog::scan()
         return;
     }
 
-    m_pages = std::move(result.pages);
-    m_statusLabel->setText(tr("Scanned pages: %1").arg(m_pages.size()));
-    m_buttonBox->button(QDialogButtonBox::Ok)->setEnabled(!m_pages.empty());
+    // The pages are added to the pages scanned before (Add Page on a flatbed)
+    for (ScannedPage& page : result.pages)
+    {
+        m_pages.push_back(std::move(page));
+    }
+    updateScanButtons();
+}
+
+bool ScanDialog::isFeederSource() const
+{
+    const QString source = m_sourceComboBox->currentText();
+    return source.contains(QLatin1String("ADF"), Qt::CaseInsensitive) ||
+           source.contains(QLatin1String("Feeder"), Qt::CaseInsensitive) ||
+           source.contains(QLatin1String("Duplex"), Qt::CaseInsensitive);
+}
+
+void ScanDialog::removeLastPage()
+{
+    if (!m_pages.empty())
+    {
+        m_pages.pop_back();
+    }
+    updateScanButtons();
+}
+
+void ScanDialog::updateScanButtons()
+{
+    const bool hasPages = !m_pages.empty();
+    if (isFeederSource())
+    {
+        m_scanButton->setText(hasPages ? tr("Scan More") : tr("Scan All Pages"));
+        m_scanButton->setToolTip(tr("Scans every page in the document feeder"));
+    }
+    else
+    {
+        m_scanButton->setText(hasPages ? tr("Add Page") : tr("Scan Page"));
+        m_scanButton->setToolTip(tr("Scans the page on the glass. Put the next page on the glass and click Add Page."));
+    }
+
+    QPushButton* doneButton = m_buttonBox->button(QDialogButtonBox::Ok);
+    doneButton->setEnabled(hasPages);
+    doneButton->setText(!hasPages ? tr("Done") : (m_pages.size() == 1 ? tr("Done - Insert 1 Page") : tr("Done - Insert %1 Pages").arg(m_pages.size())));
+    m_removeLastButton->setVisible(hasPages);
+
+    if (hasPages)
+    {
+        m_statusLabel->setText(m_pages.size() == 1 ? tr("1 page scanned.") : tr("%1 pages scanned.").arg(m_pages.size()));
+        const QImage& image = m_pages.back().image;
+        m_previewLabel->setPixmap(QPixmap::fromImage(image.scaled(QSize(200, 160), Qt::KeepAspectRatio, Qt::SmoothTransformation)));
+    }
+    else
+    {
+        m_previewLabel->clear();
+    }
 }
 
 ScanSettings ScanDialog::getSettings() const
@@ -188,7 +304,7 @@ ScanSettings ScanDialog::getSettings() const
     settings.deviceId = m_deviceComboBox->currentData().toString();
     settings.source = m_sourceComboBox->currentData().toString();
     settings.resolutionDpi = m_resolutionSpinBox->value();
-    settings.pageCount = m_pageCountSpinBox->value();
+    settings.pageCount = isFeederSource() ? 9999 : 1;
     settings.colorMode = static_cast<ScanSettings::ColorMode>(m_colorModeComboBox->currentData().toInt());
     return settings;
 }

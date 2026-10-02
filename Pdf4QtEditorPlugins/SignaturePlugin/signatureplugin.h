@@ -28,10 +28,15 @@
 #include "pdfpagecontenteditortools.h"
 
 #include <QObject>
+#include <QPointer>
+#include <QRectF>
 
 namespace pdf
 {
 class PDFPageContentEditorWidget;
+class PDFDocumentBuilder;
+class PDFWidgetFormManager;
+class PDFWidgetTool;
 }
 
 namespace pdfplugin
@@ -61,7 +66,41 @@ private:
     void onSceneEditElement(const std::set<pdf::PDFInteger>& elements);
     void onSignElectronically();
     void onSignDigitally();
+
+    /// PDF Fire: where the digital signature goes
+    struct SignTarget
+    {
+        enum class Kind
+        {
+            Scene,      ///< The drawn signature graphics (or an invisible signature, when nothing is drawn)
+            Field,      ///< An existing signature line (field), which is not signed yet
+            Rectangle,  ///< A box drawn on a page
+            Invisible   ///< No mark on the page
+        };
+
+        Kind kind = Kind::Scene;
+        pdf::PDFObjectReference widget;
+        pdf::PDFInteger pageIndex = -1;
+        QRectF rect;
+    };
+
+    void signDigitally(const SignTarget& target);
+    void onCertifyDocument();
+    int m_certificationRequest = 0;    ///< PDF Fire: certification preselected for the next signing
+    void onUnsignedSignatureFieldClicked(pdf::PDFObjectReference widget);
+    void connectFormManager();
+    pdf::PDFObjectReference createNameSignature(pdf::PDFDocumentBuilder& builder,
+                                                pdf::PDFObjectReference signatureDictionary,
+                                                const SignTarget& target,
+                                                const QString& fieldName,
+                                                const QString& name,
+                                                const QFont& font,
+                                                bool showDetails,
+                                                const QDateTime& dateTime,
+                                                const QString& reason);
     void onOpenCertificatesManager();
+    void onOpenDepartmentAuthority();
+    void applyPermissions();
     void onSceneActivityChanged();
 
     void onPenChanged(const QPen& pen);
@@ -94,6 +133,8 @@ private:
         SignElectronically,
         SignDigitally,
         Certificates,
+        DepartmentAuthority,    ///< PDF Fire
+        Certify,                ///< PDF Fire
 
         LastAction
     };
@@ -130,6 +171,8 @@ private:
 
     pdf::PDFPageContentScene m_scene;
     bool m_sceneSelectionChangeEnabled;
+    QPointer<pdf::PDFWidgetFormManager> m_connectedFormManager;
+    pdf::PDFWidgetTool* m_placementTool = nullptr;
 };
 
 }   // namespace pdfplugin

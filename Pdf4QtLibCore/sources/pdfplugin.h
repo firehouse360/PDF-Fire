@@ -71,6 +71,9 @@ public:
     virtual QString getOriginalFileName() const = 0;
     virtual pdf::PDFTextSelection getSelectedText() const = 0;
     virtual QMainWindow* getMainWindow() const = 0;
+
+    /// PDF Fire: opens the document in the application (asks to save the current one first)
+    virtual void openDocument(const QString& fileName) = 0;
     virtual VoiceSettings getVoiceSettings() const = 0;
 };
 

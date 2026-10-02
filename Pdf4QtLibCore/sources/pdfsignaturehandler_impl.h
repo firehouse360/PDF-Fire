@@ -49,6 +49,9 @@ protected:
     void verifySignature(PDFSignatureVerificationResult& result) const;
     void addTrustedCertificates(X509_STORE* store) const;
 
+    /// PDF Fire: checks the revocation lists of the trusted department authorities
+    void verifyTrustedAuthorityRevocation(PDFSignatureVerificationResult& result) const;
+
     virtual BIO* getSignedDataBuffer(PDFSignatureVerificationResult& result, QByteArray& outputBuffer) const;
 
 public:

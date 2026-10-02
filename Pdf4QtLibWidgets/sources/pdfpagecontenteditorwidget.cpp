@@ -53,6 +53,9 @@ PDFPageContentEditorWidget::PDFPageContentEditorWidget(QWidget* parent) :
     m_settingsWidget = new PDFPageContentEditorStyleSettings(this);
     ui->appearanceLayout->addWidget(m_settingsWidget);
 
+    // PDF Fire: the box of the tool buttons is displayed only if some tool is added to it
+    ui->toolGroupBox->hide();
+
     m_operationMapper.setMapping(ui->alignVertTopButton, static_cast<int>(PDFPageContentElementManipulator::Operation::AlignTop));
     m_operationMapper.setMapping(ui->alignVertMiddleButton, static_cast<int>(PDFPageContentElementManipulator::Operation::AlignCenterVertically));
     m_operationMapper.setMapping(ui->alignVertBottomButton, static_cast<int>(PDFPageContentElementManipulator::Operation::AlignBottom));
@@ -106,6 +109,8 @@ PDFPageContentEditorWidget::~PDFPageContentEditorWidget()
 
 void PDFPageContentEditorWidget::addAction(QAction* action)
 {
+    ui->toolGroupBox->show();
+
     // First, find position for our action
     int row = 0;
     int column = 0;

@@ -67,10 +67,14 @@ class PDFDocument;
 class PDFOptionalContentTreeItemModel;
 }
 
+class QTabBar;
+
 namespace pdfviewer
 {
 class PDFSidebarWidget;
 class PDFAdvancedFindWidget;
+class PDFFireRibbon;
+class PDFFireWelcomeWidget;
 
 class PDF4QTLIBGUILIBSHARED_EXPORT PDFEditorMainWindow : public QMainWindow, public IMainWindow
 {
@@ -90,6 +94,9 @@ public:
     virtual void setStatusBarMessage(QString message, int time) override;
     virtual void setDocument(const pdf::PDFModifiedDocument& document) override;
     virtual void adjustToolbar(QToolBar* toolbar) override final;
+
+    /// PDF Fire: shows the tabs of the open documents
+    void updateDocumentTabs();
     virtual pdf::PDFTextSelection getSelectedText() const override;
 
 protected:
@@ -112,6 +119,15 @@ private:
 
     QIcon createStickyNoteIcon(QString key) const;
 
+    // PDF Fire: the shell of the window, see pdfeditormainwindow_ribbon.cpp
+    void setupRibbon();
+    void setupStatusBarControls();
+    void applyDefaultDocumentView();
+    void updateWelcomePage(bool hasDocument);
+    void updatePageActions();
+    std::vector<pdf::PDFInteger> getTargetPages() const;
+    QMenu* findPluginMenu(const QString& name) const;
+
     Ui::PDFEditorMainWindow* ui;
     PDFActionManager* m_actionManager;
     PDFProgramController* m_programController;
@@ -130,6 +146,12 @@ private:
     QProgressBar* m_progressBarOnStatusBar;
     QLabel* m_progressBarLeftLabelOnStatusBar;
     bool m_isChangingProgressStep;
+    PDFFireRibbon* m_ribbon = nullptr;
+    PDFFireWelcomeWidget* m_welcomeWidget = nullptr;
+    QTabBar* m_documentTabBar = nullptr;   ///< PDF Fire: tabs of the open documents
+    bool m_isUpdatingDocumentTabs = false;
+    QList<QAction*> m_pageActions;
+    int m_sidebarExpandedWidth = 0;
 };
 
 }   // namespace pdfviewer

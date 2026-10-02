@@ -1,0 +1,7 @@
+{
+    "Name" : "Forms",
+    "Author" : "PDF Fire contributors",
+    "Version" : "1.0.0",
+    "License" : "MIT",
+    "Description" : "Form maker - place text fields, check boxes, radio buttons, lists, dates and signature lines onto a PDF, edit them, and detect the blanks of a form automatically."
+}

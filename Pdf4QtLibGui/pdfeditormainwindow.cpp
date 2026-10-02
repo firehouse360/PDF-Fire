@@ -21,6 +21,9 @@
 // SOFTWARE.
 
 #include "pdfeditormainwindow.h"
+#include <QVBoxLayout>
+#include <QShortcut>
+#include <QTabBar>
 #include "ui_pdfeditormainwindow.h"
 
 #include "pdfaboutdialog.h"
@@ -169,6 +172,7 @@ PDFEditorMainWindow::PDFEditorMainWindow(QWidget* parent) :
     m_actionManager->setAction(PDFActionManager::CreateRectangle, ui->actionCreateRectangle);
     m_actionManager->setAction(PDFActionManager::CreatePolygon, ui->actionCreatePolygon);
     m_actionManager->setAction(PDFActionManager::CreateEllipse, ui->actionCreateEllipse);
+    m_actionManager->setAction(PDFActionManager::CreateArrow, ui->actionCreateArrow);
     m_actionManager->setAction(PDFActionManager::CreateFreehandCurve, ui->actionCreateFreehandCurve);
     m_actionManager->setAction(PDFActionManager::DeleteAnnotation, ui->actionDeleteAnnotation);
     m_actionManager->setAction(PDFActionManager::RenderOptionAntialiasing, ui->actionRenderOptionAntialiasing);
@@ -222,7 +226,8 @@ PDFEditorMainWindow::PDFEditorMainWindow(QWidget* parent) :
     m_actionManager->setAction(PDFActionManager::BookmarkExport, ui->actionBookmarkExport);
     m_actionManager->setAction(PDFActionManager::BookmarkImport, ui->actionBookmarkImport);
     m_actionManager->setAction(PDFActionManager::BookmarkGenerateAutomatically, ui->actionBookmarkAutoGenerate);
-    m_actionManager->initActions(pdf::PDFWidgetUtils::scaleDPI(this, QSize(24, 24)), true);
+    // PDF Fire: the large buttons of the ribbon use bigger icons than the toolbars did
+    m_actionManager->initActions(pdf::PDFWidgetUtils::scaleDPI(this, QSize(28, 28)), true);
 
     for (QAction* action : m_programController->getRecentFileManager()->getActions())
     {
@@ -295,8 +300,53 @@ PDFEditorMainWindow::PDFEditorMainWindow(QWidget* parent) :
     ui->mainToolBar->addSeparator();
 
     m_programController->initialize(PDFProgramController::AllFeatures, this, this, m_actionManager, m_progress);
-    setCentralWidget(m_programController->getPdfWidget());
+    // PDF Fire: the tabs of the open documents above the pages
+    QWidget* documentArea = new QWidget(this);
+    QVBoxLayout* documentAreaLayout = new QVBoxLayout(documentArea);
+    documentAreaLayout->setContentsMargins(0, 0, 0, 0);
+    documentAreaLayout->setSpacing(0);
+    m_documentTabBar = new QTabBar(documentArea);
+    m_documentTabBar->setObjectName("documentTabBar");
+    m_documentTabBar->setTabsClosable(true);
+    m_documentTabBar->setDocumentMode(true);
+    m_documentTabBar->setExpanding(false);
+    m_documentTabBar->setElideMode(Qt::ElideMiddle);
+    m_documentTabBar->setUsesScrollButtons(true);
+    m_documentTabBar->setVisible(false);
+    documentAreaLayout->addWidget(m_documentTabBar);
+    documentAreaLayout->addWidget(m_programController->getPdfWidget(), 1);
+    setCentralWidget(documentArea);
     setFocusProxy(m_programController->getPdfWidget());
+
+    connect(m_programController, &PDFProgramController::documentTabsChanged, this, &PDFEditorMainWindow::updateDocumentTabs);
+    connect(m_documentTabBar, &QTabBar::currentChanged, this, [this](int index)
+    {
+        if (!m_isUpdatingDocumentTabs && index >= 0)
+        {
+            m_programController->switchToDocumentTab(index);
+        }
+    });
+    connect(m_documentTabBar, &QTabBar::tabCloseRequested, this, [this](int index) { m_programController->closeDocumentTab(index); });
+
+    // Ctrl+Tab and Ctrl+Shift+Tab go through the tabs
+    QShortcut* nextTabShortcut = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Tab), this);
+    connect(nextTabShortcut, &QShortcut::activated, this, [this]()
+    {
+        const int count = m_documentTabBar->count();
+        if (count > 1)
+        {
+            m_programController->switchToDocumentTab((m_programController->getCurrentDocumentTab() + 1) % count);
+        }
+    });
+    QShortcut* previousTabShortcut = new QShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Backtab), this);
+    connect(previousTabShortcut, &QShortcut::activated, this, [this]()
+    {
+        const int count = m_documentTabBar->count();
+        if (count > 1)
+        {
+            m_programController->switchToDocumentTab((m_programController->getCurrentDocumentTab() + count - 1) % count);
+        }
+    });
 
     m_sidebarWidget = new PDFSidebarWidget(m_programController->getPdfWidget()->getDrawWidgetProxy(), m_programController->getTextToSpeech(), m_programController->getCertificateStore(), m_programController->getBookmarkManager(), m_programController->getSettings(), true, this);
     m_sidebarDockWidget = new QDockWidget(tr("&Sidebar"), this);
@@ -359,6 +409,9 @@ PDFEditorMainWindow::PDFEditorMainWindow(QWidget* parent) :
     m_actionManager->styleActions();
     m_programController->initActionComboBox(actionComboBox);
 
+    // PDF Fire: the ribbon replaces the menu bar and the toolbars built above
+    setupRibbon();
+
 #ifndef NDEBUG
     pdf::PDFWidgetUtils::checkMenuAccessibility(this);
 #endif
@@ -366,6 +419,19 @@ PDFEditorMainWindow::PDFEditorMainWindow(QWidget* parent) :
 
 PDFEditorMainWindow::~PDFEditorMainWindow()
 {
+    // PDF Fire: the side panel and the find panel use objects owned by the program
+    // controller (the bookmark manager, the draw widget proxy...), so they must be
+    // destroyed before it. Otherwise they are destroyed with the window, after the
+    // controller, and an event delivered in between reads the freed objects (it does
+    // happen - a widget is re-styled when it is detached from its parent).
+    delete m_sidebarDockWidget;
+    m_sidebarDockWidget = nullptr;
+    m_sidebarWidget = nullptr;
+
+    delete m_advancedFindDockWidget;
+    m_advancedFindDockWidget = nullptr;
+    m_advancedFindWidget = nullptr;
+
     delete m_programController;
     m_programController = nullptr;
 
@@ -541,10 +607,53 @@ void PDFEditorMainWindow::setDocument(const pdf::PDFModifiedDocument& document)
         }
     }
 
+    if (m_ribbon)
+    {
+        updateWelcomePage(bool(document));
+    }
+
+    if (document && document.hasReset() && !document.hasPreserveUndoRedo())
+    {
+        if (m_ribbon)
+        {
+            applyDefaultDocumentView();
+        }
+    }
+
     if (!document && m_advancedFindDockWidget)
     {
         m_advancedFindDockWidget->hide();
     }
+}
+
+void PDFEditorMainWindow::updateDocumentTabs()
+{
+    if (!m_documentTabBar)
+    {
+        return;
+    }
+
+    pdf::PDFTemporaryValueChange guard(&m_isUpdatingDocumentTabs, true);
+    const std::vector<PDFProgramController::DocumentTabInfo> tabs = m_programController->getDocumentTabs();
+
+    while (m_documentTabBar->count() > int(tabs.size()))
+    {
+        m_documentTabBar->removeTab(m_documentTabBar->count() - 1);
+    }
+    while (m_documentTabBar->count() < int(tabs.size()))
+    {
+        m_documentTabBar->addTab(QString());
+    }
+
+    for (int i = 0; i < int(tabs.size()); ++i)
+    {
+        // A modified document has a dot after its name, as in other editors
+        m_documentTabBar->setTabText(i, tabs[i].isModified ? tabs[i].title + QStringLiteral(" \u25CF") : tabs[i].title);
+        m_documentTabBar->setTabToolTip(i, tabs[i].toolTip);
+    }
+
+    m_documentTabBar->setCurrentIndex(m_programController->getCurrentDocumentTab());
+    m_documentTabBar->setVisible(!tabs.empty() && m_programController->getDocument() != nullptr);
 }
 
 void PDFEditorMainWindow::adjustToolbar(QToolBar* toolbar)
@@ -573,7 +682,8 @@ void PDFEditorMainWindow::closeEvent(QCloseEvent* event)
     }
     else
     {
-        if (!m_programController->askForSaveDocumentBeforeClose())
+        // PDF Fire: every open document (tab) is asked about
+        if (!m_programController->askForSaveAllDocumentsBeforeClose())
         {
             // User cancelled close operation
             event->ignore();

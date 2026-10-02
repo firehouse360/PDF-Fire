@@ -693,6 +693,31 @@ void PDFPrecompiledPage::redact(QPainterPath redactPath, const QTransform& matri
         return;
     }
 
+    // PDF Fire: the redaction region consists of the quadrilaterals of the redact annotations,
+    // which are subpaths of a single path with the odd-even fill rule. Where two of them
+    // overlap (for example the boxes of two adjacent text lines), the overlap would count as
+    // the outside of the region and would not be redacted. So the region is rebuilt as
+    // a union of the subpaths. A hole in the region is filled by this, which is the safe side.
+    {
+        QPainterPath unitedRedactPath;
+        unitedRedactPath.setFillRule(Qt::WindingFill);
+        const QList<QPolygonF> subpathPolygons = redactPath.toSubpathPolygons();
+        for (const QPolygonF& subpathPolygon : subpathPolygons)
+        {
+            QPainterPath subpath;
+            subpath.addPolygon(subpathPolygon);
+            subpath.closeSubpath();
+            subpath.setFillRule(Qt::WindingFill);
+            unitedRedactPath = unitedRedactPath.united(subpath);
+        }
+        redactPath = unitedRedactPath;
+    }
+
+    if (redactPath.isEmpty())
+    {
+        return;
+    }
+
     std::stack<QTransform> worldMatrixStack;
     worldMatrixStack.push(matrix);
 
@@ -728,9 +753,60 @@ void PDFPrecompiledPage::redact(QPainterPath redactPath, const QTransform& matri
                 worldTransform.translate(0, image.height());
                 worldTransform.scale(1, -1);
 
-                QPainter painter(&image);
-                painter.setWorldTransform(worldTransform.inverted());
-                painter.drawPath(redactPath);
+                // PDF Fire: the pixels under the redaction region must be destroyed, not only
+                // covered - the image is written into the redacted document as a whole, so
+                // anything left here can be extracted from the output file. The default brush
+                // of the painter is Qt::NoBrush, so the region has to be filled explicitly.
+                const QColor redactColor = color.isValid() ? color : QColor(Qt::white);
+                const QRectF imageRect(0, 0, image.width(), image.height());
+
+                bool isInvertible = false;
+                const QTransform pagePointToImagePointMatrix = worldTransform.inverted(&isInvertible);
+                if (!isInvertible)
+                {
+                    // Degenerate placement, we cannot tell which pixels are redacted - erase them all
+                    image.fill(redactColor);
+                    break;
+                }
+
+                const QPainterPath imageRedactPath = pagePointToImagePointMatrix.map(redactPath);
+                if (!imageRedactPath.intersects(imageRect))
+                {
+                    break;
+                }
+
+                // Indexed images cannot be painted on, and a color painted on a bitonal
+                // image would be dithered - these images are converted to true color.
+                switch (image.format())
+                {
+                    case QImage::Format_Mono:
+                    case QImage::Format_MonoLSB:
+                    case QImage::Format_Indexed8:
+                        image = image.convertToFormat(image.hasAlphaChannel() ? QImage::Format_ARGB32_Premultiplied : QImage::Format_RGB32);
+                        break;
+
+                    default:
+                        break;
+                }
+
+                QPainter painter;
+                if (!painter.begin(&image))
+                {
+                    image = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+                    if (!painter.begin(&image))
+                    {
+                        image.fill(redactColor);
+                        break;
+                    }
+                }
+
+                // The pen widens the erased region by a pixel, so the partially covered
+                // pixels at the border of the region are erased too.
+                painter.setRenderHint(QPainter::Antialiasing, false);
+                painter.setCompositionMode(QPainter::CompositionMode_Source);
+                painter.setPen(QPen(redactColor, 2.0));
+                painter.setBrush(QBrush(redactColor));
+                painter.drawPath(imageRedactPath);
                 painter.end();
                 break;
             }

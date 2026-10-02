@@ -34,6 +34,18 @@
 #include <QStandardPaths>
 #include <QColorDialog>
 
+// PDF Fire
+#include "pdffireeditedtext.h"
+#include "pdffont.h"
+
+#include <QCheckBox>
+#include <QDoubleSpinBox>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QSignalBlocker>
+
+#include <cmath>
+
 namespace pdf
 {
 
@@ -43,6 +55,29 @@ PDFPageContentEditorEditedItemSettings::PDFPageContentEditorEditedItemSettings(Q
 {
     ui->setupUi(this);
     connect(ui->loadImageButton, &QPushButton::clicked, this, &PDFPageContentEditorEditedItemSettings::selectImage);
+
+    // PDF Fire: the text is edited as a plain text - with the font and its size above
+    // it. The markup (the text mixed with the commands for the font, positions, kerning...)
+    // is still available on request, for the cases the plain text cannot express.
+    QHBoxLayout* fontLayout = new QHBoxLayout();
+    m_fontNameLabel = new QLabel(ui->textGroupBox);
+    m_fontSizeEdit = new QDoubleSpinBox(ui->textGroupBox);
+    m_fontSizeEdit->setRange(0.1, 1000.0);
+    m_fontSizeEdit->setDecimals(2);
+    m_fontSizeEdit->setSingleStep(1.0);
+    m_fontSizeEdit->setSuffix(tr(" pt"));
+    fontLayout->addWidget(m_fontNameLabel, 1);
+    fontLayout->addWidget(new QLabel(tr("Size:"), ui->textGroupBox));
+    fontLayout->addWidget(m_fontSizeEdit);
+    ui->verticalLayout_3->insertLayout(0, fontLayout);
+
+    m_textHintLabel = new QLabel(ui->textGroupBox);
+    m_textHintLabel->setWordWrap(true);
+    ui->verticalLayout_3->addWidget(m_textHintLabel);
+
+    m_showMarkupCheckBox = new QCheckBox(tr("Show the markup (advanced - fonts, positions and kerning as commands)"), ui->textGroupBox);
+    ui->verticalLayout_3->addWidget(m_showMarkupCheckBox);
+    connect(m_showMarkupCheckBox, &QCheckBox::toggled, this, &PDFPageContentEditorEditedItemSettings::onShowMarkupToggled);
 
     for (const QString& colorName : QColor::colorNames())
     {
@@ -110,8 +145,82 @@ void PDFPageContentEditorEditedItemSettings::loadFromElement(PDFPageContentEleme
     if (PDFEditedPageContentElementText* textElement = editedElement->getElement()->asText())
     {
         ui->tabWidget->addTab(ui->textTab, tr("Text"));
-        QString text = textElement->getItemsAsText();
-        ui->plainTextEdit->setPlainText(text);
+
+        m_textMarkup = textElement->getItemsAsText();
+        const PDFEditedTextMarkup markup(m_textMarkup);
+
+        QSignalBlocker blocker(m_showMarkupCheckBox);
+        m_showMarkupCheckBox->setChecked(false);
+        ui->plainTextEdit->setPlainText(markup.getPlainText());
+
+        // The font of the text, and its size as it appears on the page: the size set by
+        // the font command is scaled by the matrix of the text and of the element (many
+        // documents use the font of size 1 with a scaled matrix).
+        const PDFPageContentProcessorState& textState = textElement->getState();
+        QString fontName = tr("unknown");
+
+        // The state of the element can be taken before the font was selected - the font
+        // of the first text is taken then
+        PDFFontPointer font = textState.getTextFont();
+        for (const PDFEditedPageContentElementText::Item& item : textElement->getItems())
+        {
+            if (font)
+            {
+                break;
+            }
+            if (item.isText)
+            {
+                font = item.state.getTextFont();
+            }
+        }
+
+        for (const PDFEditedPageContentElementText::FontResource& fontResource : textElement->getFontResources())
+        {
+            if (font)
+            {
+                break;
+            }
+            font = fontResource.font;
+        }
+
+        if (qEnvironmentVariableIsSet("PDFFIRE_DEBUG_TEXT"))
+        {
+            qInfo() << "PDF Fire: font" << font.get() << (font ? font->getFontDescriptor()->fontName : QByteArray()) << (font ? font->getFontDescriptor()->fontFamily : QByteArray()) << textElement->getFontResources().size();
+        }
+
+        if (font)
+        {
+            fontName = QString::fromLatin1(font->getFontDescriptor()->fontName);
+            if (fontName.isEmpty())
+            {
+                fontName = QString::fromLatin1(font->getFontDescriptor()->fontFamily);
+            }
+            if (fontName.isEmpty())
+            {
+                fontName = tr("the font embedded in the document");
+            }
+
+            // The name of a subset of a font has a prefix of six letters
+            if (fontName.size() > 7 && fontName[6] == QChar('+'))
+            {
+                fontName = fontName.mid(7);
+            }
+        }
+        m_fontNameLabel->setText(tr("Font: %1").arg(fontName));
+
+        const QTransform textTransform = textState.getTextMatrix() * textElement->getTransform();
+        const double scale = std::hypot(textTransform.m21(), textTransform.m22());
+        const double fontSize = markup.getFirstFontSize() > 0.0 ? markup.getFirstFontSize() : textState.getTextFontSize();
+        m_loadedFontSize = qMax(0.1, fontSize * (scale > 0.0 ? scale : 1.0));
+
+        QSignalBlocker sizeBlocker(m_fontSizeEdit);
+        m_fontSizeEdit->setValue(m_loadedFontSize);
+
+        // The text is what is edited, the typing goes straight into it
+        ui->plainTextEdit->setFocus();
+
+        m_textHintLabel->setText(markup.hasUnknownCharacters() ? tr("Some characters of this text have no known meaning in its font. They are shown as \uFFFC and they are kept, unless you delete them.")
+                                                               : tr("Characters, which the font of this text does not contain, are written with a similar font."));
     }
 
     if (editedElement->getElement()->asText() || editedElement->getElement()->asPath())
@@ -194,6 +303,27 @@ void PDFPageContentEditorEditedItemSettings::loadFromElement(PDFPageContentEleme
     setBrush(brush, true);
 }
 
+QString PDFPageContentEditorEditedItemSettings::getEditedTextMarkup() const
+{
+    const QString text = ui->plainTextEdit->toPlainText();
+    return m_showMarkupCheckBox->isChecked() ? text : PDFEditedTextMarkup(m_textMarkup).getMarkupWithPlainText(text);
+}
+
+void PDFPageContentEditorEditedItemSettings::onShowMarkupToggled(bool showMarkup)
+{
+    if (showMarkup)
+    {
+        // The changes made in the plain text are written to the markup
+        m_textMarkup = PDFEditedTextMarkup(m_textMarkup).getMarkupWithPlainText(ui->plainTextEdit->toPlainText());
+        ui->plainTextEdit->setPlainText(m_textMarkup);
+    }
+    else
+    {
+        m_textMarkup = ui->plainTextEdit->toPlainText();
+        ui->plainTextEdit->setPlainText(PDFEditedTextMarkup(m_textMarkup).getPlainText());
+    }
+}
+
 void PDFPageContentEditorEditedItemSettings::setPen(const QPen& pen, bool forceUpdate)
 {
     if (m_pen != pen || forceUpdate)
@@ -259,7 +389,29 @@ void PDFPageContentEditorEditedItemSettings::saveToElement(PDFPageContentElement
 
     if (PDFEditedPageContentElementText* textElement = editedElement->getElement()->asText())
     {
-        textElement->setItemsAsText(ui->plainTextEdit->toPlainText());
+        QString markup = getEditedTextMarkup();
+
+        const double fontSize = m_fontSizeEdit->value();
+        const bool isFontSizeChanged = m_loadedFontSize > 0.0 && qAbs(fontSize - m_loadedFontSize) > 0.005;
+        if (isFontSizeChanged)
+        {
+            // All sizes of the text are scaled, so the proportions in the text are kept
+            const double factor = fontSize / m_loadedFontSize;
+            markup = PDFEditedTextMarkup(markup).getMarkupWithScaledFontSize(factor);
+
+            PDFPageContentProcessorState textState = textElement->getState();
+            textState.setTextFontSize(textState.getTextFontSize() * factor);
+            textElement->setState(textState);
+        }
+
+        if (qEnvironmentVariableIsSet("PDFFIRE_DEBUG_TEXT"))
+        {
+            // Development aid: the markup before and after the edit
+            qInfo().noquote() << "PDFFIRE_DEBUG_TEXT before:" << textElement->getItemsAsText();
+            qInfo().noquote() << "PDFFIRE_DEBUG_TEXT after: " << markup;
+        }
+
+        textElement->setItemsAsText(markup);
     }
 
     if (PDFEditedPageContentElementPath* pathElement = editedElement->getElement()->asPath())

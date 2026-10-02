@@ -30,6 +30,8 @@
 
 class QListWidgetItem;
 
+class QComboBox;
+
 namespace Ui
 {
 class PDFViewerSettingsDialog;
@@ -131,6 +133,7 @@ private:
     bool canCloseDialog();
 
     Ui::PDFViewerSettingsDialog* ui;
+    QComboBox* m_openZoomComboBox = nullptr;   ///< PDF Fire: zoom of a newly opened document
     PDFViewerSettings::Settings m_settings;
     pdf::PDFCMSSettings m_cmsSettings;
     OtherSettings m_otherSettings;

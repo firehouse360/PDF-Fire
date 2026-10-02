@@ -149,6 +149,11 @@ protected:
     static void drawCross(QPainter* painter, QRect rect, QPoint point, std::optional<int> markSize);
 
     void addTool(PDFWidgetTool* tool);
+
+    /// PDF Fire: the tool stays active, when the document is reset by an edit,
+    /// which keeps the view (the tool itself changes the document this way)
+    void setKeepActiveOnReset(bool keepActive) { m_keepActiveOnReset = keepActive; }
+
     void removeTool();
 
 private:
@@ -158,6 +163,7 @@ private:
     PDFDrawWidgetProxy* m_proxy;
     std::vector<PDFWidgetTool*> m_toolStack;
     std::optional<QCursor> m_cursor;
+    bool m_keepActiveOnReset = false;
 };
 
 class PDFFindTextToolDialog : public QDialog
@@ -540,6 +546,10 @@ public:
     /// \param action Tool activation action
     /// \param parent Parent object
     explicit PDFScreenshotTool(PDFDrawWidgetProxy* proxy, QAction* action, QObject* parent);
+
+protected:
+    /// PDF Fire: a screenshot copies the content - not allowed by every document
+    virtual void updateActions() override;
 
 private:
     void onRectanglePicked(PDFInteger pageIndex, QRectF pageRectangle);

@@ -314,8 +314,8 @@
              <height>64</height>
             </size>
            </property>
-           <property name="shortcut">
-            <string>Ctrl+S</string>
+           <property name="checkable">
+            <bool>true</bool>
            </property>
            <property name="toolButtonStyle">
             <enum>Qt::ToolButtonStyle::ToolButtonTextUnderIcon</enum>

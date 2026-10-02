@@ -1,0 +1,9 @@
+<RCC>
+    <qresource prefix="/pdfplugins/pagemarksplugin">
+        <file>marks-watermark.svg</file>
+        <file>marks-header-footer.svg</file>
+        <file>marks-bates.svg</file>
+        <file>marks-background.svg</file>
+        <file>marks-remove.svg</file>
+    </qresource>
+</RCC>

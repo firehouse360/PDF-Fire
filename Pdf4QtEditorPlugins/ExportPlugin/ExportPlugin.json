@@ -1,0 +1,7 @@
+{
+    "Name" : "Export",
+    "Author" : "PDF Fire contributors",
+    "Version" : "1.0.0",
+    "License" : "MIT",
+    "Description" : "Export to Word Processor (ODT) - an editable OpenDocument Text document with the text, headings, paragraphs, lists and images of the PDF. It opens in LibreOffice Writer and in Microsoft Word."
+}

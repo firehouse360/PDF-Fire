@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/pdfplugins/exportplugin">
+        <file>export-odt.svg</file>
+    </qresource>
+</RCC>

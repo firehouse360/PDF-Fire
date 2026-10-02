@@ -117,6 +117,27 @@ void PDFUndoRedoManager::clampUndoRedoSteps()
     }
 }
 
+PDFUndoRedoManager::State PDFUndoRedoManager::takeState()
+{
+    State state;
+    state.undoSteps = std::move(m_undoSteps);
+    state.redoSteps = std::move(m_redoSteps);
+    state.isCurrentSaved = m_isCurrentSaved;
+    m_undoSteps.clear();
+    m_redoSteps.clear();
+    m_isCurrentSaved = true;
+    Q_EMIT undoRedoStateChanged();
+    return state;
+}
+
+void PDFUndoRedoManager::restoreState(State state)
+{
+    m_undoSteps = std::move(state.undoSteps);
+    m_redoSteps = std::move(state.redoSteps);
+    m_isCurrentSaved = state.isCurrentSaved;
+    Q_EMIT undoRedoStateChanged();
+}
+
 bool PDFUndoRedoManager::isCurrentSaved() const
 {
     return m_isCurrentSaved;

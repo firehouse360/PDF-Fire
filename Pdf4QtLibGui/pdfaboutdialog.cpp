@@ -38,6 +38,12 @@ PDFAboutDialog::PDFAboutDialog(QWidget* parent) :
 
     QString html = ui->copyrightLabel->text();
     html.replace("PdfForQtViewer", QString("%1 %2").arg(QApplication::applicationDisplayName(), QApplication::applicationVersion()));
+
+    // PDF Fire: credit the engine, the copyright notice of PDF4QT below stays as it is
+    if (!QApplication::applicationDisplayName().startsWith("PDF4QT"))
+    {
+        html.replace("</span></p>", QString("</span></p><p>%1</p>").arg(tr("Built on the PDF4QT engine (MIT License).")));
+    }
     ui->copyrightLabel->setText(html);
 
     std::vector<pdf::PDFDependentLibraryInfo> infos = pdf::PDFDependentLibraryInfo::getLibraryInfo();

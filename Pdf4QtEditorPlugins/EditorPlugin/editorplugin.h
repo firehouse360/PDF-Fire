@@ -24,16 +24,20 @@
 #define EDITORSPLUGIN_H
 
 #include "pdfplugin.h"
+#include "pdffont.h"
 #include "pdfpagecontentelements.h"
 #include "pdfpagecontenteditortools.h"
 #include "pdfpagecontenteditorprocessor.h"
 
 #include <QObject>
+#include <QPointer>
 #include <vector>
 
 namespace pdf
 {
 class PDFPageContentEditorWidget;
+class PDFFireInlineTextEditor;
+class PDFFireInlineParagraphEditor;
 }
 
 namespace pdfplugin
@@ -183,6 +187,38 @@ private:
                            pdf::PDFDocumentBuilder* builder);
     bool updateTextElement(pdf::PDFPageContentElementEdited* element);
 
+    /// PDF Fire: edits the text of the element in place (a caret in the text, like
+    /// a word processor). Returns false, when the text cannot be edited in place
+    /// (rotated text, no text) - the edit dialog is used then.
+    bool startInlineTextEdit(pdf::PDFPageContentElement* element);
+
+    /// PDF Fire: a line of the text on a page, as the paragraph editing needs it
+    struct InlineLine
+    {
+        pdf::PDFInteger id = -1;
+        pdf::PDFInteger pageIndex = -1;
+        QRectF rect;            ///< Bounding box in the page coordinates
+        QString text;
+        QByteArray fontName;
+        pdf::PDFFontPointer font;
+    };
+
+    /// PDF Fire: a paragraph - lines with the same left margin, at the same distance
+    struct Paragraph
+    {
+        std::vector<InlineLine> lines;  ///< From the top
+        qreal bodyLeft = 0.0;           ///< Left margin (without the indentation of the first line)
+        qreal maxRight = 0.0;           ///< Right edge of the column
+        qreal pitch = 0.0;              ///< Distance of the lines
+    };
+
+    bool getInlineLine(const pdf::PDFPageContentElement* element, InlineLine* line) const;
+    bool findParagraph(pdf::PDFPageContentElement* element, Paragraph* paragraph) const;
+    bool startInlineParagraphEdit(pdf::PDFPageContentElement* element);
+    void applyInlineParagraphEdit(const Paragraph& paragraph, const QStringList& newLines);
+    QFont getInlineEditorFont(const pdf::PDFFontPointer& pdfFont);
+    void applyInlineTextEdit(pdf::PDFInteger elementId, const QString& text);
+
     void onDrawSpaceChanged();
 
     pdf::PDFWidgetTool* getActiveTool();
@@ -201,6 +237,8 @@ private:
     std::vector<pdf::PDFPageContentScene::SceneState> m_undoStates;
     /// Timeline of scene snapshots used by the local redo action.
     std::vector<pdf::PDFPageContentScene::SceneState> m_redoStates;
+    QPointer<pdf::PDFFireInlineTextEditor> m_inlineEditor;
+    QPointer<pdf::PDFFireInlineParagraphEditor> m_inlineParagraphEditor;
 };
 
 }   // namespace pdfplugin

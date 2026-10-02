@@ -297,8 +297,11 @@ PDFCertificateInfo PDFCertificateInfo::getCertificateInfo(x509_st* certificate)
         info.setNotValidAfter(getDateTimeFromASN(notAfterTime));
 
         X509_PUBKEY* publicKey = X509_get_X509_PUBKEY(certificate);
-        EVP_PKEY* evpKey = X509_PUBKEY_get(publicKey);
-        const int keyType = EVP_PKEY_type(EVP_PKEY_base_id(evpKey));
+        // PDF Fire: the public key of a crafted certificate need not be decodable, in which
+        // case the key is a null pointer. The key is also owned by us and must be released.
+        std::unique_ptr<EVP_PKEY, void(*)(EVP_PKEY*)> evpKeyHolder(publicKey ? X509_PUBKEY_get(publicKey) : nullptr, &EVP_PKEY_free);
+        EVP_PKEY* evpKey = evpKeyHolder.get();
+        const int keyType = evpKey ? EVP_PKEY_type(EVP_PKEY_base_id(evpKey)) : EVP_PKEY_NONE;
 
         PDFCertificateInfo::PublicKey key = PDFCertificateInfo::KeyUnknown;
         switch (keyType)
@@ -324,7 +327,7 @@ PDFCertificateInfo PDFCertificateInfo::getCertificateInfo(x509_st* certificate)
         }
         info.setPublicKey(key);
 
-        const int bits = EVP_PKEY_bits(evpKey);
+        const int bits = evpKey ? EVP_PKEY_bits(evpKey) : 0;
         info.setKeySize(bits);
 
         uint32_t keyUsage = X509_get_key_usage(certificate);

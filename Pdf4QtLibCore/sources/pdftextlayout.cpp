@@ -268,6 +268,29 @@ PDFTextLayout::PDFTextLayout()
 
 void PDFTextLayout::addCharacter(const PDFTextCharacterInfo& info)
 {
+    // PDF Fire: a glyph standing for several characters (a ligature like "ti") is added as
+    // that many characters, each taking its share of the advance - so the text is found
+    // and copied as it reads ("operating", not "opera ng").
+    if (info.text.size() > 1)
+    {
+        const qsizetype count = info.text.size();
+        const PDFReal share = info.advance / count;
+        for (qsizetype i = 0; i < count; ++i)
+        {
+            PDFTextCharacterInfo part = info;
+            part.text.clear();
+            part.character = info.text[i];
+            part.advance = share;
+
+            // The part is moved along the text by the shares of the previous parts
+            QTransform shift;
+            shift.translate(info.isVerticalWritingSystem ? 0.0 : share * i, info.isVerticalWritingSystem ? share * i : 0.0);
+            part.matrix = shift * info.matrix;
+            addCharacter(part);
+        }
+        return;
+    }
+
     TextCharacter character;
 
     // Fill the basic info. For computing the angle, we must consider, if we are

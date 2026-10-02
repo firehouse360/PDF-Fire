@@ -67,6 +67,7 @@ void PDFViewerSettings::readSettings(QSettings& settings, const pdf::PDFCMSSetti
     m_settings.m_allowLaunchURI = settings.value("allowLaunchURI", defaultSettings.m_allowLaunchURI).toBool();
     m_settings.m_allowDeveloperMode = settings.value("allowDeveloperMode", defaultSettings.m_allowDeveloperMode).toBool();
     m_settings.m_multithreadingStrategy = static_cast<pdf::PDFExecutionPolicy::Strategy>(settings.value("multithreadingStrategy", static_cast<int>(defaultSettings.m_multithreadingStrategy)).toInt());
+    m_settings.m_openZoom = settings.value("openZoom", defaultSettings.m_openZoom).toString();
     m_settings.m_magnifierSize = settings.value("magnifierSize", defaultSettings.m_magnifierSize).toInt();
     m_settings.m_magnifierZoom = settings.value("magnifierZoom", defaultSettings.m_magnifierZoom).toDouble();
     m_settings.m_maximumUndoSteps = settings.value("maximumUndoSteps", defaultSettings.m_maximumUndoSteps).toInt();
@@ -182,6 +183,7 @@ void PDFViewerSettings::writeSettings(QSettings& settings)
     settings.setValue("allowLaunchURI", m_settings.m_allowLaunchURI);
     settings.setValue("allowDeveloperMode", m_settings.m_allowDeveloperMode);
     settings.setValue("multithreadingStrategy", static_cast<int>(m_settings.m_multithreadingStrategy));
+    settings.setValue("openZoom", m_settings.m_openZoom);
     settings.setValue("magnifierSize", m_settings.m_magnifierSize);
     settings.setValue("magnifierZoom", m_settings.m_magnifierZoom);
     settings.setValue("maximumUndoSteps", m_settings.m_maximumUndoSteps);
@@ -362,6 +364,7 @@ PDFViewerSettings::Settings::Settings() :
     m_speechRate(0.0),
     m_speechPitch(0.0),
     m_speechVolume(1.0),
+    m_openZoom("fitWidth"),
     m_magnifierSize(100),
     m_magnifierZoom(2.0),
     m_maximumUndoSteps(5),
@@ -374,7 +377,7 @@ PDFViewerSettings::Settings::Settings() :
     m_autoGenerateBookmarks(true),
     m_authorNameMode(pdf::PDFAuthorSettings::AuthorNameMode::Anonymous),
     m_colorScheme(AutoScheme),
-    m_sidebarButtonIconSize(SidebarButtonIconSizeLarge),
+    m_sidebarButtonIconSize(SidebarButtonIconSizeSmall), // PDF Fire: a slim icon rail
     m_showSidebarOnDocumentOpen(true),
     m_smoothWheelScrolling(true),
     m_wheelScrollHorizontalSpeedPercent(WHEEL_SCROLL_SPEED_PERCENT_DEFAULT),

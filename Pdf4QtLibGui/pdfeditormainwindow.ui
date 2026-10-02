@@ -224,6 +224,7 @@
     <addaction name="actionCreatePolyline"/>
     <addaction name="actionCreateRectangle"/>
     <addaction name="actionCreatePolygon"/>
+    <addaction name="actionCreateArrow"/>
     <addaction name="actionCreateEllipse"/>
     <addaction name="actionCreateFreehandCurve"/>
     <addaction name="menuStamp"/>
@@ -1021,6 +1022,21 @@
    </property>
    <property name="text">
     <string>&amp;Polygon</string>
+   </property>
+  </action>
+  <action name="actionCreateArrow">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="icon">
+    <iconset resource="pdf4qtlibgui.qrc">
+     <normaloff>:/resources/annot-arrow.svg</normaloff>:/resources/annot-arrow.svg</iconset>
+   </property>
+   <property name="text">
+    <string>&amp;Arrow</string>
+   </property>
+   <property name="toolTip">
+    <string>Arrow - drag or click two points; the arrowhead is at the second point</string>
    </property>
   </action>
   <action name="actionCreateEllipse">

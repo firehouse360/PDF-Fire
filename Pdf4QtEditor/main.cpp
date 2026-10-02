@@ -32,7 +32,11 @@
 #include <QApplication>
 #include <QCommandLineParser>
 
+#include "pdffiretheme.h"
+
 #include "pdfdbgheap.h"
+
+void runPDFFireDeveloperTools(QMainWindow* window);
 
 int main(int argc, char *argv[])
 {
@@ -43,10 +47,14 @@ int main(int argc, char *argv[])
     QApplication::setAttribute(Qt::AA_CompressHighFrequencyEvents, true);
     QApplication application(argc, argv);
 
-    QCoreApplication::setOrganizationName("MelkaJ");
-    QCoreApplication::setApplicationName("PDF4QT Editor");
+    // PDF Fire: the application identity. The settings and the certificate directories are
+    // derived from the organization and application name. The desktop file name is the
+    // application id on Wayland, it binds the window to the launcher and its icon.
+    QCoreApplication::setOrganizationName("PDF Fire");
+    QCoreApplication::setApplicationName("PDF Fire");
     QCoreApplication::setApplicationVersion(pdf::PDF_LIBRARY_VERSION);
-    QApplication::setApplicationDisplayName(QApplication::translate("Application", "PDF4QT Editor"));
+    QApplication::setApplicationDisplayName(QApplication::translate("Application", "PDF Fire"));
+    QGuiApplication::setDesktopFileName("pdf-fire");
 
     QCommandLineOption noDrm("no-drm", "Disable DRM settings of documents.");
     QCommandLineOption lightGui("theme-light", "Use a light theme for the GUI.");
@@ -98,6 +106,7 @@ int main(int argc, char *argv[])
     }
 
     pdf::PDFWidgetUtils::setDarkTheme(isLightGui, isDarkGui);
+    pdfviewer::PDFFireTheme::apply();
 
     QIcon appIcon(":/app-icon.svg");
     QApplication::setWindowIcon(appIcon);
@@ -110,6 +119,9 @@ int main(int argc, char *argv[])
     {
         mainWindow.getProgramController()->openDocument(arguments.front());
     }
+
+    // PDF Fire: development aid (scripted screenshots), see pdffiredevtools.cpp
+    runPDFFireDeveloperTools(&mainWindow);
 
     return application.exec();
 }

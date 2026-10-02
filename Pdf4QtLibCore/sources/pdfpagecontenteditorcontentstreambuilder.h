@@ -33,6 +33,7 @@ namespace pdf
 {
 class PDFPageContentElement;
 class PDFContentEditorPaintEngine;
+class PDFFireEmbeddedFont;
 class PDFPageContentEditorContentStreamBuilder;
 
 class PDF4QTLIBCORESHARED_EXPORT PDFContentEditorPaintDevice : public QPaintDevice
@@ -72,7 +73,7 @@ public:
     const QByteArray& getOutputContent();
 
     /// Resource dictionaries (open transparency groups are finished first)
-    const PDFDictionaryBuilder& getFontDictionary() { finishTransparencyGroups(); return m_fontDictionary; }
+    const PDFDictionaryBuilder& getFontDictionary() { finishTransparencyGroups(); finishEmbeddedFonts(); return m_fontDictionary; }
     const PDFDictionaryBuilder& getXObjectDictionary() { finishTransparencyGroups(); return m_xobjectDictionary; }
     const PDFDictionaryBuilder& getGraphicStateDictionary() { finishTransparencyGroups(); return m_graphicStateDictionary; }
     const PDFDictionaryBuilder& getShadingDictionary() { finishTransparencyGroups(); return m_shadingDictionary; }
@@ -109,6 +110,20 @@ public:
     /// rendering intent and overprint), are applied to the image - all of them
     /// are reset to the default values.
     void writeImage(const QImage& image, const QRectF& rectangle);
+
+    /// PDF Fire: writes the text as real text (searchable, selectable) with the font
+    /// embedded into the document. Returns false, when it is not possible (the font is
+    /// not a TrueType font, its licence does not allow embedding, a character is
+    /// missing in it) - the text has to be drawn as outlines then.
+    /// \param font Font (the size in the units of the painter)
+    /// \param text Text
+    /// \param position Position of the base line start (in the painter coordinates, y down)
+    /// \param state State (the transformation matrix maps the painter coordinates to the page)
+    /// \param color Color of the text
+    /// \param clipPath Clip path in the page coordinates (empty - no clipping)
+    bool writeTextWithEmbeddedFont(const QFont& font, const QString& text, QPointF position,
+                                   const PDFPageContentProcessorState& state, const QColor& color,
+                                   const QPainterPath& clipPath);
 
     /// Writes image placed by the painter transform. Optional clip path
     /// is expressed in the page coordinate space. An empty clip path
@@ -167,6 +182,7 @@ private:
     /// generated Type 3 fallback font.
     void writeTextWithFallback(QTextStream& stream, const QString& characters);
 
+    void flushPendingText(QTextStream& stream);
     void writeTextHexString(QTextStream& stream, const QByteArray& encodedText);
 
     void writeImage(QTextStream& stream, const QImage& image);
@@ -187,6 +203,16 @@ private:
 
     void addError(const QString& error);
 
+    /// PDF Fire: writes the objects of the embedded fonts into the font dictionary
+    void finishEmbeddedFonts();
+
+    struct EmbeddedFont
+    {
+        QByteArray key;
+        std::shared_ptr<PDFFireEmbeddedFont> font; ///< nullptr - the font cannot be embedded
+    };
+    std::map<QString, EmbeddedFont> m_embeddedFonts;
+
     PDFDocument* m_document = nullptr;
     PDFDictionaryBuilder m_fontDictionary;
     PDFDictionaryBuilder m_xobjectDictionary;
@@ -194,6 +220,7 @@ private:
     PDFDictionaryBuilder m_shadingDictionary;
     QByteArray m_outputContent;
     PDFPageContentProcessorState m_currentState;
+    QString m_pendingTextArray; ///< PDF Fire: strings and kerning of the TJ operator being collected
     PDFFontPointer m_textFont;
     QHash<QByteArray, PDFFontPointer> m_fontOverrides;
     QHash<QByteArray, PDFObject> m_fontResourceObjects; ///< Font objects of the fonts of the written text element

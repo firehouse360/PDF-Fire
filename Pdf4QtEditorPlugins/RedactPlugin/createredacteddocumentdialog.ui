@@ -41,6 +41,38 @@
     </widget>
    </item>
    <item>
+    <widget class="QGroupBox" name="methodGroupBox">
+     <property name="title">
+      <string>Method</string>
+     </property>
+     <layout class="QVBoxLayout" name="methodLayout">
+      <item>
+       <widget class="QRadioButton" name="keepTextRadioButton">
+        <property name="toolTip">
+         <string>Only the content in the marked areas is removed: the characters, the pixels of images, the parts of drawings, and the form fields and comments touching an area. The rest of the page stays as it was, its text can be searched and copied. A page with content, which can't be removed safely in this way, is converted to outlines.</string>
+        </property>
+        <property name="text">
+         <string>Keep the text outside the redacted areas searchable (recommended)</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QRadioButton" name="outlinesRadioButton">
+        <property name="toolTip">
+         <string>Every page is redrawn as shapes. Nothing of the original page content is kept, but the text can't be searched or copied anymore.</string>
+        </property>
+        <property name="text">
+         <string>Convert all pages to outlines (most secure, the text is not searchable)</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
     <widget class="QGroupBox" name="appearanceGroupBox">
      <property name="title">
       <string>Appearance</string>

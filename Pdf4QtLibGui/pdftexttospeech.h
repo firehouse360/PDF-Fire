@@ -33,7 +33,6 @@ class QSlider;
 class QComboBox;
 class QToolButton;
 class QTextBrowser;
-class QTextToSpeech;
 
 namespace pdf
 {
@@ -45,6 +44,7 @@ class PDFModifiedDocument;
 namespace pdfviewer
 {
 class PDFViewerSettings;
+class PDFFireNaturalSpeech;
 
 /// Text to speech engine used to reading the document
 class PDF4QTLIBGUILIBSHARED_EXPORT PDFTextToSpeech : public QObject
@@ -131,7 +131,7 @@ private:
     void updateEngineLists();
     void updateToNextPage(pdf::PDFInteger pageIndex);
 
-    QTextToSpeech* m_textToSpeech;
+    PDFFireNaturalSpeech* m_textToSpeech;   ///< PDF Fire: the natural voices
     const pdf::PDFDocument* m_document;
     pdf::PDFDrawWidgetProxy* m_proxy;
     State m_state;

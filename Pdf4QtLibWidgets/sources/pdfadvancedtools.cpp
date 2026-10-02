@@ -21,6 +21,7 @@
 // SOFTWARE.
 
 #include "pdfadvancedtools.h"
+#include "pdffirepermissions.h"
 #include "pdfdocumentbuilder.h"
 #include "pdfdrawwidget.h"
 #include "pdfutils.h"
@@ -48,6 +49,8 @@
 #include <QVBoxLayout>
 #include <QApplication>
 #include <QSettings>
+#include <QPainter>
+#include <QPixmap>
 
 #include <limits>
 #include <algorithm>
@@ -68,8 +71,10 @@ static PDFAnnotationStyle getDefaultShapeStyle()
 {
     PDFAnnotationStyle style;
     style.strokeColor = Qt::red;
-    style.fillColor = Qt::yellow;
-    style.penWidth = 1.0;
+    // PDF Fire: as in Acrobat, a shape marks something on the page without covering
+    // it - no fill (an invalid colour), a line thick enough to be seen at once
+    style.fillColor = QColor();
+    style.penWidth = 2.0;
     return style;
 }
 
@@ -123,7 +128,7 @@ void PDFCreateStickyNoteTool::updateActions()
 
     if (m_actionGroup)
     {
-        const bool isEnabled = getDocument() && getDocument()->getStorage().getSecurityHandler()->isAllowed(PDFSecurityHandler::Permission::ModifyInteractiveItems);
+        const bool isEnabled = PDFFirePermissions::canAnnotate(getDocument());
         m_actionGroup->setEnabled(isEnabled);
 
         if (!isActive() && m_actionGroup->checkedAction())
@@ -246,7 +251,7 @@ void PDFCreateInDocumentHyperlinkTool::updateActions()
 
     if (m_actionGroup)
     {
-        const bool isEnabled = getDocument() && getDocument()->getStorage().getSecurityHandler()->isAllowed(PDFSecurityHandler::Permission::ModifyInteractiveItems);
+        const bool isEnabled = PDFFirePermissions::canAnnotate(getDocument());
         m_actionGroup->setEnabled(isEnabled);
 
         if (!isActive() && m_actionGroup->checkedAction())
@@ -532,7 +537,7 @@ void PDFCreateAnnotationTool::updateActions()
 {
     if (QAction* action = getAction())
     {
-        const bool isEnabled = getDocument() && getDocument()->getStorage().getSecurityHandler()->isAllowed(PDFSecurityHandler::Permission::ModifyInteractiveItems);
+        const bool isEnabled = PDFFirePermissions::canAnnotate(getDocument());
         action->setChecked(isActive());
         action->setEnabled(isEnabled);
     }
@@ -593,7 +598,7 @@ void PDFCreateLineTypeTool::onPointPicked(PDFInteger pageIndex, QPointF pagePoin
         m_pickTool->makeLastPointOrthogonal();
     }
 
-    if (m_type == Type::Line && m_pickTool->getPickedPoints().size() == 2)
+    if ((m_type == Type::Line || m_type == Type::Arrow) && m_pickTool->getPickedPoints().size() == 2)
     {
         finishDefinition();
     }
@@ -619,14 +624,18 @@ void PDFCreateLineTypeTool::finishDefinition()
     switch (m_type)
     {
         case Type::Line:
+        case Type::Arrow:
         {
             if (pickedPoints.size() >= 2)
             {
                 PDFDocumentModifier modifier(getDocument());
 
+                // PDF Fire: an arrow is a line annotation with a closed arrowhead at the
+                // point clicked last (the place pointed at) - other readers show it too
+                const AnnotationLineEnding endLineEnding = (m_type == Type::Arrow) ? AnnotationLineEnding::ClosedArrow : AnnotationLineEnding::None;
                 QString author = PDFAuthorSettings::getAuthorName();
                 PDFObjectReference page = getDocument()->getCatalog()->getPage(m_pickTool->getPageIndex())->getPageReference();
-                modifier.getBuilder()->createAnnotationLine(page, QRectF(), pickedPoints.front(), pickedPoints.back(), penWidth, fillColor, strokeColor, author, QString(), QString(), AnnotationLineEnding::None, AnnotationLineEnding::None);
+                modifier.getBuilder()->createAnnotationLine(page, QRectF(), pickedPoints.front(), pickedPoints.back(), penWidth, fillColor, strokeColor, author, QString(), QString(), AnnotationLineEnding::None, endLineEnding);
                 modifier.markAnnotationsChanged();
 
                 if (modifier.finalize())
@@ -760,6 +769,7 @@ bool PDFCreateLineTypeTool::canHaveOrthogonalMode() const
     switch (m_type)
     {
     case Type::Line:
+    case Type::Arrow:
     case Type::PolyLine:
     case Type::Polygon:
         return true;
@@ -939,6 +949,27 @@ void PDFCreateLineTypeTool::drawPage(QPainter* painter,
                 painter->drawLine(points[i - 1], points[i]);
             }
             painter->drawLine(points.back(), mousePoint);
+            break;
+        }
+
+        case Type::Arrow:
+        {
+            // PDF Fire: the arrowhead is shown while the arrow is being drawn
+            const QLineF line(points.back(), mousePoint);
+            painter->drawLine(line);
+            if (line.length() > 0.0)
+            {
+                const PDFReal headLength = qMax<PDFReal>(style.penWidth * 6.0, 6.0);
+                QLineF side1 = QLineF(mousePoint, points.back());
+                side1.setLength(headLength);
+                QLineF side2 = side1;
+                side1.setAngle(side1.angle() + 15.0);
+                side2.setAngle(side2.angle() - 15.0);
+                QPolygonF head;
+                head << mousePoint << side1.p2() << side2.p2();
+                painter->setBrush(painter->pen().color());
+                painter->drawPolygon(head);
+            }
             break;
         }
 
@@ -1134,12 +1165,50 @@ void PDFCreateEllipseTool::onRectanglePicked(PDFInteger pageIndex, QRectF pageRe
     setActive(false);
 }
 
+/// PDF Fire: a pencil cursor, its tip (the hot spot) is the point, where the line is drawn.
+/// It is drawn, not loaded - a white pencil with a dark outline is seen on any page.
+static QCursor createPencilCursor()
+{
+    const qreal ratio = qApp ? qApp->devicePixelRatio() : 1.0;
+    const int size = 32;
+    QPixmap pixmap(QSize(size, size) * ratio);
+    pixmap.setDevicePixelRatio(ratio);
+    pixmap.fill(Qt::transparent);
+    {
+        QPainter painter(&pixmap);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.translate(2, size - 2);
+        painter.rotate(-45);
+
+        // Body of the pencil (along the x axis from the tip)
+        QPen outline(QColor(20, 20, 20), 1.6);
+        outline.setJoinStyle(Qt::RoundJoin);
+        painter.setPen(outline);
+        QPolygonF tip;
+        tip << QPointF(0, 0) << QPointF(9, -4) << QPointF(9, 4);
+        painter.setBrush(QColor(245, 222, 179));
+        painter.drawPolygon(tip);
+        painter.setBrush(QColor(40, 40, 40));
+        QPolygonF lead;
+        lead << QPointF(0, 0) << QPointF(3.2, -1.4) << QPointF(3.2, 1.4);
+        painter.drawPolygon(lead);
+        painter.setBrush(QColor(255, 196, 0));
+        painter.drawRect(QRectF(9, -4, 22, 8));
+        painter.setBrush(QColor(232, 89, 12));
+        painter.drawRoundedRect(QRectF(31, -4, 6, 8), 1.5, 1.5);
+    }
+    return QCursor(pixmap, 1, size - 2);
+}
+
 PDFCreateFreehandCurveTool::PDFCreateFreehandCurveTool(PDFDrawWidgetProxy* proxy, PDFToolManager* toolManager, QAction* action, QObject* parent) :
     BaseClass(proxy, action, parent),
     m_toolManager(toolManager),
     m_styleManager(nullptr),
     m_pageIndex(-1)
 {
+    // PDF Fire: the mouse is a pencil, so it is clear, that the user draws
+    setCursor(createPencilCursor());
+
     PDFAnnotationStyle defaultStyle;
     defaultStyle.strokeColor = Qt::red;
     defaultStyle.fillColor = QColor();
@@ -1391,7 +1460,7 @@ void PDFCreateStampTool::updateActions()
 
     if (m_actionGroup)
     {
-        const bool isEnabled = getDocument() && getDocument()->getStorage().getSecurityHandler()->isAllowed(PDFSecurityHandler::Permission::ModifyInteractiveItems);
+        const bool isEnabled = PDFFirePermissions::canAnnotate(getDocument());
         m_actionGroup->setEnabled(isEnabled);
 
         if (!isActive() && m_actionGroup->checkedAction())
@@ -1597,7 +1666,7 @@ void PDFCreateHighlightTextTool::updateActions()
 
     if (m_actionGroup)
     {
-        const bool isEnabled = getDocument() && getDocument()->getStorage().getSecurityHandler()->isAllowed(PDFSecurityHandler::Permission::ModifyInteractiveItems);
+        const bool isEnabled = PDFFirePermissions::canAnnotate(getDocument());
         m_actionGroup->setEnabled(isEnabled);
 
         if (!isActive() && m_actionGroup->checkedAction())
@@ -2078,13 +2147,24 @@ void PDFDeleteAnnotationTool::mouseMoveEvent(QWidget* widget, QMouseEvent* event
     Q_EMIT getProxy()->repaintNeeded();
 }
 
+void PDFCreateInsertPageNumbersTool::updateActions()
+{
+    BaseClass::updateActions();
+
+    // PDF Fire: the page numbers change the pages - not on a protected or certified document
+    if (QAction* action = getAction())
+    {
+        action->setEnabled(PDFFirePermissions::canModifyContent(getDocument()));
+    }
+}
+
 void PDFDeleteAnnotationTool::updateActions()
 {
     BaseClass::updateActions();
 
     if (QAction* action = getAction())
     {
-        const bool isEnabled = getDocument() && getDocument()->getStorage().getSecurityHandler()->isAllowed(PDFSecurityHandler::Permission::ModifyInteractiveItems);
+        const bool isEnabled = PDFFirePermissions::canAnnotate(getDocument());
         action->setChecked(isActive());
         action->setEnabled(isEnabled);
     }
@@ -2391,7 +2471,7 @@ void PDFCreateRedactTextTool::updateActions()
 {
     if (QAction* action = getAction())
     {
-        const bool isEnabled = getDocument() && getDocument()->getStorage().getSecurityHandler()->isAllowed(PDFSecurityHandler::Permission::ModifyInteractiveItems);
+        const bool isEnabled = PDFFirePermissions::canAnnotate(getDocument());
         action->setChecked(isActive());
         action->setEnabled(isEnabled);
     }

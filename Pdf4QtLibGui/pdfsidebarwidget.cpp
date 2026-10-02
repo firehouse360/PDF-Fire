@@ -21,6 +21,7 @@
 // SOFTWARE.
 
 #include "pdfsidebarwidget.h"
+#include "pdffirepermissions.h"
 #include "ui_pdfsidebarwidget.h"
 
 #include "pdfviewersettings.h"
@@ -47,7 +48,7 @@
 #include <QDesktopServices>
 #include <QMessageBox>
 #include <QPainter>
-#include <QTextToSpeech>
+#include "pdffirenaturalspeech.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QDialog>
@@ -388,7 +389,8 @@ void PDFSidebarWidget::selectPage(Page page)
         QToolButton* pushButton = pageInfo.second.button;
         if (pushButton)
         {
-            pushButton->setChecked(pageInfo.first == page);
+            // PDF Fire: no button is checked, while the panel is collapsed
+            pushButton->setChecked(pageInfo.first == page && !m_isCollapsed);
 
             QFont font = pushButton->font();
             font.setBold(pageInfo.first == page);
@@ -404,12 +406,11 @@ void PDFSidebarWidget::selectPage(Page page)
     if (page == Speech && ui->speechVoiceComboBox->count() == 0)
     {
         // Check, if speech engine is properly set
-        QStringList speechEngines = QTextToSpeech::availableEngines();
         const QString engineErrorMessage = m_textToSpeech ? m_textToSpeech->getEngineErrorMessage() : QString();
 
-        if (speechEngines.isEmpty())
+        if (PDFFireNaturalSpeech::getVoiceDirectory().isEmpty())
         {
-            QMessageBox::critical(this, tr("Error"), tr("Speech feature is unavailable. No speech engines detected. If you're using Linux, please install speech libraries like 'flite' or 'speechd'."));
+            QMessageBox::critical(this, tr("Error"), tr("Reading aloud is unavailable - the natural voices of PDF Fire are not installed. Reinstall PDF Fire."));
         }
         else if (!engineErrorMessage.isEmpty())
         {
@@ -438,8 +439,40 @@ std::vector<PDFSidebarWidget::Page> PDFSidebarWidget::getValidPages() const
     return result;
 }
 
+std::vector<pdf::PDFInteger> PDFSidebarWidget::getSelectedThumbnailPages() const
+{
+    std::vector<pdf::PDFInteger> pages;
+
+    if (ui->thumbnailsListView->isVisible() && ui->thumbnailsListView->selectionModel())
+    {
+        const QModelIndexList selectedIndexes = ui->thumbnailsListView->selectionModel()->selectedIndexes();
+        for (const QModelIndex& index : selectedIndexes)
+        {
+            pages.push_back(m_thumbnailsModel->getPageIndex(index));
+        }
+        std::sort(pages.begin(), pages.end());
+        pages.erase(std::unique(pages.begin(), pages.end()), pages.end());
+    }
+
+    return pages;
+}
+
+void PDFSidebarWidget::setThumbnailActions(const QList<QAction*>& actions)
+{
+    ui->thumbnailsListView->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    ui->thumbnailsListView->setContextMenuPolicy(Qt::ActionsContextMenu);
+    ui->thumbnailsListView->addActions(actions);
+}
+
 void PDFSidebarWidget::setCurrentPages(const std::vector<pdf::PDFInteger>& currentPages)
 {
+    // PDF Fire: several selected thumbnails are a selection of pages made by the user
+    // for an operation, scrolling of the document must not replace it by the current page
+    if (ui->thumbnailsListView->selectionModel() && ui->thumbnailsListView->selectionModel()->selectedIndexes().size() > 1)
+    {
+        return;
+    }
+
     if (!currentPages.empty() && ui->synchronizeThumbnailsButton->isChecked())
     {
         QModelIndex index = m_thumbnailsModel->index(currentPages.front(), 0, QModelIndex());
@@ -490,9 +523,31 @@ void PDFSidebarWidget::updateButtons()
     {
         if (pageInfo.second.button)
         {
-            pageInfo.second.button->setEnabled(!isEmpty(pageInfo.first));
+            // PDF Fire: a button, whose page has nothing to show for this document (no
+            // layers, no attachments, no signatures, no comments), is hidden. It used
+            // to stay visible and disabled, which looked like a button doing nothing.
+            const bool isPageEmpty = isEmpty(pageInfo.first);
+            pageInfo.second.button->setEnabled(!isPageEmpty);
+            pageInfo.second.button->setVisible(!isPageEmpty);
+            pageInfo.second.button->setToolTip(pageInfo.second.button->text());
         }
     }
+}
+
+void PDFSidebarWidget::setCollapsed(bool collapsed)
+{
+    if (m_isCollapsed == collapsed)
+    {
+        return;
+    }
+
+    m_isCollapsed = collapsed;
+    ui->stackedWidget->setVisible(!collapsed);
+
+    // Checks the button of the current page, or unchecks all of them
+    selectPage(m_currentPage);
+
+    Q_EMIT collapsedChanged(collapsed);
 }
 
 void PDFSidebarWidget::updatePageButtonIconSize()
@@ -576,7 +631,7 @@ void PDFSidebarWidget::updateSignatures(const std::vector<pdf::PDFSignatureVerif
         switch (signature.getType())
         {
             case pdf::PDFSignature::Type::Sig:
-                templateString = tr("Signature - %1");
+                templateString = signature.getCertification() > 0 ? tr("Certification - %1") : tr("Signature - %1");
                 break;
 
             case pdf::PDFSignature::Type::DocTimeStamp:
@@ -641,15 +696,51 @@ void PDFSidebarWidget::updateSignatures(const std::vector<pdf::PDFSignatureVerif
         QDateTime signingDate = signature.getSignatureDate();
         if (signingDate.isValid())
         {
-            QTreeWidgetItem* item = new QTreeWidgetItem(rootItem, QStringList(QString("Signing date/time: %2").arg(QLocale::system().toString(signingDate, QLocale::ShortFormat))));
+            QTreeWidgetItem* item = new QTreeWidgetItem(rootItem, QStringList(QString("Signing date/time: %2").arg(QLocale::system().toString(signingDate.toLocalTime(), QLocale::ShortFormat))));
             item->setIcon(0, infoIcon);
         }
 
         QDateTime timestampDate = signature.getTimestampDate();
         if (timestampDate.isValid())
         {
-            QTreeWidgetItem* item = new QTreeWidgetItem(rootItem, QStringList(QString("Timestamp: %2").arg(QLocale::system().toString(timestampDate, QLocale::ShortFormat))));
+            QTreeWidgetItem* item = new QTreeWidgetItem(rootItem, QStringList(QString("Timestamp: %2").arg(QLocale::system().toString(timestampDate.toLocalTime(), QLocale::ShortFormat))));
             item->setIcon(0, infoIcon);
+        }
+
+        // PDF Fire: the reason, the place and the signing record (audit trail) - all
+        // of them are a part of the signed data, they can't be changed unnoticed
+        auto addDetail = [rootItem, &infoIcon](const QString& caption, const QString& value)
+        {
+            if (!value.isEmpty())
+            {
+                QTreeWidgetItem* item = new QTreeWidgetItem(rootItem, QStringList(QString("%1: %2").arg(caption, value)));
+                item->setIcon(0, infoIcon);
+                item->setToolTip(0, value);
+            }
+        };
+        switch (signature.getCertification())
+        {
+            case 1: addDetail(tr("Certified"), tr("no changes allowed")); break;
+            case 2: addDetail(tr("Certified"), tr("form filling and signing allowed")); break;
+            case 3: addDetail(tr("Certified"), tr("form filling, signing and comments allowed")); break;
+            default: break;
+        }
+        addDetail(tr("Reason"), signature.getReason());
+        addDetail(tr("Location"), signature.getLocation());
+        addDetail(tr("Contact"), signature.getContactInfo());
+
+        const QString signingRecord = signature.getSigningRecord();
+        if (!signingRecord.isEmpty())
+        {
+            QTreeWidgetItem* recordRoot = new QTreeWidgetItem(rootItem, QStringList(tr("Signing record (covered by the signature)")));
+            recordRoot->setIcon(0, infoIcon);
+            recordRoot->setToolTip(0, signingRecord);
+            const QStringList recordLines = signingRecord.split(QChar('\n'), Qt::SkipEmptyParts);
+            for (int i = 1; i < recordLines.size(); ++i)
+            {
+                QTreeWidgetItem* item = new QTreeWidgetItem(recordRoot, QStringList(recordLines[i]));
+                item->setToolTip(0, recordLines[i]);
+            }
         }
 
         if (certificateInfo)
@@ -933,7 +1024,24 @@ void PDFSidebarWidget::onPageButtonClicked()
         if (pageInfo.second.button == pushButton)
         {
             Q_ASSERT(!isEmpty(pageInfo.first));
-            selectPage(pageInfo.first);
+
+            // PDF Fire: a click on the button of the page, which is displayed,
+            // collapses the panel. A click on any button expands it again.
+            if (pageInfo.first == m_currentPage && !m_isCollapsed)
+            {
+                setCollapsed(true);
+                break;
+            }
+
+            m_currentPage = pageInfo.first;
+            if (m_isCollapsed)
+            {
+                setCollapsed(false);
+            }
+            else
+            {
+                selectPage(pageInfo.first);
+            }
             break;
         }
     }
@@ -1285,6 +1393,23 @@ void PDFSidebarWidget::updateOutlineActions()
 
     m_outlineActionInheritZoom->setEnabled(canInheritZoom);
     m_outlineActionInheritZoomForAllChapters->setEnabled(countInheritableZoomLinks() > 0);
+
+    // PDF Fire: the outline is a part of the document - a protected or certified
+    // document doesn't allow changing it (only following the items)
+    if (m_document && !pdf::PDFFirePermissions::canModifyContent(m_document))
+    {
+        for (QAction* action : m_outlineActions)
+        {
+            if (action != m_outlineActionFollow)
+            {
+                action->setEnabled(false);
+            }
+        }
+        for (QAction* setTargetAction : m_outlineSetTargetActions)
+        {
+            setTargetAction->setEnabled(false);
+        }
+    }
 }
 
 void PDFSidebarWidget::onOutlineActionFollow()

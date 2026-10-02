@@ -346,6 +346,17 @@ if(NOT PDF4QT_BUILD_ONLY_CORE_LIBRARY)
     )
     add_test(UnitTestsAnnotationIntegration "${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}/UnitTestsAnnotationIntegration")
     set_tests_properties(UnitTestsAnnotationIntegration PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+    # PDF Fire: the natural voices
+    add_executable(UnitTestsNaturalSpeech tst_naturalspeechtest.cpp)
+    target_link_libraries(UnitTestsNaturalSpeech PRIVATE Pdf4QtLibGui Pdf4QtLibWidgets Pdf4QtLibCore Qt6::Widgets Qt6::Test)
+    set_target_properties(UnitTestsNaturalSpeech PROPERTIES
+        WIN32_EXECUTABLE OFF
+        MACOSX_BUNDLE OFF
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}
+    )
+    add_test(UnitTestsNaturalSpeech "${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}/UnitTestsNaturalSpeech")
+    set_tests_properties(UnitTestsNaturalSpeech PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
 add_executable(UnitTestsDocumentWriter tst_documentwritertest.cpp)
@@ -356,6 +367,43 @@ set_target_properties(UnitTestsDocumentWriter PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}
 )
 add_test(UnitTestsDocumentWriter "${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}/UnitTestsDocumentWriter")
+
+add_executable(UnitTestsEditedTextMarkup tst_editedtextmarkuptest.cpp)
+target_link_libraries(UnitTestsEditedTextMarkup PRIVATE Pdf4QtLibCore Qt6::Core Qt6::Gui Qt6::Test)
+set_target_properties(UnitTestsEditedTextMarkup PROPERTIES
+    WIN32_EXECUTABLE OFF
+    MACOSX_BUNDLE OFF
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}
+)
+add_test(UnitTestsEditedTextMarkup "${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}/UnitTestsEditedTextMarkup")
+
+find_package(Qt6 REQUIRED COMPONENTS Network Concurrent)
+add_executable(UnitTestsSmtpClient tst_smtpclienttest.cpp)
+target_link_libraries(UnitTestsSmtpClient PRIVATE Pdf4QtLibCore Qt6::Core Qt6::Gui Qt6::Network Qt6::Concurrent Qt6::Test)
+set_target_properties(UnitTestsSmtpClient PROPERTIES
+    WIN32_EXECUTABLE OFF
+    MACOSX_BUNDLE OFF
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}
+)
+add_test(UnitTestsSmtpClient "${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}/UnitTestsSmtpClient")
+
+add_executable(UnitTestsPageOperations tst_pageoperationstest.cpp)
+target_link_libraries(UnitTestsPageOperations PRIVATE Pdf4QtLibCore Qt6::Core Qt6::Gui Qt6::Test)
+set_target_properties(UnitTestsPageOperations PROPERTIES
+    WIN32_EXECUTABLE OFF
+    MACOSX_BUNDLE OFF
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}
+)
+add_test(UnitTestsPageOperations "${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}/UnitTestsPageOperations")
+
+add_executable(UnitTestsFormFields tst_formfieldstest.cpp)
+target_link_libraries(UnitTestsFormFields PRIVATE Pdf4QtLibCore Qt6::Core Qt6::Gui Qt6::Test)
+set_target_properties(UnitTestsFormFields PROPERTIES
+    WIN32_EXECUTABLE OFF
+    MACOSX_BUNDLE OFF
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}
+)
+add_test(UnitTestsFormFields "${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}/UnitTestsFormFields")
 
 add_executable(UnitTestsPDFObject tst_pdfobjecttest.cpp)
 target_link_libraries(UnitTestsPDFObject PRIVATE Pdf4QtLibCore Qt6::Core Qt6::Gui Qt6::Test)
@@ -406,4 +454,78 @@ if(NOT PDF4QT_BUILD_ONLY_CORE_LIBRARY)
     )
     add_test(UnitTestsDiffOverlay "${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}/UnitTestsDiffOverlay")
     set_tests_properties(UnitTestsDiffOverlay PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
+# PDF Fire: the invisible text layer of the OCR plugin (does not need Tesseract)
+if(NOT PDF4QT_BUILD_ONLY_CORE_LIBRARY)
+    add_executable(UnitTestsOcrTextLayer
+        tst_ocrtextlayertest.cpp
+        ../Pdf4QtEditorPlugins/OcrPlugin/ocrtextlayer.cpp
+    )
+    target_include_directories(UnitTestsOcrTextLayer PRIVATE ${CMAKE_SOURCE_DIR}/Pdf4QtEditorPlugins/OcrPlugin)
+    target_link_libraries(UnitTestsOcrTextLayer PRIVATE Pdf4QtLibCore Qt6::Core Qt6::Gui Qt6::Test)
+    set_target_properties(UnitTestsOcrTextLayer PROPERTIES
+        WIN32_EXECUTABLE OFF
+        MACOSX_BUNDLE OFF
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}
+    )
+    add_test(UnitTestsOcrTextLayer "${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}/UnitTestsOcrTextLayer")
+    set_tests_properties(UnitTestsOcrTextLayer PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
+# PDF Fire: watermarks, headers & footers, Bates numbers (PageMarksPlugin) written and removed
+if(NOT PDF4QT_BUILD_ONLY_CORE_LIBRARY)
+    add_executable(UnitTestsPageMarks
+        tst_pagemarkstest.cpp
+        ../Pdf4QtEditorPlugins/PageMarksPlugin/pagemarks.cpp
+    )
+    target_include_directories(UnitTestsPageMarks PRIVATE ${CMAKE_SOURCE_DIR}/Pdf4QtEditorPlugins/PageMarksPlugin)
+    target_link_libraries(UnitTestsPageMarks PRIVATE Pdf4QtLibCore Qt6::Core Qt6::Gui Qt6::Test)
+    set_target_properties(UnitTestsPageMarks PROPERTIES
+        WIN32_EXECUTABLE OFF
+        MACOSX_BUNDLE OFF
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}
+    )
+    add_test(UnitTestsPageMarks "${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}/UnitTestsPageMarks")
+    set_tests_properties(UnitTestsPageMarks PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
+# PDF Fire: redaction which keeps the text outside of the redacted areas
+add_executable(UnitTestsRedaction tst_redactiontest.cpp)
+target_link_libraries(UnitTestsRedaction PRIVATE Pdf4QtLibCore Qt6::Core Qt6::Gui Qt6::Test)
+set_target_properties(UnitTestsRedaction PROPERTIES
+    WIN32_EXECUTABLE OFF
+    MACOSX_BUNDLE OFF
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}
+)
+add_test(UnitTestsRedaction "${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}/UnitTestsRedaction")
+set_tests_properties(UnitTestsRedaction PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(UnitTestsEmbeddedFont tst_embeddedfonttest.cpp)
+target_link_libraries(UnitTestsEmbeddedFont PRIVATE Pdf4QtLibCore Qt6::Core Qt6::Gui Qt6::Test)
+set_target_properties(UnitTestsEmbeddedFont PROPERTIES
+    WIN32_EXECUTABLE OFF
+    MACOSX_BUNDLE OFF
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}
+)
+add_test(UnitTestsEmbeddedFont "${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}/UnitTestsEmbeddedFont")
+
+# PDF Fire: Export to Word Processor (ODT) - ZIP package, XML parts, paragraph building, conversion
+if(NOT PDF4QT_BUILD_ONLY_CORE_LIBRARY)
+    add_executable(UnitTestsOdtExport
+        tst_odtexporttest.cpp
+        ../Pdf4QtEditorPlugins/ExportPlugin/pdftoodtconverter.cpp
+        ../Pdf4QtEditorPlugins/ExportPlugin/odtlayout.cpp
+        ../Pdf4QtEditorPlugins/ExportPlugin/odtwriter.cpp
+        ../Pdf4QtEditorPlugins/ExportPlugin/odtzipwriter.cpp
+    )
+    target_include_directories(UnitTestsOdtExport PRIVATE ${CMAKE_SOURCE_DIR}/Pdf4QtEditorPlugins/ExportPlugin)
+    target_link_libraries(UnitTestsOdtExport PRIVATE Pdf4QtLibCore Qt6::Core Qt6::Gui Qt6::Test ZLIB::ZLIB)
+    set_target_properties(UnitTestsOdtExport PROPERTIES
+        WIN32_EXECUTABLE OFF
+        MACOSX_BUNDLE OFF
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}
+    )
+    add_test(UnitTestsOdtExport "${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}/UnitTestsOdtExport")
+    set_tests_properties(UnitTestsOdtExport PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()

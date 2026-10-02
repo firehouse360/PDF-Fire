@@ -37,6 +37,7 @@ add_library(Pdf4QtLibGui SHARED
     pdfoptimizeimagesdialog.h
     pdfprogramcontroller.cpp
     pdfprogramcontroller.h
+    pdfprogramcontroller_pages.cpp
     pdfrecentfilemanager.cpp
     pdfrecentfilemanager.h
     pdfrendertoimagesdialog.cpp
@@ -51,6 +52,18 @@ add_library(Pdf4QtLibGui SHARED
     pdfundoredomanager.h
     pdfeditormainwindow.cpp
     pdfeditormainwindow.h
+    pdfeditormainwindow_ribbon.cpp
+    pdffireribbon.cpp
+    pdffireribbon.h
+    pdffiretheme.cpp
+    pdffiretheme.h
+    pdffireemaildialog.cpp
+    pdffireemaildialog.h
+    pdffireprintdialog.cpp
+    pdffireprintdialog.h
+    pdffirewelcome.cpp
+    pdffirewelcome.h
+    pdffire.qrc
     pdfviewermainwindow.cpp
     pdfviewermainwindow.h
     pdfviewersettings.cpp
@@ -85,6 +98,10 @@ add_library(Pdf4QtLibGui SHARED
     pdfactioncombobox.cpp
     pdffullscreenwidget.h
     pdffullscreenwidget.cpp
+    pdffireg2p.cpp
+    pdffireg2p.h
+    pdffirenaturalspeech.cpp
+    pdffirenaturalspeech.h
 )
 
 add_compile_definitions(QT_INSTALL_DIRECTORY="${QT6_INSTALL_PREFIX}")
@@ -96,7 +113,19 @@ GENERATE_EXPORT_HEADER(Pdf4QtLibGui
                        PDF4QTLIBGUILIBSHARED_EXPORT
                        EXPORT_FILE_NAME "${CMAKE_BINARY_DIR}/${INSTALL_INCLUDEDIR}/pdf4qtlibgui_export.h")
 
-target_link_libraries(Pdf4QtLibGui PRIVATE Pdf4QtLibCore Pdf4QtLibWidgets Qt6::Core Qt6::Gui Qt6::Widgets Qt6::PrintSupport Qt6::TextToSpeech Qt6::Xml Qt6::Svg)
+target_link_libraries(Pdf4QtLibGui PRIVATE Pdf4QtLibCore Pdf4QtLibWidgets Qt6::Core Qt6::Gui Qt6::Widgets Qt6::PrintSupport Qt6::Xml Qt6::Svg Qt6::Concurrent Qt6::Multimedia)
+
+# PDF Fire: the natural voices (Kokoro model, Apache 2.0) run on ONNX Runtime (MIT).
+# The runtime and the voice data (deps/kokoro) are installed with the program.
+set(PDFFIRE_KOKORO_DIR "${CMAKE_SOURCE_DIR}/../deps/kokoro" CACHE PATH "Folder with ONNX Runtime and the voice data")
+set(PDFFIRE_ONNXRUNTIME_DIR "${PDFFIRE_KOKORO_DIR}/onnxruntime-linux-x64-1.23.2" CACHE PATH "ONNX Runtime (headers and the library)")
+target_include_directories(Pdf4QtLibGui PRIVATE ${PDFFIRE_ONNXRUNTIME_DIR}/include)
+target_link_libraries(Pdf4QtLibGui PRIVATE ${PDFFIRE_ONNXRUNTIME_DIR}/lib/libonnxruntime.so)
+target_compile_definitions(Pdf4QtLibGui PRIVATE PDFFIRE_DEV_VOICE_DIR="${PDFFIRE_KOKORO_DIR}/voice")
+file(GLOB PDFFIRE_ONNXRUNTIME_LIBRARIES "${PDFFIRE_ONNXRUNTIME_DIR}/lib/libonnxruntime.so.*")
+install(FILES ${PDFFIRE_ONNXRUNTIME_LIBRARIES} DESTINATION ${PDF4QT_INSTALL_LIB_DIR})
+install(DIRECTORY ${PDFFIRE_KOKORO_DIR}/voice DESTINATION share/pdf-fire)
+install(FILES ${PDFFIRE_ONNXRUNTIME_DIR}/LICENSE DESTINATION share/pdf-fire/voice RENAME LICENSE-onnxruntime.txt)
 target_include_directories(Pdf4QtLibGui INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(Pdf4QtLibGui PUBLIC ${CMAKE_BINARY_DIR}/${INSTALL_INCLUDEDIR})
 

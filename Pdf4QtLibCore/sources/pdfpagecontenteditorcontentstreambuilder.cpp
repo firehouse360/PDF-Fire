@@ -21,6 +21,10 @@
 // SOFTWARE.
 
 #include "pdfpagecontenteditorcontentstreambuilder.h"
+#include "pdffireembeddedfont.h"
+
+#include <QRawFont>
+#include <QTextItem>
 #include "pdfdocumentbuilder.h"
 #include "pdfobject.h"
 #include "pdfstreamfilters.h"
@@ -124,6 +128,7 @@ public:
 
     virtual void drawPath(const QPainterPath& path) override;
     virtual void drawPolygon(const QPointF* points, int pointCount, PolygonDrawMode mode) override;
+    virtual void drawTextItem(const QPointF& p, const QTextItem& textItem) override;
 
 private:
     /// Applies clip operation with the given path. The path is expressed
@@ -142,6 +147,7 @@ private:
     bool m_isClipEnabled = true;
     bool m_isFillActive = false;
     bool m_isStrokeActive = false;
+    QColor m_penColor = Qt::black;
 };
 
 bool PDFContentEditorPaintEngine::begin(QPaintDevice*)
@@ -162,6 +168,7 @@ void PDFContentEditorPaintEngine::updateState(const QPaintEngineState& newState)
     {
         PDFPainterHelper::applyPenToGraphicState(&m_state, newState.pen());
         m_isStrokeActive = newState.pen().style() != Qt::NoPen;
+        m_penColor = newState.pen().color();
     }
 
     if (stateFlags.testFlag(QPaintEngine::DirtyBrush))
@@ -265,6 +272,18 @@ void PDFContentEditorPaintEngine::drawPixmap(const QRectF& r, const QPixmap& pm,
 void PDFContentEditorPaintEngine::drawPath(const QPainterPath& path)
 {
     m_builder->writeStyledPath(path, m_state, m_isStrokeActive, m_isFillActive, getEffectiveClipPath());
+}
+
+void PDFContentEditorPaintEngine::drawTextItem(const QPointF& p, const QTextItem& textItem)
+{
+    // PDF Fire: the text is written as real text with an embedded font (it was always
+    // drawn as outlines - not searchable, not copyable). When the font cannot be
+    // embedded, the text is drawn as outlines by the default implementation.
+    if (textItem.renderFlags().testFlag(QTextItem::RightToLeft) ||
+        !m_builder->writeTextWithEmbeddedFont(textItem.font(), textItem.text(), p, m_state, m_penColor, getEffectiveClipPath()))
+    {
+        QPaintEngine::drawTextItem(p, textItem);
+    }
 }
 
 void PDFContentEditorPaintEngine::drawPolygon(const QPointF* points,
@@ -1148,6 +1167,7 @@ void PDFPageContentEditorContentStreamBuilder::writeText(QTextStream& stream, co
         }
     }
 
+    flushPendingText(stream);
     stream << "ET Q" << Qt::endl;
 
     m_currentState = savedState;
@@ -1157,6 +1177,14 @@ void PDFPageContentEditorContentStreamBuilder::writeTextCommand(QTextStream& str
 {
     const QXmlStreamAttributes attributes = reader.attributes();
     const QString tag = reader.name().toString();
+
+    // Every command except the kerning and a glyph ends the collected text (see
+    // writeTextHexString). PDF Fire: a glyph (a ligature like "ti") is a part of the text -
+    // ending the text at it split the line, and the line was read back with a gap.
+    if (tag != QLatin1String("space") && tag != QLatin1String("character"))
+    {
+        flushPendingText(stream);
+    }
 
     auto isCommand = [&reader](const char* tag) -> bool
     {
@@ -1340,7 +1368,7 @@ void PDFPageContentEditorContentStreamBuilder::writeTextCommand(QTextStream& str
             }
             else
             {
-                stream << "[ " << formatNumber(advance) << " ] TJ" << Qt::endl;
+                m_pendingTextArray += formatNumber(advance) + " ";
             }
         }
         else
@@ -1350,7 +1378,9 @@ void PDFPageContentEditorContentStreamBuilder::writeTextCommand(QTextStream& str
     }
     else if (tag == "character")
     {
-        if (attributes.size() == 1 && attributes.hasAttribute("cid"))
+        // PDF Fire: the glyph can have its text too (a ligature, like "ti") - it is only
+        // informative here, the glyph itself is written by its code
+        if (attributes.hasAttribute("cid") && (attributes.size() == 1 || (attributes.size() == 2 && attributes.hasAttribute("text"))))
         {
             if (!m_textFont)
             {
@@ -1546,11 +1576,13 @@ void PDFPageContentEditorContentStreamBuilder::writeTextWithFallback(QTextStream
 
             for (const PDFEditorFallbackFontManager::Run& fallbackRun : fallbackRuns)
             {
+                flushPendingText(stream);
                 stream << "/" << fallbackRun.fontResourceKey << " " << formatNumber(m_currentTextFontSize) << " Tf" << Qt::endl;
                 writeTextHexString(stream, fallbackRun.encodedBytes);
             }
 
             // Restore the original font
+            flushPendingText(stream);
             stream << "/" << m_currentTextFontKey << " " << formatNumber(m_currentTextFontSize) << " Tf" << Qt::endl;
         }
     }
@@ -1558,7 +1590,21 @@ void PDFPageContentEditorContentStreamBuilder::writeTextWithFallback(QTextStream
 
 void PDFPageContentEditorContentStreamBuilder::writeTextHexString(QTextStream& stream, const QByteArray& encodedText)
 {
-    stream << "<" << encodedText.toHex() << "> Tj" << Qt::endl;
+    // PDF Fire: the strings and the kerning are collected into one TJ operator (see
+    // flushPendingText). Written as separate operators, every one of them moved the text
+    // matrix, so the text read back had an absolute position after every piece - and the
+    // next edit could not move the text after it anymore (a deleted letter left a gap).
+    Q_UNUSED(stream);
+    m_pendingTextArray += "<" + QString::fromLatin1(encodedText.toHex()) + "> ";
+}
+
+void PDFPageContentEditorContentStreamBuilder::flushPendingText(QTextStream& stream)
+{
+    if (!m_pendingTextArray.isEmpty())
+    {
+        stream << "[ " << m_pendingTextArray << "] TJ" << Qt::endl;
+        m_pendingTextArray.clear();
+    }
 }
 
 void PDFPageContentEditorContentStreamBuilder::writeImage(QTextStream& stream, const QImage& image)
@@ -1888,6 +1934,89 @@ void PDFPageContentEditorContentStreamBuilder::writeStyledPath(const QPainterPat
     if (isNeededGraphicStateSave)
     {
         stream << "Q" << Qt::endl;
+    }
+}
+
+bool PDFPageContentEditorContentStreamBuilder::writeTextWithEmbeddedFont(const QFont& font,
+                                                                         const QString& text,
+                                                                         QPointF position,
+                                                                         const PDFPageContentProcessorState& state,
+                                                                         const QColor& color,
+                                                                         const QPainterPath& clipPath)
+{
+    if (text.isEmpty())
+    {
+        return true;
+    }
+
+    const QRawFont rawFont = QRawFont::fromFont(font);
+    if (!rawFont.isValid())
+    {
+        return false;
+    }
+
+    // One embedded font for every face of a font
+    const QString fontId = QString("%1|%2|%3").arg(rawFont.familyName(), rawFont.styleName()).arg(int(rawFont.weight()));
+    auto it = m_embeddedFonts.find(fontId);
+    if (it == m_embeddedFonts.end())
+    {
+        EmbeddedFont embeddedFont;
+        auto fontObject = std::make_shared<PDFFireEmbeddedFont>();
+        if (fontObject->initialize(rawFont))
+        {
+            embeddedFont.font = std::move(fontObject);
+            int index = 1;
+            QByteArray key;
+            do
+            {
+                key = "PFE" + QByteArray::number(index++);
+            }
+            while (m_fontDictionary.hasKey(key) || std::any_of(m_embeddedFonts.cbegin(), m_embeddedFonts.cend(), [&key](const auto& item) { return item.second.key == key; }));
+            embeddedFont.key = key;
+        }
+        it = m_embeddedFonts.emplace(fontId, std::move(embeddedFont)).first;
+    }
+
+    QByteArray glyphs;
+    if (!it->second.font || !it->second.font->addText(text, &glyphs))
+    {
+        return false;
+    }
+
+    // The size in the units of the painter: the paint device has 72 dots per inch
+    const PDFReal fontSize = font.pixelSize() > 0 ? PDFReal(font.pixelSize()) : font.pointSizeF();
+
+    finishTransparencyGroups();
+
+    PDFPageContentProcessorState newState = state;
+    PDFPainterHelper::applyBrushToGraphicState(&newState, QBrush(color));
+
+    QTextStream stream(&m_outputContent, QDataStream::WriteOnly | QDataStream::Append);
+    writeStateDifference(stream, newState);
+
+    stream << "q" << Qt::endl;
+    if (!clipPath.isEmpty())
+    {
+        writeClipPath(stream, clipPath);
+    }
+    writeCurrentTransformationMatrix(stream);
+
+    // The painter has the y axis down - the text matrix turns the glyphs upright
+    stream << "BT /" << it->second.key << " " << formatNumber(fontSize) << " Tf 0 Tr 1 0 0 -1 "
+           << formatNumber(position.x()) << " " << formatNumber(position.y()) << " Tm <"
+           << glyphs.toHex().toUpper() << "> Tj ET" << Qt::endl;
+    stream << "Q" << Qt::endl;
+    return true;
+}
+
+void PDFPageContentEditorContentStreamBuilder::finishEmbeddedFonts()
+{
+    for (const auto& [id, embeddedFont] : m_embeddedFonts)
+    {
+        if (embeddedFont.font)
+        {
+            m_fontDictionary.setEntry(PDFInplaceOrMemoryString(embeddedFont.key), embeddedFont.font->createFontObject());
+        }
     }
 }
 

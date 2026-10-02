@@ -74,6 +74,14 @@ public:
     /// \param document Document to be written
     PDFOperationResult writeIncrementalUpdate(QIODevice* device, const QByteArray& originalData, const PDFDocument* document);
 
+    /// PDF Fire: writes the document to a file as an incremental update of the original
+    /// data (see the function above). The file is replaced only if the whole update is
+    /// written successfully, so the original data can come from the very same file.
+    /// \param fileName File name
+    /// \param originalData Data of the original document
+    /// \param document Document to be written
+    PDFOperationResult writeIncrementalUpdate(const QString& fileName, const QByteArray& originalData, const PDFDocument* document);
+
     /// Calculates document file size, as if it is written to the disk.
     /// No file is accessed by this function; document is written
     /// to fake stream, which counts operations. If error occurs, and

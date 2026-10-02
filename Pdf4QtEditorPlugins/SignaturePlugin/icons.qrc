@@ -4,6 +4,8 @@
         <file>reject-mark.svg</file>
         <file>activate.svg</file>
         <file>certificates.svg</file>
+        <file>department.svg</file>
+        <file>certify.svg</file>
         <file>clear.svg</file>
         <file>create-dot.svg</file>
         <file>create-freehand-curve.svg</file>
@@ -18,5 +20,11 @@
         <file>create-yes-mark.svg</file>
         <file>sign-digitally.svg</file>
         <file>sign-electronically.svg</file>
+        <file>fonts/GreatVibes-Regular.ttf</file>
+        <file>fonts/DancingScript.ttf</file>
+        <file>fonts/Allura-Regular.ttf</file>
+        <file>fonts/Sacramento-Regular.ttf</file>
+        <file>fonts/HomemadeApple-Regular.ttf</file>
+        <file>fonts/Caveat.ttf</file>
     </qresource>
 </RCC>

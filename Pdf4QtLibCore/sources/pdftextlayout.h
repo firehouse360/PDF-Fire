@@ -48,6 +48,9 @@ struct PDFTextCharacterInfo
     /// Character
     QChar character;
 
+    /// PDF Fire: text of a glyph standing for several characters (a ligature), otherwise empty
+    QString text;
+
     /// Character path
     QPainterPath outline;
 
