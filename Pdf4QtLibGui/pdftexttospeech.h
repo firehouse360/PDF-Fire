@@ -130,6 +130,7 @@ private:
     void updateVoices();
     void updateEngineLists();
     void updateToNextPage(pdf::PDFInteger pageIndex);
+    void removePageFurniture(pdf::PDFTextFlows& flows, pdf::PDFInteger pageIndex, pdf::PDFInteger pageCount) const;
 
     PDFFireNaturalSpeech* m_textToSpeech;   ///< PDF Fire: the natural voices
     const pdf::PDFDocument* m_document;

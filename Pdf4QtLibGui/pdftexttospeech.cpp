@@ -342,8 +342,19 @@ void PDFTextToSpeech::updateUI()
     // PDF Fire: the natural voices have their own pitch - it can't be changed
     m_speechPitchEdit->setEnabled(false);
     m_speechPitchEdit->setToolTip(tr("The natural voices have their own pitch."));
-    m_speechPlayButton->setEnabled(enablePlay);
-    m_speechPauseButton->setEnabled(enablePause);
+    // PDF Fire: the play button lights up (the accent colour of a checked button) while
+    // the document is read, the pause button while it is paused - a greyed-out play
+    // button looked like nothing was happening
+    m_speechPlayButton->setCheckable(true);
+    m_speechPlayButton->setChecked(m_state == Playing);
+    m_speechPlayButton->setEnabled(enablePlay || m_state == Playing);
+    m_speechPlayButton->setToolTip(m_state == Playing ? tr("Reading aloud...") : (m_state == Paused ? tr("Continue reading") : tr("Read aloud from the page shown")));
+    m_speechPauseButton->setCheckable(true);
+    m_speechPauseButton->setChecked(m_state == Paused);
+    m_speechPauseButton->setEnabled(enablePause || m_state == Paused);
+    m_speechPauseButton->setToolTip(tr("Pause"));
+    m_speechStopButton->setToolTip(tr("Stop"));
+    m_speechSynchronizeButton->setToolTip(tr("Follow the reading - the pages turn with the voice"));
     m_speechStopButton->setEnabled(enableStop);
     m_speechSynchronizeButton->setEnabled(enableControls);
 }
@@ -534,7 +545,12 @@ void PDFTextToSpeech::onPlayClicked()
 
 void PDFTextToSpeech::onPauseClicked()
 {
-    Q_ASSERT(m_state == Playing);
+    if (m_state == Paused)
+    {
+        // The lit pause button pressed again - it continues, as play does
+        onPlayClicked();
+        return;
+    }
 
     if (m_state == Playing)
     {
@@ -591,12 +607,20 @@ void PDFTextToSpeech::updatePlay()
             // Say next thing
             const pdf::PDFTextFlow& textFlow = m_textFlows[m_currentTextFlowIndex];
             QString text = textFlow.getText();
+            if (qEnvironmentVariableIsSet("PDFFIRE_DEBUG_SPEECH"))
+            {
+                qInfo("PDFFIRE_SPEECH page %lld flow %zu/%zu: %s", static_cast<long long>(m_currentPage), m_currentTextFlowIndex + 1, m_textFlows.size(), qPrintable(text.left(60)));
+            }
             m_textToSpeech->say(text);
             m_speechActualTextBrowser->setText(text);
         }
         else
         {
             // We are finished the reading
+            if (qEnvironmentVariableIsSet("PDFFIRE_DEBUG_SPEECH"))
+            {
+                qInfo("PDFFIRE_SPEECH finished at page %lld (flows %zu)", static_cast<long long>(m_currentPage), m_textFlows.size());
+            }
             m_state = Ready;
         }
     }
@@ -606,6 +630,94 @@ void PDFTextToSpeech::updatePlay()
     }
 
     updateUI();
+}
+
+/// PDF Fire: how many blocks at the top and at the bottom of a page can be a header / footer
+static constexpr size_t PAGE_FURNITURE_EDGE = 3;
+
+/// PDF Fire: the text of a header / footer without the numbers and the separators
+/// ("ProRock Fire Association | 1" -> "prorock fire association")
+static QString normalizePageFurniture(const QString& text)
+{
+    QString result;
+    for (const QChar character : text.toLower())
+    {
+        if (character.isLetter())
+        {
+            result += character;
+        }
+        else if (character.isSpace() && !result.isEmpty() && !result.endsWith(QChar(' ')))
+        {
+            result += QChar(' ');
+        }
+    }
+    return result.trimmed();
+}
+
+void PDFTextToSpeech::removePageFurniture(pdf::PDFTextFlows& flows, pdf::PDFInteger pageIndex, pdf::PDFInteger pageCount) const
+{
+    // PDF Fire: the running headers and footers and the page numbers are not read - a
+    // footer like "ProRock Fire Association | 1" sounded like the document starting over.
+    // A block is page furniture, when it is one of the first (or last) blocks of the page
+    // and the neighbouring page has the same text there (numbers ignored), or when it
+    // is only a page number ("1", "| 1", "Page 2 of 3").
+    if (flows.empty())
+    {
+        return;
+    }
+
+    pdf::PDFAsynchronousTextLayoutCompiler* compiler = m_proxy->getTextLayoutCompiler();
+    auto edgeTexts = [compiler, pageCount](pdf::PDFInteger neighbourIndex, bool isTop) -> QStringList
+    {
+        QStringList texts;
+        if (neighbourIndex < 0 || neighbourIndex >= pageCount)
+        {
+            return texts;
+        }
+        pdf::PDFTextLayout layout = compiler->getTextLayout(neighbourIndex);
+        const pdf::PDFTextFlows neighbourFlows = pdf::PDFTextFlow::createTextFlows(layout, pdf::PDFTextFlow::SeparateBlocks | pdf::PDFTextFlow::RemoveSoftHyphen, neighbourIndex);
+        const size_t count = std::min(PAGE_FURNITURE_EDGE, neighbourFlows.size());
+        for (size_t i = 0; i < count; ++i)
+        {
+            const pdf::PDFTextFlow& flow = isTop ? neighbourFlows[i] : neighbourFlows[neighbourFlows.size() - 1 - i];
+            texts << normalizePageFurniture(flow.getText());
+        }
+        return texts;
+    };
+
+    const QStringList topTexts = edgeTexts(pageIndex - 1, true) + edgeTexts(pageIndex + 1, true);
+    const QStringList bottomTexts = edgeTexts(pageIndex - 1, false) + edgeTexts(pageIndex + 1, false);
+    static const QStringList pageWords = { QString(), QStringLiteral("page"), QStringLiteral("page of"), QStringLiteral("of") };
+
+    pdf::PDFTextFlows kept;
+    for (size_t i = 0; i < flows.size(); ++i)
+    {
+        const QString text = flows[i].getText().simplified();
+        const QString normalized = normalizePageFurniture(text);
+        const bool isTop = i < PAGE_FURNITURE_EDGE;
+        const bool isBottom = i + PAGE_FURNITURE_EDGE >= flows.size();
+        bool isFurniture = false;
+
+        if ((isTop || isBottom) && text.size() <= 24 && pageWords.contains(normalized))
+        {
+            // Only a page number
+            isFurniture = true;
+        }
+        else if (text.size() <= 120 && !normalized.isEmpty())
+        {
+            isFurniture = (isTop && topTexts.contains(normalized)) || (isBottom && bottomTexts.contains(normalized));
+        }
+
+        if (!isFurniture)
+        {
+            kept.push_back(flows[i]);
+        }
+        else if (qEnvironmentVariableIsSet("PDFFIRE_DEBUG_SPEECH"))
+        {
+            qInfo("PDFFIRE_SPEECH page %lld skips header/footer: %s", static_cast<long long>(pageIndex), qPrintable(text.left(60)));
+        }
+    }
+    flows = std::move(kept);
 }
 
 void PDFTextToSpeech::updateToNextPage(pdf::PDFInteger pageIndex)
@@ -628,6 +740,7 @@ void PDFTextToSpeech::updateToNextPage(pdf::PDFInteger pageIndex)
     {
         m_currentTextLayout = compiler->getTextLayout(m_currentPage);
         m_textFlows = pdf::PDFTextFlow::createTextFlows(m_currentTextLayout, pdf::PDFTextFlow::SeparateBlocks | pdf::PDFTextFlow::RemoveSoftHyphen, m_currentPage);
+        removePageFurniture(m_textFlows, m_currentPage, pageCount);
 
         if (!m_textFlows.empty())
         {
