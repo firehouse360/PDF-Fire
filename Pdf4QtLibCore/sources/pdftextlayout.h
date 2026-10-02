@@ -128,7 +128,7 @@ struct TextCharacter
 using TextCharacters = std::vector<TextCharacter>;
 
 /// Represents text line consisting of set of characters and line bounding box.
-class PDFTextLine
+class PDF4QTLIBCORESHARED_EXPORT PDFTextLine
 {
 public:
     explicit inline PDFTextLine() = default;
@@ -159,7 +159,7 @@ private:
 using PDFTextLines = std::vector<PDFTextLine>;
 
 /// Represents text block consisting of set of lines and block bounding box.
-class PDFTextBlock
+class PDF4QTLIBCORESHARED_EXPORT PDFTextBlock
 {
 public:
     explicit inline PDFTextBlock() = default;

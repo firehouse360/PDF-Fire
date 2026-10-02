@@ -143,8 +143,14 @@ bool KokoroModel::load(QString* errorMessage)
         options.SetIntraOpNumThreads(threads);
         options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
         const QString modelName = qEnvironmentVariableIsSet("PDFFIRE_SPEECH_MODEL") ? qEnvironmentVariable("PDFFIRE_SPEECH_MODEL") : QStringLiteral("kokoro.onnx");
+#ifdef Q_OS_WIN
+        // ONNX Runtime takes the path as a wide string on Windows
+        const std::wstring modelPath = QDir::toNativeSeparators(QDir(m_directory).filePath(modelName)).toStdWString();
+        m_session = std::make_unique<Ort::Session>(*m_env, modelPath.c_str(), options);
+#else
         const QByteArray modelPath = QDir(m_directory).filePath(modelName).toLocal8Bit();
         m_session = std::make_unique<Ort::Session>(*m_env, modelPath.constData(), options);
+#endif
 
         Ort::AllocatorWithDefaultOptions allocator;
         for (size_t i = 0; i < m_session->GetInputCount(); ++i)
