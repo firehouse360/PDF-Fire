@@ -7,3 +7,4 @@
 *.spec text eol=lf
 *.service text eol=lf
 pdf-fire/** text=auto eol=lf
+*.asc eol=lf
