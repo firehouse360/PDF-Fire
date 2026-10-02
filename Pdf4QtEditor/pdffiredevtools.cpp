@@ -332,6 +332,19 @@ private:
                 QApplication::sendEvent(widget, &event);
             }
         }
+        else if (command == "widget")
+        {
+            // widget:<objectName> - clicks the button with the object name in the window
+            // (sidebar buttons, which are not actions), e.g. widget:speechPlayButton
+            if (QAbstractButton* button = m_window->findChild<QAbstractButton*>(argument))
+            {
+                button->click();
+            }
+            else
+            {
+                qWarning("PDFFIRE_SCRIPT: button '%s' not found", qPrintable(argument));
+            }
+        }
         else if (command == "dialogtab")
         {
             // dialogtab:<index> - shows the page of the first tab widget of the dialog

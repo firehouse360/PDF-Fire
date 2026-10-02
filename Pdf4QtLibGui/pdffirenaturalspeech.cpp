@@ -28,6 +28,7 @@
 #include <QCoreApplication>
 #include <QDataStream>
 #include <QDir>
+#include <QFileInfo>
 #include <QFile>
 #include <QIODevice>
 #include <QJsonDocument>
@@ -431,6 +432,26 @@ PDFFireNaturalSpeech::~PDFFireNaturalSpeech()
     }
 }
 
+void PDFFireNaturalSpeech::prepareAudioBackend()
+{
+#if defined(Q_OS_LINUX)
+    if (qEnvironmentVariableIsSet("QT_AUDIO_BACKEND"))
+    {
+        return;
+    }
+
+    // Only when a PulseAudio server (PipeWire's pipewire-pulse) answers - otherwise Qt
+    // keeps its own choice
+    const QString runtimeDirectory = qEnvironmentVariable("XDG_RUNTIME_DIR");
+    const bool hasPulseServer = qEnvironmentVariableIsSet("PULSE_SERVER") ||
+                                (!runtimeDirectory.isEmpty() && QFileInfo::exists(runtimeDirectory + QStringLiteral("/pulse/native")));
+    if (hasPulseServer)
+    {
+        qputenv("QT_AUDIO_BACKEND", "pulseaudio");
+    }
+#endif
+}
+
 QList<PDFFireNaturalSpeech::Voice> PDFFireNaturalSpeech::getVoices()
 {
     const QLocale us(QLocale::English, QLocale::UnitedStates);
@@ -528,13 +549,25 @@ void PDFFireNaturalSpeech::say(const QString& text)
     m_isGenerationFinished = false;
     m_audioBuffer->clear();
 
+    // The output follows the default of the system - a speaker switched on (or chosen
+    // in the system settings) since the last reading is used for this one
+    const QAudioDevice outputDevice = QMediaDevices::defaultAudioOutput();
+    if (m_audioSink && m_audioDeviceId != outputDevice.id())
+    {
+        m_audioSink->disconnect(this);
+        m_audioSink->stop();
+        m_audioSink->deleteLater();
+        m_audioSink = nullptr;
+    }
+
     if (!m_audioSink)
     {
         QAudioFormat format;
         format.setSampleRate(SAMPLE_RATE);
         format.setChannelCount(1);
         format.setSampleFormat(QAudioFormat::Int16);
-        m_audioSink = new QAudioSink(QMediaDevices::defaultAudioOutput(), format, this);
+        m_audioSink = new QAudioSink(outputDevice, format, this);
+        m_audioDeviceId = outputDevice.id();
         connect(m_audioSink, &QAudioSink::stateChanged, this, [this](QAudio::State state)
         {
             if (state == QAudio::IdleState)

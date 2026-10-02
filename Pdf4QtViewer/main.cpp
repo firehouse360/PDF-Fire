@@ -28,11 +28,16 @@
 #include "pdfapplicationtranslator.h"
 #include "pdfsettings.h"
 
+#include "pdffirenaturalspeech.h"
+
 #include <QApplication>
 #include <QCommandLineParser>
 
 int main(int argc, char *argv[])
 {
+    // PDF Fire: the sound system for Read Aloud, before the application exists
+    pdfviewer::PDFFireNaturalSpeech::prepareAudioBackend();
+
     QApplication::setAttribute(Qt::AA_CompressHighFrequencyEvents, true);
     QApplication application(argc, argv);
 

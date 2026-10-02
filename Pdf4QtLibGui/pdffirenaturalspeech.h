@@ -53,6 +53,13 @@ class PDF4QTLIBGUILIBSHARED_EXPORT PDFFireNaturalSpeech : public QObject
     Q_OBJECT
 
 public:
+    /// PDF Fire: chooses the sound system of Qt before the application is created.
+    /// Qt 6.10's PipeWire backend lists only some outputs (on Mike's desktop it saw the
+    /// optical output only, not the Bluetooth speaker, which was the default) - so the
+    /// voice played into nothing. The PulseAudio backend (PipeWire serves it on every
+    /// current desktop) sees all outputs and the right default. Call it first in main().
+    static void prepareAudioBackend();
+
     explicit PDFFireNaturalSpeech(QObject* parent);
     virtual ~PDFFireNaturalSpeech() override;
 
@@ -127,6 +134,7 @@ private:
     double m_volume = 1.0;
 
     QAudioSink* m_audioSink = nullptr;
+    QByteArray m_audioDeviceId;         ///< The output, for which m_audioSink was made
     PDFFireSpeechAudioBuffer* m_audioBuffer = nullptr;
     std::shared_ptr<std::atomic<quint64>> m_generation;
     bool m_isGenerationFinished = false;
