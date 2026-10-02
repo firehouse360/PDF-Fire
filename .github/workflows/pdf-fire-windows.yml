@@ -47,12 +47,14 @@ jobs:
           git clone --depth=1 https://github.com/microsoft/vcpkg.git
           .\vcpkg\bootstrap-vcpkg.bat -disableMetrics
 
-      - name: 'vcpkg: cache'
-        uses: actions/cache@v4
+      - name: 'vcpkg: restore the built libraries'
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}\vcpkg-binary-cache
-          key: ${{ runner.os }}-pdffire-vcpkg-${{ hashFiles('pdf-fire/vcpkg.json') }}
+          key: ${{ runner.os }}-pdffire-vcpkg-${{ hashFiles('pdf-fire/vcpkg.json') }}-${{ github.run_id }}
           restore-keys: |
+            ${{ runner.os }}-pdffire-vcpkg-${{ hashFiles('pdf-fire/vcpkg.json') }}-
             ${{ runner.os }}-pdffire-vcpkg-
 
       - name: 'vcpkg: libraries (Tesseract, OpenSSL, FreeType, ...)'
@@ -61,6 +63,14 @@ jobs:
         run: |
           $manifestRoot = Join-Path $env:GITHUB_WORKSPACE 'pdf-fire'
           .\vcpkg install --triplet x64-windows --x-manifest-root=$manifestRoot --x-install-root=$env:VCPKG_INSTALLED_DIR --clean-buildtrees-after-build --clean-packages-after-build
+
+      # Saved right away, so a later failing step does not lose an hour of library builds
+      - name: 'vcpkg: save the built libraries'
+        if: always() && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}\vcpkg-binary-cache
+          key: ${{ runner.os }}-pdffire-vcpkg-${{ hashFiles('pdf-fire/vcpkg.json') }}-${{ github.run_id }}
 
       - name: Qt
         uses: jurplel/install-qt-action@v4
@@ -114,6 +124,28 @@ jobs:
           Get-ChildItem $bin | Format-Table Name, Length -AutoSize | Out-String -Width 200
           if (-not (Test-Path "$bin\voice\kokoro.onnx")) { throw 'the voice data is missing from the program folder' }
           if (-not (Test-Path "$bin\onnxruntime.dll")) { throw 'onnxruntime.dll is missing from the program folder' }
+
+      - name: Installer (Inno Setup)
+        working-directory: pdf-fire
+        shell: pwsh
+        run: |
+          $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          $version = (Get-Content pdf-fire\VERSION -Raw).Trim()
+          "PDFFIRE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $bin = Join-Path $PWD 'build\install\usr\bin'
+          $out = Join-Path $PWD 'build\installer'
+          & $iscc "/DAppVersion=$version" "/DSourceDir=$bin" "/O$out" packaging\pdf-fire\windows\pdf-fire.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed ($LASTEXITCODE)" }
+          Get-ChildItem $out | Format-Table Name, Length -AutoSize | Out-String -Width 200
+          Get-FileHash "$out\*.exe" -Algorithm SHA256 | Format-List
+
+      - name: Upload the installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: PDF-Fire-Setup-${{ env.PDFFIRE_VERSION }}-x64
+          path: pdf-fire\build\installer\*.exe
+          retention-days: 30
 
       - name: Upload the program folder
         uses: actions/upload-artifact@v4
