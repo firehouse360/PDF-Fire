@@ -1,9 +1,12 @@
 # PDF Fire: Recognize Text (OCR) (MIT). Uses Tesseract (Apache 2.0) - the plugin is not
 # built, when Tesseract (headers + pkg-config file, package libtesseract-dev) is not found.
 
-# Windows (vcpkg): the Tesseract CMake package; Linux: pkg-config
-find_package(Tesseract CONFIG QUIET)
-if(Tesseract_FOUND)
+# Windows (vcpkg): the Tesseract CMake package; Linux: pkg-config. (Fedora's tesseract-devel
+# has a CMake package too, but its target needs libcurl-devel - pkg-config needs nothing more.)
+if(WIN32)
+    find_package(Tesseract CONFIG QUIET)
+endif()
+if(WIN32 AND Tesseract_FOUND)
     set(TESSERACT_FOUND ON)
     set(PDFFIRE_TESSERACT_TARGET Tesseract::libtesseract)
 else()
