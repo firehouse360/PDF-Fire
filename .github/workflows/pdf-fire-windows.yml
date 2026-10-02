@@ -91,6 +91,12 @@ jobs:
         working-directory: pdf-fire
         shell: pwsh
         run: |
+          # The Microsoft C++ runtime goes next to the program (no separate Visual C++ Redistributable needed)
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $crt = Get-ChildItem "$vs\VC\Redist\MSVC\*\x64\Microsoft.VC*.CRT" -Directory | Sort-Object FullName | Select-Object -Last 1
+          if (-not $crt) { throw 'the Microsoft C++ runtime (VC Redist CRT folder) was not found' }
+          "C++ runtime: $($crt.FullName)"
+          $env:MSVC_REDISTRIBUTABLES_PATH = $crt.FullName
           cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DCMAKE_VCPKG_BUILD_TYPE=Release `
             -DCMAKE_TOOLCHAIN_FILE="${env:VCPKG_ROOT}\scripts\buildsystems\vcpkg.cmake" `
             -DVCPKG_INSTALLED_DIR="${env:VCPKG_INSTALLED_DIR}" `
@@ -106,10 +112,27 @@ jobs:
         shell: pwsh
         continue-on-error: true
         run: |
-          $env:PATH = "$PWD\build\bin\Release;$PWD\build\bin;${env:VCPKG_INSTALLED_DIR}\x64-windows\bin;${env:QT_ROOT_DIR}\bin;$env:PATH"
+          $env:PATH = "$PWD\build\usr\bin\Release;$PWD\build\usr\bin\pdfplugins\Release;${env:VCPKG_INSTALLED_DIR}\x64-windows\bin;${env:QT_ROOT_DIR}\bin;$env:PATH"
           $env:PDFFIRE_SPEECH_MUTE = '1'
           $env:QT_QPA_PLATFORM = 'offscreen'
+          $env:QT_FORCE_STDERR_LOGGING = '1'
           ctest --test-dir build -C Release --output-on-failure --timeout 300
+          $ctestResult = $LASTEXITCODE
+          # A failed test, run on its own: its exit code (0xC0000135 = a DLL is missing,
+          # 0xC0000005 = a crash), its own report and the DLLs it needs
+          $failed = Get-Content build\Testing\Temporary\LastTestsFailed.log -ErrorAction SilentlyContinue
+          foreach ($line in $failed) {
+            $name = ($line -split ':')[1]
+            $exe = Get-ChildItem -Recurse build -Filter "$name.exe" | Select-Object -First 1
+            if (-not $exe) { "$name - program not found"; continue }
+            "===== $name ($($exe.FullName))"
+            & $exe.FullName -o "$name.txt,txt" 2>&1 | Select-Object -Last 30
+            '{0} exit code: 0x{1:X8}' -f $name, $LASTEXITCODE
+            if (Test-Path "$name.txt") { Get-Content "$name.txt" | Select-String -Pattern 'FAIL!|Loc:|QWARN|QFATAL|QCRITICAL|Totals' | Select-Object -First 40 }
+            $dumpbin = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio" -Recurse -Filter dumpbin.exe -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match 'Hostx64\\x64' } | Select-Object -First 1
+            if ($dumpbin) { & $dumpbin.FullName /dependents $exe.FullName | Select-String '\.dll' }
+          }
+          exit $ctestResult
 
       - name: Program folder
         working-directory: pdf-fire
@@ -124,6 +147,39 @@ jobs:
           Get-ChildItem $bin | Format-Table Name, Length -AutoSize | Out-String -Width 200
           if (-not (Test-Path "$bin\voice\kokoro.onnx")) { throw 'the voice data is missing from the program folder' }
           if (-not (Test-Path "$bin\onnxruntime.dll")) { throw 'onnxruntime.dll is missing from the program folder' }
+          foreach ($need in 'vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll', 'multimedia', 'tls', 'tessdata\eng.traineddata', 'platforms\qwindows.dll') {
+            if (-not (Test-Path (Join-Path $bin $need))) { throw "$need is missing from the program folder" }
+          }
+          Get-ChildItem "$bin\multimedia", "$bin\tls" | Format-Table Name, Length -AutoSize | Out-String -Width 200
+
+      - name: Smoke test (the installed program, as on a clean computer)
+        working-directory: pdf-fire
+        shell: pwsh
+        run: |
+          $bin = Join-Path $PWD 'build\install\usr\bin'
+          $sandbox = Join-Path $env:RUNNER_TEMP 'smoke'
+          New-Item -ItemType Directory -Force -Path $sandbox | Out-Null
+          Copy-Item pdf-fire\tests\corpus\image_and_text.pdf $sandbox\
+          $shot = Join-Path $sandbox 'pdf-fire-window.png'
+          # Only Windows itself on the search path: every DLL must come from the program folder
+          $env:PATH = "$env:SystemRoot\system32;$env:SystemRoot"
+          $env:PDFFIRE_SCREENSHOT = $shot
+          $env:PDFFIRE_SCRIPT_SANDBOX = $sandbox
+          $env:PDFFIRE_SPEECH_MUTE = '1'
+          $p = Start-Process -FilePath "$bin\Pdf4QtEditor.exe" -ArgumentList "`"$sandbox\image_and_text.pdf`"" -PassThru -RedirectStandardError "$sandbox\stderr.txt" -RedirectStandardOutput "$sandbox\stdout.txt"
+          if (-not $p.WaitForExit(120000)) { $p.Kill(); throw 'PDF Fire did not finish within 2 minutes' }
+          Get-Content "$sandbox\stdout.txt", "$sandbox\stderr.txt" -ErrorAction SilentlyContinue | Select-Object -Last 40
+          'exit code: 0x{0:X8}' -f $p.ExitCode
+          if ($p.ExitCode -ne 0) { throw 'PDF Fire did not start cleanly' }
+          if (-not (Test-Path $shot)) { throw 'no screenshot - the window did not open' }
+
+      - name: Upload the smoke-test screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-test
+          path: ${{ runner.temp }}\smoke
+          retention-days: 7
 
       - name: Installer (Inno Setup)
         working-directory: pdf-fire

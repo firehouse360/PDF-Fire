@@ -371,6 +371,26 @@ if(PDF4QT_INSTALL_DEPENDENCIES AND NOT PDF4QT_BUILD_ONLY_CORE_LIBRARY)
             REGEX "d\\..*" EXCLUDE
             PATTERN "*.pdb" EXCLUDE
         )
+        # PDF Fire: the audio output of the natural voices (Qt Multimedia backends, with the
+        # FFmpeg libraries Qt ships for its FFmpeg backend) and TLS for https (timestamps)
+        foreach(PDFFIRE_QT_PLUGIN_DIR multimedia tls)
+            if(EXISTS ${PDF4QT_QT_ROOT}/plugins/${PDFFIRE_QT_PLUGIN_DIR})
+                install(DIRECTORY ${PDF4QT_QT_ROOT}/plugins/${PDFFIRE_QT_PLUGIN_DIR}/
+                    RUNTIME DESTINATION ${PDF4QT_INSTALL_LIB_DIR}/${PDFFIRE_QT_PLUGIN_DIR}/
+                    FILES_MATCHING
+                    PATTERN "*.dll"
+                    PATTERN "*.so"
+                    PATTERN "*.dylib"
+                    REGEX "d\\.dll$" EXCLUDE
+                    PATTERN "*.pdb" EXCLUDE
+                )
+            endif()
+        endforeach()
+        install(DIRECTORY ${PDF4QT_QT_ROOT}/bin/
+            RUNTIME DESTINATION ${PDF4QT_INSTALL_LIB_DIR}/
+            FILES_MATCHING
+            REGEX "(avcodec|avformat|avutil|swresample|swscale)-[0-9]+\\.dll$"
+        )
     endif()
 
     if(WIN32 AND MSVC AND PDF4QT_INSTALL_MSVC_REDISTRIBUTABLE)
