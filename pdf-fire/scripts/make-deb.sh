@@ -8,7 +8,7 @@ SRC="$(cd "$HERE/../.." && pwd)"   # the source tree (this repository)
 ROOT="${PDFFIRE_WORK_DIR:-$(dirname "$SRC")}"   # build/, deps/, dist/, repo/ (outside the repository)
 BUILD="$ROOT/build/release"
 PKGSRC="$SRC/packaging/pdf-fire"
-VERSION="${PDFFIRE_VERSION:-0.1.1}"
+VERSION="${PDFFIRE_VERSION:-0.1.2}"
 ENGINE="$(sed -n 's/^set(PDF4QT_VERSION \(.*\))/\1/p' "$SRC/CMakeLists.txt" | tr -d '\r ')"
 DEBVERSION="${VERSION}+pdf4qt${ENGINE}"
 ARCH="$(dpkg --print-architecture)"
@@ -34,6 +34,9 @@ install -Dm644 "$PKGSRC/pdf-fire.desktop" "$STAGE/usr/share/applications/pdf-fir
 cp -r "$PKGSRC/icons" "$STAGE/usr/share/"
 mkdir -p "$STAGE/usr/bin"
 ln -s /opt/pdf-fire/bin/Pdf4QtEditor "$STAGE/usr/bin/pdf-fire"
+# The public key of the update repository: the package adds the repository itself (postinst),
+# so an install from the downloaded file gets the updates too - as Chrome and VS Code do
+install -Dm644 "$PKGSRC/pdf-fire-signing-key.asc" "$STAGE/usr/share/keyrings/pdf-fire-archive-keyring.asc"
 install -Dm644 "$SRC/LICENSE" "$STAGE/usr/share/doc/pdf-fire/copyright"
 cp -r "$SRC/3rdparty_licenses" "$STAGE/usr/share/doc/pdf-fire/"
 printf 'pdf-fire (%s) unstable; urgency=medium\n\n  * Local build. See pdf-fire-PLAN.md for the change list.\n\n -- PDF Fire <pdffire.constant740@passmail.net>  %s\n' \
@@ -68,15 +71,43 @@ CONTROL
 cat > "$STAGE/DEBIAN/postinst" <<'POSTINST'
 #!/bin/sh
 set -e
+SOURCES=/etc/apt/sources.list.d/pdf-fire.sources
 if [ "$1" = configure ]; then
     command -v update-desktop-database >/dev/null && update-desktop-database -q /usr/share/applications || true
     command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor || true
+
+    # The update repository: added once, unless it is set up already (the commands of the
+    # download page) or the administrator said no (REPO_ADD=false in /etc/default/pdf-fire)
+    if [ -f /etc/default/pdf-fire ] && grep -qs '^REPO_ADD=false' /etc/default/pdf-fire; then
+        :
+    elif grep -rqs 'firehouse360.com/pdf-fire/apt' /etc/apt/sources.list /etc/apt/sources.list.d/; then
+        :
+    else
+        cat > "$SOURCES" <<'SOURCES'
+# Added by the pdf-fire package: PDF Fire updates arrive with the other updates.
+# Removed again when pdf-fire is removed. To stop the package from adding it, put
+# REPO_ADD=false into /etc/default/pdf-fire and delete this file.
+Types: deb
+URIs: https://firehouse360.com/pdf-fire/apt
+Suites: stable
+Components: main
+Architectures: amd64
+Signed-By: /usr/share/keyrings/pdf-fire-archive-keyring.asc
+SOURCES
+        chmod 644 "$SOURCES"
+    fi
 fi
 POSTINST
 cat > "$STAGE/DEBIAN/postrm" <<'POSTRM'
 #!/bin/sh
 set -e
 command -v update-desktop-database >/dev/null && update-desktop-database -q /usr/share/applications || true
+# The repository, which the package added (its key goes away with the package)
+if [ "$1" = remove ] || [ "$1" = purge ]; then
+    if grep -qs '^# Added by the pdf-fire package' /etc/apt/sources.list.d/pdf-fire.sources; then
+        rm -f /etc/apt/sources.list.d/pdf-fire.sources
+    fi
+fi
 POSTRM
 chmod 755 "$STAGE/DEBIAN/postinst" "$STAGE/DEBIAN/postrm"
 

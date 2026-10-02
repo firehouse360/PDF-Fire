@@ -4,14 +4,14 @@
 # against Fedora's own Qt and libraries, stages `cmake --install` under /opt/pdf-fire, and then
 # runs rpmbuild on this spec in the same container with the stage passed in:
 #
-#   rpmbuild -bb pdf-fire.spec --define "pdffire_stage <dir>" --define "pdffire_version 0.1.1" \
+#   rpmbuild -bb pdf-fire.spec --define "pdffire_stage <dir>" --define "pdffire_version 0.1.2" \
 #            --define "pdffire_engine 1.6.0.0" --define "pdffire_private_libs <regex>"
 #
 # Everything private lives in /opt/pdf-fire (the programs carry RPATH $ORIGIN/../lib), the same
 # layout as the .deb from scripts/make-deb.sh, so nothing collides with a Fedora pdf4qt package.
 # The package is left UNSIGNED on purpose — signing is a separate step.
 
-%{!?pdffire_version: %global pdffire_version 0.1.1}
+%{!?pdffire_version: %global pdffire_version 0.1.2}
 %{!?pdffire_engine: %global pdffire_engine 1.6.0.0}
 %{!?pdffire_stage: %{error:pdffire_stage is not set - build with scripts/make-rpm.sh}}
 
@@ -66,14 +66,52 @@ page organising, OCR, scanning and natural-voice read aloud.
 %install
 cp -a %{pdffire_stage}/. %{buildroot}/
 
+%post
+# The update repository: added once, unless it is set up already (the commands of the
+# download page) or the administrator said no (REPO_ADD=false in /etc/default/pdf-fire)
+if [ -f /etc/default/pdf-fire ] && grep -qs '^REPO_ADD=false' /etc/default/pdf-fire; then
+    :
+elif grep -qs 'firehouse360.com/pdf-fire/rpm' /etc/yum.repos.d/*.repo; then
+    :
+else
+    cat > /etc/yum.repos.d/pdf-fire.repo <<'REPO'
+# Added by the pdf-fire package: PDF Fire updates arrive with the other updates.
+# Removed again when pdf-fire is removed. To stop the package from adding it, put
+# REPO_ADD=false into /etc/default/pdf-fire and delete this file.
+[pdf-fire]
+name=PDF Fire
+baseurl=https://firehouse360.com/pdf-fire/rpm
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-pdf-fire
+REPO
+    chmod 644 /etc/yum.repos.d/pdf-fire.repo
+fi
+exit 0
+
+%postun
+# Removed (not upgraded): the repository, which the package added, goes too
+if [ "$1" -eq 0 ] && grep -qs '^# Added by the pdf-fire package' /etc/yum.repos.d/pdf-fire.repo; then
+    rm -f /etc/yum.repos.d/pdf-fire.repo
+fi
+exit 0
+
 %files
 %license %{_datadir}/licenses/%{name}
+%{_sysconfdir}/pki/rpm-gpg/RPM-GPG-KEY-pdf-fire
 /opt/pdf-fire
 %{_bindir}/pdf-fire
 %{_datadir}/applications/pdf-fire.desktop
 %{_datadir}/icons/hicolor/*/apps/pdf-fire.*
 
 %changelog
+* Fri Oct 02 2026 PDF Fire <pdffire.constant740@passmail.net> - 0.1.2-1
+- Read Aloud: the voice plays on the speaker the system uses (Qt 6.10's PipeWire backend
+  did not see all outputs, e.g. Bluetooth speakers, and played into the wrong one).
+- An install from the downloaded file adds the update repository, so updates arrive with
+  the other updates (removed again with the package; REPO_ADD=false in /etc/default/pdf-fire).
+
 * Fri Oct 02 2026 PDF Fire <pdffire.constant740@passmail.net> - 0.1.1-1
 - Add Text: click anywhere on a page and type (typewriter text, editable later).
 - Document Info with the protection status in plain words; a bar above protected documents;

@@ -5,7 +5,7 @@
 #        scripts/make-rpm.sh all        both
 #
 # Environment:
-#   PDFFIRE_VERSION  package version (default 0.1.1, same as make-deb.sh)
+#   PDFFIRE_VERSION  package version (default 0.1.2, same as make-deb.sh)
 #   FEDORA           Fedora release (default 44)
 #   FEDORA_IMAGE     base image (default registry.fedoraproject.org/fedora:$FEDORA, falls back to
 #                    quay.io/fedora/fedora:$FEDORA when the Fedora registry is down)
@@ -25,7 +25,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 SRC="$(cd "$HERE/../.." && pwd)"   # the source tree (this repository)
 ROOT="${PDFFIRE_WORK_DIR:-$(dirname "$SRC")}"   # build/, deps/, dist/, repo/ (outside the repository)
-VERSION="${PDFFIRE_VERSION:-0.1.1}"
+VERSION="${PDFFIRE_VERSION:-0.1.2}"
 FEDORA="${FEDORA:-44}"
 JOBS="${JOBS:-14}"
 MODE="${1:-build}"
@@ -88,6 +88,8 @@ inside_build() {
   find "$APP/lib" -maxdepth 1 -name 'libPdf4Qt*.so' -type l -delete
 
   install -Dm644 "$PKGSRC/pdf-fire.desktop" "$STAGE/usr/share/applications/pdf-fire.desktop"
+  # The public key of the update repository (%post adds the repository - see pdf-fire.spec)
+  install -Dm644 "$PKGSRC/pdf-fire-signing-key.asc" "$STAGE/etc/pki/rpm-gpg/RPM-GPG-KEY-pdf-fire"
   mkdir -p "$STAGE/usr/share" && cp -r "$PKGSRC/icons" "$STAGE/usr/share/"
   mkdir -p "$STAGE/usr/bin" && ln -s ../../opt/pdf-fire/bin/Pdf4QtEditor "$STAGE/usr/bin/pdf-fire"  # relative, as rpmlint wants
   local LIC="$STAGE/usr/share/licenses/pdf-fire"
