@@ -179,6 +179,52 @@ jobs:
           if (-not $ok) { throw 'PDF Fire did not open with the reported settings' }
           'OK: opens with the reported settings'
 
+      - name: Close while reading aloud, then start again (Mike's steps)
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'relaunch'
+          $sandbox = Join-Path $env:RUNNER_TEMP 'reading'
+          New-Item -ItemType Directory -Force -Path $sandbox | Out-Null
+          Copy-Item pdf-fire\tests\corpus\image_and_text.pdf (Join-Path $sandbox 'reading.pdf')
+          Remove-Item (Join-Path $env:APPDATA 'PDF Fire'), (Join-Path $env:LOCALAPPDATA 'PDF Fire') -Recurse -Force -ErrorAction SilentlyContinue
+          $lnk = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\PDF Fire.lnk'
+          $exe = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk).TargetPath
+          $cdb = 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe'
+          function State($name) {
+              $p = @(Get-Process Pdf4QtEditor -ErrorAction SilentlyContinue)
+              "$name : processes $($p.Count) ; windows: $(($p | ForEach-Object { "$($_.Id):$($_.MainWindowHandle)=$($_.MainWindowTitle)" }) -join ' | ')"
+          }
+
+          "== R1. open a document, start reading aloud, close the window while it reads"
+          $env:PDFFIRE_SCRIPT_SANDBOX = $sandbox
+          $env:PDFFIRE_SCRIPT = 'size:1300x900;wait:3000;widget:speechButton;wait:1000;widget:speechPlayButton;wait:8000;action:actionQuit'
+          $first = Start-Process -FilePath $exe -ArgumentList "`"$sandbox\reading.pdf`"" -PassThru
+          Remove-Item Env:PDFFIRE_SCRIPT, Env:PDFFIRE_SCRIPT_SANDBOX
+          $ended = $first.WaitForExit(60000)
+          "ended within 60 s of starting: $ended"
+          if ($ended) { 'exit code: 0x{0:X8}' -f $first.ExitCode } else {
+              State 'still running'
+              & $cdb -p $first.Id -pvr -c '.symfix; .reload; ~*k 40; qd' > (Join-Path $out 'reading-close-stacks.txt') 2>&1
+          }
+          "files left behind:"
+          Get-ChildItem (Join-Path $env:APPDATA 'PDF Fire'), (Join-Path $env:LOCALAPPDATA 'PDF Fire') -Recurse -Force -ErrorAction SilentlyContinue | Select-Object FullName, Length, LastWriteTime | Out-String -Width 250
+          Copy-Item (Join-Path $env:APPDATA 'PDF Fire') (Join-Path $out 'appdata-after-reading') -Recurse -ErrorAction SilentlyContinue
+          Copy-Item (Join-Path $env:LOCALAPPDATA 'PDF Fire') (Join-Path $out 'localappdata-after-reading') -Recurse -ErrorAction SilentlyContinue
+
+          "== R2. start again from the Start menu"
+          Start-Process -FilePath $lnk
+          Start-Sleep -Seconds 30
+          State 'after the second start'
+          $p = @(Get-Process Pdf4QtEditor -ErrorAction SilentlyContinue)
+          foreach ($q in ($p | Where-Object { $_.MainWindowHandle -eq 0 })) {
+              & $cdb -p $q.Id -pvr -c '.symfix; .reload; ~*k 40; qd' > (Join-Path $out "reading-second-start-$($q.Id).txt") 2>&1
+              "stacks of $($q.Id) written"
+          }
+          $ok = $ended -and ($p | Where-Object { $_.MainWindowHandle -ne 0 })
+          Get-Process Pdf4QtEditor -ErrorAction SilentlyContinue | Stop-Process -Force
+          if (-not $ok) { throw 'REPRODUCED: after closing while reading aloud, PDF Fire does not open again' }
+          'OK: closed while reading, and opened again'
+
       - name: Upload the results
         if: always()
         uses: actions/upload-artifact@v4
