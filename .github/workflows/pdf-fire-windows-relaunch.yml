@@ -252,6 +252,30 @@ jobs:
           if (-not $ok) { throw 'REPRODUCED: PDF Fire does not open with the settings of the report' }
           'OK: opens with the broken settings of the report'
 
+      - name: Broken settings at 125 % scaling (the laptop of the report)
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'relaunch'
+          $cdb = 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe'
+          $exe = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\PDF Fire.lnk')).TargetPath
+          foreach ($scale in '1.25', '1.5') {
+              Remove-Item (Join-Path $env:APPDATA 'PDF Fire'), (Join-Path $env:LOCALAPPDATA 'PDF Fire') -Recurse -Force -ErrorAction SilentlyContinue
+              New-Item -ItemType Directory -Force -Path (Join-Path $env:APPDATA 'PDF Fire') | Out-Null
+              Copy-Item pdf-fire\tests\windows\settings-after-reading.ini (Join-Path $env:APPDATA 'PDF Fire\PDF Fire.ini') -Force
+              $env:QT_SCALE_FACTOR = $scale
+              $p = Start-Process -FilePath $exe -PassThru
+              Remove-Item Env:QT_SCALE_FACTOR
+              Start-Sleep -Seconds 30
+              $p.Refresh()
+              "scale $scale : running $(-not $p.HasExited) ; window $($p.MainWindowHandle) ; title '$($p.MainWindowTitle)' ; cpu $([math]::Round($p.TotalProcessorTime.TotalSeconds,1)) s"
+              if (-not $p.HasExited -and $p.MainWindowHandle -eq 0) {
+                  & $cdb -p $p.Id -pvr -c '.symfix; .reload; ~*k 40; qd' > (Join-Path $out "scale-$scale-stacks.txt") 2>&1
+                  "stacks written for scale $scale"
+              }
+              Get-Process Pdf4QtEditor -ErrorAction SilentlyContinue | Stop-Process -Force
+              Start-Sleep -Seconds 2
+          }
+
       - name: Upload the results
         if: always()
         uses: actions/upload-artifact@v4
