@@ -1,0 +1,102 @@
+# PDF Fire - Windows: close and start again (Mike, 2026-10-03: "when I close the app and reopen
+# it from the start menu it does not open"). Runs the program folder of an earlier build:
+# open a PDF, close the window normally, check that the program really ends, then start it
+# again without a document (as the Start menu does) and check that its window opens.
+name: PDF Fire - Windows close and reopen
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'Run of "PDF Fire - Windows", whose program folder is tested'
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  relaunch:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - name: Checkout PDF Fire (test documents)
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: pdf-fire/tests/corpus
+
+      - name: Program folder of the build
+        uses: actions/download-artifact@v4
+        with:
+          name: PDF-Fire-windows-x64
+          path: ${{ runner.temp }}\program
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Open, close, open again
+        shell: pwsh
+        run: |
+          $bin = Join-Path $env:RUNNER_TEMP 'program'
+          $out = Join-Path $env:RUNNER_TEMP 'relaunch'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          Copy-Item pdf-fire\tests\corpus\image_and_text.pdf $out\
+          $env:PATH = "$env:SystemRoot\system32;$env:SystemRoot"
+          $env:PDFFIRE_SPEECH_MUTE = '1'
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          function Shot($name) {
+              $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+              $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+              $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+              $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+              $bitmap.Save((Join-Path $out "$name.png"))
+          }
+          function Stacks($process, $name) {
+              $cdb = 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe'
+              if (Test-Path $cdb) {
+                  & $cdb -p $process.Id -pvr -c '.symfix; .reload; ~*k 30; qd' > (Join-Path $out "$name-stacks.txt") 2>&1
+                  "stacks written: $name-stacks.txt"
+              } else { 'cdb not found' }
+          }
+
+          "== 1. first start with a document"
+          $first = Start-Process -FilePath "$bin\Pdf4QtEditor.exe" -ArgumentList "`"$out\image_and_text.pdf`"" -PassThru
+          Start-Sleep -Seconds 25
+          $first.Refresh()
+          "running: $(-not $first.HasExited)  window: $($first.MainWindowHandle)  title: $($first.MainWindowTitle)"
+          Shot '1-first'
+
+          "== 2. close the window (as the X button)"
+          $null = $first.CloseMainWindow()
+          $ended = $first.WaitForExit(30000)
+          "ended within 30 s: $ended"
+          if (-not $ended) {
+              $first.Refresh()
+              "still running, threads: $($first.Threads.Count), window: $($first.MainWindowHandle)"
+              Stacks $first 'after-close'
+              Shot '2-after-close'
+          } else {
+              'exit code: 0x{0:X8}' -f $first.ExitCode
+          }
+          Get-Process Pdf4QtEditor -ErrorAction SilentlyContinue | Format-Table Id, StartTime, Threads, MainWindowTitle -AutoSize | Out-String -Width 200
+
+          "== 3. start again without a document (as the Start menu)"
+          $second = Start-Process -FilePath "$bin\Pdf4QtEditor.exe" -PassThru
+          Start-Sleep -Seconds 25
+          $second.Refresh()
+          "running: $(-not $second.HasExited)  window: $($second.MainWindowHandle)  title: $($second.MainWindowTitle)"
+          if ($second.HasExited) { 'exit code: 0x{0:X8}' -f $second.ExitCode }
+          Shot '3-second'
+          if (-not $second.HasExited -and $second.MainWindowHandle -eq 0) { Stacks $second 'second-start' }
+
+          $failed = (-not $ended) -or $second.HasExited -or ($second.MainWindowHandle -eq 0)
+          Get-Process Pdf4QtEditor -ErrorAction SilentlyContinue | Stop-Process -Force
+          if ($failed) { throw 'PDF Fire did not close and open again properly - see the log, the stacks and the screenshots' }
+          'OK: closed, and opened again'
+
+      - name: Upload the results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relaunch-results
+          path: ${{ runner.temp }}\relaunch
+          retention-days: 7
