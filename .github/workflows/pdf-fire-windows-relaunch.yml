@@ -276,6 +276,28 @@ jobs:
               Start-Sleep -Seconds 2
           }
 
+      - name: A start, which never finished (an old note), is noticed - settings set aside, window opens
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'relaunch'
+          $dir = Join-Path $env:APPDATA 'PDF Fire'
+          Remove-Item $dir, (Join-Path $env:LOCALAPPDATA 'PDF Fire') -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          Copy-Item pdf-fire\tests\windows\settings-after-reading.ini (Join-Path $dir 'PDF Fire.ini') -Force
+          Set-Content (Join-Path $dir 'startup-in-progress') 'old start'
+          (Get-Item (Join-Path $dir 'startup-in-progress')).LastWriteTime = (Get-Date).AddMinutes(-5)
+          Start-Process -FilePath (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\PDF Fire.lnk')
+          Start-Sleep -Seconds 30
+          $p = @(Get-Process Pdf4QtEditor -ErrorAction SilentlyContinue)
+          "guard: processes $($p.Count) ; windows: $(($p | ForEach-Object { "$($_.MainWindowHandle)=$($_.MainWindowTitle)" }) -join ' | ')"
+          Get-ChildItem $dir | Select-Object Name, Length | Out-String -Width 200
+          $backup = Get-ChildItem $dir -Filter 'PDF Fire.ini.failed-start-*'
+          $marker = Test-Path (Join-Path $dir 'startup-in-progress')
+          $ok = $backup -and -not $marker -and ($p | Where-Object { $_.MainWindowHandle -ne 0 })
+          Get-Process Pdf4QtEditor -ErrorAction SilentlyContinue | Stop-Process -Force
+          if (-not $ok) { throw "startup guard: backup=$([bool]$backup) marker-left=$marker" }
+          'OK: the failed start was noticed, the settings set aside, and PDF Fire opened'
+
       - name: Upload the results
         if: always()
         uses: actions/upload-artifact@v4

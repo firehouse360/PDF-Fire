@@ -57,6 +57,9 @@ private:
 public:
     explicit PDFTextToSpeech(QObject* parent);
 
+    /// Stop the engine, if it is reading (PDF Fire: public - the window stops it before it closes)
+    void stop();
+
     enum State
     {
         Invalid,    ///< Text to speech engine is invalid (maybe bad engine)
@@ -103,9 +106,6 @@ public:
 private:
     /// Updates UI controls depending on the state
     void updateUI();
-
-    /// Stop the engine, if it is reading
-    void stop();
 
     void setLocale(const QString& locale);
     void setVoice(const QString& voice);

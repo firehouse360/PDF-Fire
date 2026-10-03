@@ -28,6 +28,7 @@
 
 #include "pdfaboutdialog.h"
 #include "pdfsidebarwidget.h"
+#include "pdftexttospeech.h"
 #include "pdfadvancedfindwidget.h"
 #include "pdfviewersettingsdialog.h"
 #include "pdfdocumentpropertiesdialog.h"
@@ -443,6 +444,14 @@ PDFEditorMainWindow::PDFEditorMainWindow(QWidget* parent) :
     m_programController->finishInitialization();
     updateDeveloperMenu();
 
+    // PDF Fire: the sidebar belongs to a document - with no document open, it is not
+    // restored from the saved layout (2026-10-03: a layout saved with the sidebar open,
+    // after a document was closed while it was read aloud, froze a Windows PC at start)
+    if (m_sidebarDockWidget && !m_programController->getDocument())
+    {
+        m_sidebarDockWidget->hide();
+    }
+
     if (pdf::PDFToolManager* toolManager = m_programController->getToolManager())
     {
         connect(toolManager, &pdf::PDFToolManager::messageDisplayRequest, statusBar(), &QStatusBar::showMessage);
@@ -762,6 +771,12 @@ void PDFEditorMainWindow::closeEvent(QCloseEvent* event)
             // User cancelled close operation
             event->ignore();
             return;
+        }
+
+        // PDF Fire: reading aloud is stopped first, so the state saved is the quiet one
+        if (PDFTextToSpeech* textToSpeech = m_programController->getTextToSpeech())
+        {
+            textToSpeech->stop();
         }
 
         if (!m_programController->isFactorySettingsBeingRestored())
