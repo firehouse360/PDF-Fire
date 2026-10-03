@@ -225,6 +225,33 @@ jobs:
           if (-not $ok) { throw 'REPRODUCED: after closing while reading aloud, PDF Fire does not open again' }
           'OK: closed while reading, and opened again'
 
+      - name: With the settings saved after closing while reading (the broken file of the report)
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'relaunch'
+          $docDir = Join-Path $env:USERPROFILE 'OneDrive\Test Folder\August'
+          New-Item -ItemType Directory -Force -Path $docDir | Out-Null
+          Copy-Item pdf-fire\tests\corpus\image_and_text.pdf (Join-Path $docDir 'report 8.4.26.pdf')
+          Remove-Item (Join-Path $env:APPDATA 'PDF Fire'), (Join-Path $env:LOCALAPPDATA 'PDF Fire') -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path (Join-Path $env:APPDATA 'PDF Fire') | Out-Null
+          Copy-Item pdf-fire\tests\windows\settings-after-reading.ini (Join-Path $env:APPDATA 'PDF Fire\PDF Fire.ini') -Force
+          $lnk = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\PDF Fire.lnk'
+          Start-Process -FilePath $lnk
+          Start-Sleep -Seconds 30
+          $p = @(Get-Process Pdf4QtEditor -ErrorAction SilentlyContinue)
+          "with the broken settings: processes $($p.Count) ; windows: $(($p | ForEach-Object { "$($_.Id):$($_.MainWindowHandle)=$($_.MainWindowTitle)" }) -join ' | ')"
+          $cdb = 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe'
+          foreach ($q in ($p | Where-Object { $_.MainWindowHandle -eq 0 })) {
+              & $cdb -p $q.Id -pvr -c '.symfix; .reload; ~*k 40; qd' > (Join-Path $out "broken-settings-$($q.Id).txt") 2>&1
+              "stacks of $($q.Id) written"
+          }
+          Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = (Get-Date).AddMinutes(-3) } -ErrorAction SilentlyContinue |
+              Where-Object { $_.Message -match 'Pdf4Qt|PDF Fire' } | Select-Object -First 5 TimeCreated, Id, ProviderName, Message | Format-List | Out-String -Width 250
+          $ok = $p | Where-Object { $_.MainWindowHandle -ne 0 }
+          Get-Process Pdf4QtEditor -ErrorAction SilentlyContinue | Stop-Process -Force
+          if (-not $ok) { throw 'REPRODUCED: PDF Fire does not open with the settings of the report' }
+          'OK: opens with the broken settings of the report'
+
       - name: Upload the results
         if: always()
         uses: actions/upload-artifact@v4
