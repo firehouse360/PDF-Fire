@@ -93,6 +93,64 @@ jobs:
           if ($failed) { throw 'PDF Fire did not close and open again properly - see the log, the stacks and the screenshots' }
           'OK: closed, and opened again'
 
+      - name: Installer of the build
+        uses: actions/download-artifact@v4
+        with:
+          pattern: PDF-Fire-Setup-*
+          path: ${{ runner.temp }}\setup
+          merge-multiple: true
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Installed for this user, started from the Start menu shortcut
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'relaunch'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          Copy-Item pdf-fire\tests\corpus\image_and_text.pdf (Join-Path $out 'installed.pdf')
+          $setup = Get-ChildItem (Join-Path $env:RUNNER_TEMP 'setup') -Filter 'PDF-Fire-Setup-*.exe' | Select-Object -First 1
+          "installer: $($setup.Name)"
+          $install = Start-Process -FilePath $setup.FullName -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/CURRENTUSER', '/NORESTART', "/LOG=$out\install.log" -PassThru -Wait
+          "installer exit code: $($install.ExitCode)"
+          $lnk = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\PDF Fire.lnk'
+          if (-not (Test-Path $lnk)) { Get-ChildItem (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs') -Recurse | Select-Object FullName; throw 'no Start menu shortcut' }
+          $shell = New-Object -ComObject WScript.Shell
+          $shortcut = $shell.CreateShortcut($lnk)
+          "shortcut: $($shortcut.TargetPath)  working dir: '$($shortcut.WorkingDirectory)'"
+          function State($name) {
+              $p = Get-Process Pdf4QtEditor -ErrorAction SilentlyContinue
+              "$name : processes $(@($p).Count) ; windows: $((@($p) | ForEach-Object { $_.MainWindowTitle }) -join ' | ')"
+          }
+
+          "== A. start from the shortcut, open a document"
+          Start-Process -FilePath $lnk
+          Start-Sleep -Seconds 25
+          State 'after start'
+          $p = Get-Process Pdf4QtEditor | Select-Object -First 1
+          Start-Process -FilePath $shortcut.TargetPath -ArgumentList "`"$out\installed.pdf`""
+          Start-Sleep -Seconds 15
+          State 'after opening a document'
+
+          "== B. close every window"
+          Get-Process Pdf4QtEditor -ErrorAction SilentlyContinue | ForEach-Object { $null = $_.CloseMainWindow() }
+          Start-Sleep -Seconds 30
+          State 'after close'
+          $left = Get-Process Pdf4QtEditor -ErrorAction SilentlyContinue
+          if ($left) {
+              $cdb = 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe'
+              foreach ($q in $left) { & $cdb -p $q.Id -pvr -c '.symfix; .reload; ~*k 30; qd' > (Join-Path $out "installed-after-close-$($q.Id).txt") 2>&1 }
+          }
+
+          "== C. start again from the shortcut"
+          Start-Process -FilePath $lnk
+          Start-Sleep -Seconds 25
+          State 'after second start'
+          $windows = @(Get-Process Pdf4QtEditor -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 })
+          Get-ChildItem (Join-Path $env:APPDATA 'PDF Fire') -Recurse -ErrorAction SilentlyContinue | Select-Object FullName, Length | Out-String -Width 200
+          Get-Process Pdf4QtEditor -ErrorAction SilentlyContinue | Stop-Process -Force
+          if ($left -or $windows.Count -eq 0) { throw 'installed PDF Fire did not close and open again properly' }
+          'OK (installed): closed, and opened again from the Start menu'
+
       - name: Upload the results
         if: always()
         uses: actions/upload-artifact@v4
