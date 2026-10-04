@@ -30,6 +30,34 @@
 namespace pdfplugin
 {
 
+namespace
+{
+
+// PDF Fire: what happened and what to do - SANE's own texts are terse
+// ("Document feeder jammed"), and a too-full feeder ends exactly like this
+QString getStatusMessage(SANE_Status status)
+{
+    switch (status)
+    {
+        case SANE_STATUS_JAMMED:
+            return QObject::tr("The paper jammed in the document feeder. This often happens when the feeder is too full or "
+                               "two sheets were pulled in at once. Clear the jam on the scanner, put the pages that were "
+                               "not scanned back in (fewer at a time), and scan again.");
+        case SANE_STATUS_COVER_OPEN:
+            return QObject::tr("The scanner cover or the document feeder is open. Close it and scan again.");
+        case SANE_STATUS_DEVICE_BUSY:
+            return QObject::tr("The scanner is busy (another scan or a print job may be running). Wait a moment and scan again.");
+        case SANE_STATUS_NO_DOCS:
+            return QObject::tr("There is no paper in the document feeder.");
+        case SANE_STATUS_IO_ERROR:
+            return QObject::tr("The connection to the scanner failed (%1). Check that the scanner is switched on and connected, and scan again.").arg(QString::fromLocal8Bit(sane_strstatus(status)));
+        default:
+            return QString::fromLocal8Bit(sane_strstatus(status));
+    }
+}
+
+}   // namespace
+
 SaneScannerBackend::SaneScannerBackend()
 {
     SANE_Int versionCode = 0;
@@ -72,7 +100,7 @@ std::vector<ScannerDevice> SaneScannerBackend::devices(QString* errorMessage)
     {
         if (errorMessage)
         {
-            *errorMessage = QString::fromLocal8Bit(sane_strstatus(status));
+            *errorMessage = getStatusMessage(status);
         }
         return result;
     }
@@ -158,18 +186,36 @@ ScanResult SaneScannerBackend::scan(const ScanSettings& settings)
     SANE_Status status = sane_open(settings.deviceId.toLocal8Bit().constData(), &handle);
     if (status != SANE_STATUS_GOOD)
     {
-        result.errorMessage = QString::fromLocal8Bit(sane_strstatus(status));
+        result.errorMessage = getStatusMessage(status);
         return result;
     }
     m_activeHandle = handle;
 
-    setOptionInt(handle, SANE_NAME_SCAN_RESOLUTION, settings.resolutionDpi);
-    setOptionString(handle, SANE_NAME_SCAN_MODE, colorModeToScannerName(settings.colorMode));
+    // PDF Fire: the source first - changing it can change the allowed resolutions
+    // (HP Smart Tank 7600: flatbed up to 1200 dpi, feeder only up to 300 dpi, and
+    // the driver silently lowers the resolution). The resolution the scanner
+    // really uses is read back, otherwise the pages get a wrong size.
     if (!settings.source.isEmpty())
     {
         setOptionString(handle, SANE_NAME_SCAN_SOURCE, settings.source);
     }
+    setOptionInt(handle, SANE_NAME_SCAN_RESOLUTION, settings.resolutionDpi);
+    setOptionString(handle, SANE_NAME_SCAN_MODE, colorModeToScannerName(settings.colorMode));
+    const int resolutionDpi = getOptionInt(handle, SANE_NAME_SCAN_RESOLUTION, settings.resolutionDpi);
 
+    // PDF Fire: the scan area - set after the source, because the feeder and
+    // the flatbed have different maximal areas (values are limited to them)
+    if (settings.pageWidthMm > 0.0 && settings.pageHeightMm > 0.0)
+    {
+        setOptionLength(handle, SANE_NAME_SCAN_TL_X, 0.0, resolutionDpi);
+        setOptionLength(handle, SANE_NAME_SCAN_TL_Y, 0.0, resolutionDpi);
+        setOptionLength(handle, SANE_NAME_SCAN_BR_X, settings.pageWidthMm, resolutionDpi);
+        setOptionLength(handle, SANE_NAME_SCAN_BR_Y, settings.pageHeightMm, resolutionDpi);
+    }
+
+    // PDF Fire: sane_cancel is called only once, after the last page - between the
+    // pages of a document feeder it cancels the whole scan job (eSCL scanners then
+    // answer the next sane_start with "Invalid argument")
     for (int pageIndex = 0; pageIndex < settings.pageCount && !m_isCancelled; ++pageIndex)
     {
         status = sane_start(handle);
@@ -184,13 +230,12 @@ ScanResult SaneScannerBackend::scan(const ScanSettings& settings)
         }
         if (status != SANE_STATUS_GOOD)
         {
-            result.errorMessage = QString::fromLocal8Bit(sane_strstatus(status));
+            result.errorMessage = getStatusMessage(status);
             break;
         }
 
         QString errorMessage;
-        QImage image = readImage(handle, settings.resolutionDpi, &errorMessage);
-        sane_cancel(handle);
+        QImage image = readImage(handle, resolutionDpi, &errorMessage);
 
         if (m_isCancelled)
         {
@@ -206,11 +251,17 @@ ScanResult SaneScannerBackend::scan(const ScanSettings& settings)
 
         ScannedPage page;
         page.image = std::move(image);
-        page.dpiX = settings.resolutionDpi;
-        page.dpiY = settings.resolutionDpi;
+        page.dpiX = resolutionDpi;
+        page.dpiY = resolutionDpi;
         result.pages.push_back(std::move(page));
+
+        if (settings.pageScannedCallback)
+        {
+            settings.pageScannedCallback(int(result.pages.size()));
+        }
     }
 
+    sane_cancel(handle);
     m_activeHandle = nullptr;
     sane_close(handle);
     return result;
@@ -260,6 +311,73 @@ bool SaneScannerBackend::setOptionString(SANE_Handle handle, const char* name, c
     return sane_control_option(handle, option, SANE_ACTION_SET_VALUE, bytes.data(), nullptr) == SANE_STATUS_GOOD;
 }
 
+bool SaneScannerBackend::setOptionLength(SANE_Handle handle, const char* name, double millimeters, int dpi)
+{
+    const int option = findOption(handle, name);
+    if (option < 0)
+    {
+        return false;
+    }
+
+    const SANE_Option_Descriptor* descriptor = sane_get_option_descriptor(handle, option);
+    if (!descriptor || !SANE_OPTION_IS_SETTABLE(descriptor->cap) || !SANE_OPTION_IS_ACTIVE(descriptor->cap) || descriptor->size != sizeof(SANE_Word))
+    {
+        return false;
+    }
+
+    double value = millimeters;
+    if (descriptor->unit == SANE_UNIT_PIXEL)
+    {
+        value = millimeters / 25.4 * dpi;
+    }
+    else if (descriptor->unit != SANE_UNIT_MM)
+    {
+        return false;
+    }
+
+    const bool isFixed = descriptor->type == SANE_TYPE_FIXED;
+    if (!isFixed && descriptor->type != SANE_TYPE_INT)
+    {
+        return false;
+    }
+
+    // Limited to the range of the scanner (a smaller feeder or glass)
+    if (descriptor->constraint_type == SANE_CONSTRAINT_RANGE && descriptor->constraint.range)
+    {
+        const SANE_Range* range = descriptor->constraint.range;
+        const double minimum = isFixed ? SANE_UNFIX(range->min) : range->min;
+        const double maximum = isFixed ? SANE_UNFIX(range->max) : range->max;
+        value = qBound(minimum, value, maximum);
+    }
+
+    SANE_Word saneValue = isFixed ? SANE_FIX(value) : SANE_Word(qRound(value));
+    return sane_control_option(handle, option, SANE_ACTION_SET_VALUE, &saneValue, nullptr) == SANE_STATUS_GOOD;
+}
+
+int SaneScannerBackend::getOptionInt(SANE_Handle handle, const char* name, int defaultValue)
+{
+    const int option = findOption(handle, name);
+    if (option < 0)
+    {
+        return defaultValue;
+    }
+
+    const SANE_Option_Descriptor* descriptor = sane_get_option_descriptor(handle, option);
+    if (!descriptor || (descriptor->type != SANE_TYPE_INT && descriptor->type != SANE_TYPE_FIXED) || descriptor->size != sizeof(SANE_Word))
+    {
+        return defaultValue;
+    }
+
+    SANE_Word value = 0;
+    if (sane_control_option(handle, option, SANE_ACTION_GET_VALUE, &value, nullptr) != SANE_STATUS_GOOD)
+    {
+        return defaultValue;
+    }
+
+    const int result = descriptor->type == SANE_TYPE_FIXED ? qRound(SANE_UNFIX(value)) : value;
+    return result > 0 ? result : defaultValue;
+}
+
 int SaneScannerBackend::findOption(SANE_Handle handle, const char* name) const
 {
     const SANE_Option_Descriptor* optionCountDescriptor = sane_get_option_descriptor(handle, 0);
@@ -294,7 +412,7 @@ QImage SaneScannerBackend::readImage(SANE_Handle handle, int dpi, QString* error
     {
         if (errorMessage)
         {
-            *errorMessage = QString::fromLocal8Bit(sane_strstatus(status));
+            *errorMessage = getStatusMessage(status);
         }
         return QImage();
     }
@@ -331,6 +449,25 @@ QImage SaneScannerBackend::readImage(SANE_Handle handle, int dpi, QString* error
         {
             if (isLengthKnown)
             {
+                // PDF Fire: the page is complete only when sane_read reports EOF -
+                // stopping at the reported size leaves the scan job unfinished
+                // (eSCL document feeders then fail the next page). Extra data is
+                // dropped.
+                SANE_Byte drainBuffer[65536];
+                SANE_Int drainedBytes = 0;
+                do
+                {
+                    status = sane_read(handle, drainBuffer, SANE_Int(sizeof(drainBuffer)), &drainedBytes);
+                } while (status == SANE_STATUS_GOOD && drainedBytes > 0);
+
+                if (status != SANE_STATUS_EOF && status != SANE_STATUS_GOOD)
+                {
+                    if (errorMessage)
+                    {
+                        *errorMessage = getStatusMessage(status);
+                    }
+                    return QImage();
+                }
                 break;
             }
             if (rawData.size() * 2 > MAXIMAL_IMAGE_BYTES)
@@ -355,7 +492,7 @@ QImage SaneScannerBackend::readImage(SANE_Handle handle, int dpi, QString* error
         {
             if (errorMessage)
             {
-                *errorMessage = QString::fromLocal8Bit(sane_strstatus(status));
+                *errorMessage = getStatusMessage(status);
             }
             return QImage();
         }

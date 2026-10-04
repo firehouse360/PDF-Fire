@@ -51,7 +51,16 @@ void PDFViewerSettings::readSettings(QSettings& settings, const pdf::PDFCMSSetti
 
     settings.beginGroup("ViewerSettings");
     m_settings.m_directory = settings.value("defaultDirectory", QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)).toString();
-    m_settings.m_features = static_cast<pdf::PDFRenderer::Features>(settings.value("rendererFeaturesv2", static_cast<int>(pdf::PDFRenderer::getDefaultFeatures())).toInt());
+    m_settings.m_features = static_cast<pdf::PDFRenderer::Features>(settings.value("rendererFeaturesv2", static_cast<int>(defaultSettings.m_features)).toInt());
+
+    // PDF Fire: smooth pictures are on by default (scanned pages look grainy without
+    // them). Settings saved before that get it switched on once - after that, the
+    // user's choice is kept.
+    if (!settings.value("pdffireSmoothImagesDefault", false).toBool())
+    {
+        m_settings.m_features.setFlag(pdf::PDFRenderer::SmoothImages, true);
+        settings.setValue("pdffireSmoothImagesDefault", true);
+    }
     m_settings.m_rendererEngine = static_cast<pdf::RendererEngine>(settings.value("renderingEngine", static_cast<int>(pdf::RendererEngine::Blend2D_MultiThread)).toInt());
     m_settings.m_prefetchPages = settings.value("prefetchPages", defaultSettings.m_prefetchPages).toBool();
     m_settings.m_preferredMeshResolutionRatio = settings.value("preferredMeshResolutionRatio", defaultSettings.m_preferredMeshResolutionRatio).toDouble();
@@ -347,7 +356,7 @@ PDFViewerSettings::ColorScheme PDFViewerSettings::getColorScheme() const
 }
 
 PDFViewerSettings::Settings::Settings() :
-    m_features(pdf::PDFRenderer::getDefaultFeatures()),
+    m_features(pdf::PDFRenderer::getDefaultFeatures() | pdf::PDFRenderer::SmoothImages),
     m_rendererEngine(pdf::RendererEngine::Blend2D_MultiThread),
     m_prefetchPages(true),
     m_preferredMeshResolutionRatio(0.02),

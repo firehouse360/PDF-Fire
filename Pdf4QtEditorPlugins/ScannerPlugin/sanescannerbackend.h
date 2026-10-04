@@ -44,6 +44,8 @@ public:
 private:
     bool setOptionInt(SANE_Handle handle, const char* name, int value);
     bool setOptionString(SANE_Handle handle, const char* name, const QString& value);
+    int getOptionInt(SANE_Handle handle, const char* name, int defaultValue);
+    bool setOptionLength(SANE_Handle handle, const char* name, double millimeters, int dpi);
     int findOption(SANE_Handle handle, const char* name) const;
     QImage readImage(SANE_Handle handle, int dpi, QString* errorMessage);
 

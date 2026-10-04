@@ -23,6 +23,7 @@
 #include "scannerbackend.h"
 
 #include <QDialog>
+#include <QPixmap>
 
 #include <functional>
 
@@ -32,6 +33,8 @@ class QCheckBox;
 class QComboBox;
 class QDialogButtonBox;
 class QLabel;
+class QListWidget;
+class QProgressDialog;
 class QPushButton;
 class QSpinBox;
 
@@ -66,21 +69,41 @@ private:
     /// PDF Fire: is the chosen source a document feeder (it scans until it is empty)?
     bool isFeederSource() const;
     void updateScanButtons();
-    void removeLastPage();
+
+    // PDF Fire: the scanned pages - a strip of thumbnails and a preview of the
+    // selected page; the pages can be browsed (buttons, mouse wheel, arrow keys),
+    // rotated, moved and deleted before they are inserted
+    virtual bool eventFilter(QObject* watched, QEvent* event) override;
+    void rebuildPageList(int selectedIndex);
+    void updatePagePreview();
+    int currentPageIndex() const;
+    void showNeighbourPage(int delta);
+    void rotateCurrentPage(int degrees);
+    void moveCurrentPage(int delta);
+    void deleteCurrentPage();
 
     std::unique_ptr<ScannerBackend> m_backend;
     std::vector<ScannerDevice> m_devices;
     std::vector<ScannedPage> m_pages;
+    std::vector<QPixmap> m_thumbnails;
 
     QComboBox* m_deviceComboBox = nullptr;
     QComboBox* m_sourceComboBox = nullptr;
     QComboBox* m_colorModeComboBox = nullptr;
+    QComboBox* m_pageSizeComboBox = nullptr;
     QSpinBox* m_resolutionSpinBox = nullptr;
     QSpinBox* m_pageCountSpinBox = nullptr;
     QLabel* m_statusLabel = nullptr;
     QCheckBox* m_ocrCheckBox = nullptr;
     QLabel* m_previewLabel = nullptr;
-    QPushButton* m_removeLastButton = nullptr;
+    QListWidget* m_pageList = nullptr;
+    QWidget* m_pageTools = nullptr;
+    QLabel* m_pageNumberLabel = nullptr;
+    QPushButton* m_previousPageButton = nullptr;
+    QPushButton* m_nextPageButton = nullptr;
+    QPushButton* m_moveEarlierButton = nullptr;
+    QPushButton* m_moveLaterButton = nullptr;
+    QProgressDialog* m_activeProgress = nullptr;
     QPushButton* m_reloadButton = nullptr;
     QPushButton* m_scanButton = nullptr;
     QDialogButtonBox* m_buttonBox = nullptr;

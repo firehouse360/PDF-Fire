@@ -27,6 +27,7 @@
 #include <QString>
 #include <QStringList>
 
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -55,6 +56,16 @@ struct ScanSettings
     int resolutionDpi = 300;
     ColorMode colorMode = ColorMode::Color;
     int pageCount = 1;
+
+    /// PDF Fire: paper size in millimeters, 0 = the whole scan area. Many document
+    /// feeders cannot detect the paper length and scan the whole area (a letter
+    /// sheet then comes out legal-length with a blank strip)
+    double pageWidthMm = 0.0;
+    double pageHeightMm = 0.0;
+
+    /// PDF Fire: called (from the scanning thread) after each scanned page with
+    /// the number of pages scanned so far - a feeder can take minutes
+    std::function<void(int)> pageScannedCallback;
 };
 
 struct ScannedPage

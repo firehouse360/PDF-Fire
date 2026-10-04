@@ -4,14 +4,14 @@
 # against Fedora's own Qt and libraries, stages `cmake --install` under /opt/pdf-fire, and then
 # runs rpmbuild on this spec in the same container with the stage passed in:
 #
-#   rpmbuild -bb pdf-fire.spec --define "pdffire_stage <dir>" --define "pdffire_version 0.1.3" \
+#   rpmbuild -bb pdf-fire.spec --define "pdffire_stage <dir>" --define "pdffire_version 0.1.4" \
 #            --define "pdffire_engine 1.6.0.0" --define "pdffire_private_libs <regex>"
 #
 # Everything private lives in /opt/pdf-fire (the programs carry RPATH $ORIGIN/../lib), the same
 # layout as the .deb from scripts/make-deb.sh, so nothing collides with a Fedora pdf4qt package.
 # The package is left UNSIGNED on purpose — signing is a separate step.
 
-%{!?pdffire_version: %global pdffire_version 0.1.3}
+%{!?pdffire_version: %global pdffire_version 0.1.4}
 %{!?pdffire_engine: %global pdffire_engine 1.6.0.0}
 %{!?pdffire_stage: %{error:pdffire_stage is not set - build with scripts/make-rpm.sh}}
 
@@ -106,6 +106,13 @@ exit 0
 %{_datadir}/icons/hicolor/*/apps/pdf-fire.*
 
 %changelog
+* Sat Oct 03 2026 PDF Fire <pdffire.constant740@passmail.net> - 0.1.4-1
+- Scanning: document feeders scan every page (the second page failed with "Invalid argument"),
+  pages get their real size, new Page size choice (Letter, Legal, A4) so letter sheets are not
+  scanned legal-length, and the scanned pages can be browsed, rotated, reordered and deleted
+  before they are inserted. Clear messages for a jammed feeder; pages scanned before are kept.
+- Scanned pages look sharp on screen: smooth pictures are on by default.
+
 * Sat Oct 03 2026 PDF Fire <pdffire.constant740@passmail.net> - 0.1.3-1
 - A start, which never finished, is noticed at the next start: the saved settings are set
   aside (kept as a backup) and PDF Fire starts with its defaults.
