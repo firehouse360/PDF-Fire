@@ -1246,7 +1246,7 @@ void MainWindow::on_actionClose_triggered()
 
 void MainWindow::on_actionAddDocuments_triggered()
 {
-    QStringList fileNames = QFileDialog::getOpenFileNames(this, tr("Select PDF document(s)"), m_settings.directory, tr("PDF document (*.pdf)"));
+    QStringList fileNames = QFileDialog::getOpenFileNames(this, tr("Select PDF document(s)"), m_settings.directory, tr("PDF document (*.pdf *.PDF *.Pdf);;All files (*)"));
     if (!fileNames.isEmpty())
     {
         for (const QString& fileName : fileNames)
@@ -3752,7 +3752,7 @@ void MainWindow::performOperation(Operation operation)
 
         case Operation::InsertPDF:
         {
-            QStringList fileNames = QFileDialog::getOpenFileNames(this, tr("Select PDF document(s)"), m_settings.directory, tr("PDF document (*.pdf)"));
+            QStringList fileNames = QFileDialog::getOpenFileNames(this, tr("Select PDF document(s)"), m_settings.directory, tr("PDF document (*.pdf *.PDF *.Pdf);;All files (*)"));
 
             if (!fileNames.isEmpty())
             {
@@ -3773,7 +3773,7 @@ void MainWindow::performOperation(Operation operation)
 
         case Operation::InsertPDFPages:
         {
-            QString fileName = QFileDialog::getOpenFileName(this, tr("Select PDF document"), m_settings.directory, tr("PDF document (*.pdf)"));
+            QString fileName = QFileDialog::getOpenFileName(this, tr("Select PDF document"), m_settings.directory, tr("PDF document (*.pdf *.PDF *.Pdf);;All files (*)"));
             if (fileName.isEmpty())
             {
                 break;
@@ -3839,7 +3839,7 @@ void MainWindow::performOperation(Operation operation)
                 return;
             }
 
-            QString fileName = QFileDialog::getOpenFileName(this, tr("Select PDF document"), m_settings.directory, tr("PDF document (*.pdf)"));
+            QString fileName = QFileDialog::getOpenFileName(this, tr("Select PDF document"), m_settings.directory, tr("PDF document (*.pdf *.PDF *.Pdf);;All files (*)"));
             if (!fileName.isEmpty())
             {
                 insertDocument(fileName, indexes.back());
