@@ -73,6 +73,7 @@
 #include <QXmlStreamWriter>
 #include <QMenuBar>
 #include <QComboBox>
+#include <QStandardPaths>
 
 #include "pdfdbgheap.h"
 
@@ -1434,7 +1435,7 @@ void PDFProgramController::saveDocument(const QString& fileName)
                 updateFileInfo(fileName);
                 updateTitle();
 
-                if (m_recentFileManager)
+                if (m_recentFileManager && isRememberingDocuments())
                 {
                     m_recentFileManager->addRecentFile(fileName);
                 }
@@ -1476,7 +1477,7 @@ void PDFProgramController::saveDocument(const QString& fileName)
         updateFileInfo(fileName);
         updateTitle();
 
-        if (m_recentFileManager)
+        if (m_recentFileManager && isRememberingDocuments())
         {
             m_recentFileManager->addRecentFile(fileName);
         }
@@ -1491,7 +1492,7 @@ void PDFProgramController::saveDocument(const QString& fileName)
 
 void PDFProgramController::savePageLayoutPerDocument()
 {
-    if (m_pdfDocument && !m_fileInfo.absoluteFilePath.isEmpty())
+    if (m_pdfDocument && !m_fileInfo.absoluteFilePath.isEmpty() && isRememberingDocuments())
     {
         QSettings settings(QSettings::IniFormat, QSettings::UserScope, QCoreApplication::organizationName(), QCoreApplication::applicationName());
         const pdf::PageLayout pageLayout = m_pdfWidget->getDrawWidgetProxy()->getPageLayout();
@@ -2434,10 +2435,16 @@ void PDFProgramController::onDocumentReadingFinished()
         {
             // Mark current directory as this
             QFileInfo fileInfo(m_fileInfo.originalFileName);
-            m_settings->setDirectory(fileInfo.dir().absolutePath());
+            if (isRememberingDocuments())
+            {
+                m_settings->setDirectory(fileInfo.dir().absolutePath());
+            }
 
             // We add file to recent files only, if we have successfully read the document
-            m_recentFileManager->addRecentFile(m_fileInfo.originalFileName);
+            if (isRememberingDocuments())
+            {
+                m_recentFileManager->addRecentFile(m_fileInfo.originalFileName);
+            }
 
             m_pdfDocument = qMove(result.document);
             m_signatures = qMove(result.signatures);
@@ -2479,7 +2486,7 @@ void PDFProgramController::onDocumentReadingFinished()
             QVariant lastOpenedPage = settings.value(m_fileInfo.absoluteFilePath, QVariant());
             settings.endGroup();
 
-            if (lastOpenedPage.isValid())
+            if (lastOpenedPage.isValid() && isRememberingDocuments() && isReopeningAtLastPage())
             {
                 m_pdfWidget->getDrawWidgetProxy()->goToPage(lastOpenedPage.toInt());
             }
@@ -2633,7 +2640,7 @@ void PDFProgramController::setDocument(pdf::PDFModifiedDocument document, std::v
         settings.beginGroup("PageLayoutPerDocumentSettings");
         // PDF Fire: a new document has no file, so it has no stored page layout
         const QString defaultPageLayout = pdf::PDFPageLayoutUtils::convertPageLayoutToString(catalog->getPageLayout());
-        QString pageLayoutStored = m_fileInfo.absoluteFilePath.isEmpty() ? defaultPageLayout : settings.value(m_fileInfo.absoluteFilePath, defaultPageLayout).toString();
+        QString pageLayoutStored = (m_fileInfo.absoluteFilePath.isEmpty() || !isRememberingDocuments()) ? defaultPageLayout : settings.value(m_fileInfo.absoluteFilePath, defaultPageLayout).toString();
         settings.endGroup();
 
         pdf::PageLayout pageLayout = pdf::PDFPageLayoutUtils::convertStringToPageLayout(pageLayoutStored, catalog->getPageLayout());
@@ -2670,7 +2677,7 @@ void PDFProgramController::closeDocument()
     {
         std::vector<pdf::PDFInteger> pages = m_pdfWidget->getDrawWidget()->getCurrentPages();
 
-        if (!pages.empty())
+        if (!pages.empty() && isRememberingDocuments() && isReopeningAtLastPage())
         {
             QSettings settings(QSettings::IniFormat, QSettings::UserScope, QCoreApplication::organizationName(), QCoreApplication::applicationName());
 
@@ -3048,7 +3055,7 @@ void PDFProgramController::writeSettings()
     // Save recent files
     settings.beginGroup("RecentFiles");
     settings.setValue("MaximumRecentFilesCount", m_recentFileManager->getRecentFilesLimit());
-    settings.setValue("RecentFileList", m_recentFileManager->getRecentFiles());
+    settings.setValue("RecentFileList", isRememberingDocuments() ? m_recentFileManager->getRecentFiles() : QStringList());
     settings.endGroup();
 
     // Save allowed plugins
@@ -3085,10 +3092,52 @@ void PDFProgramController::clearRecentFileHistory()
     m_recentFileManager->clearRecentFiles();
 }
 
+bool PDFProgramController::isRememberingDocuments()
+{
+    QSettings settings(QSettings::IniFormat, QSettings::UserScope, QCoreApplication::organizationName(), QCoreApplication::applicationName());
+    return settings.value("PDFFire/rememberDocuments", true).toBool();
+}
+
+bool PDFProgramController::isReopeningAtLastPage()
+{
+    QSettings settings(QSettings::IniFormat, QSettings::UserScope, QCoreApplication::organizationName(), QCoreApplication::applicationName());
+    return settings.value("PDFFire/reopenAtLastPage", true).toBool();
+}
+
+void PDFProgramController::setDocumentMemorySettings(bool rememberDocuments, bool reopenAtLastPage)
+{
+    QSettings settings(QSettings::IniFormat, QSettings::UserScope, QCoreApplication::organizationName(), QCoreApplication::applicationName());
+    settings.setValue("PDFFire/rememberDocuments", rememberDocuments);
+    settings.setValue("PDFFire/reopenAtLastPage", reopenAtLastPage);
+
+    // Switching the memory off also forgets what has been remembered so far
+    if (!rememberDocuments || !reopenAtLastPage)
+    {
+        settings.remove("LastOpenedDocumentPages");
+    }
+    if (!rememberDocuments)
+    {
+        settings.remove("PageLayoutPerDocumentSettings");
+        settings.setValue("RecentFiles/RecentFileList", QStringList());
+
+        if (m_recentFileManager)
+        {
+            m_recentFileManager->clearRecentFiles();
+        }
+
+        // The folder of the last opened document is forgotten too
+        const QString documentsDirectory = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+        m_settings->setDirectory(documentsDirectory);
+        settings.setValue("ViewerSettings/defaultDirectory", documentsDirectory);
+    }
+}
+
 void PDFProgramController::onActionOptionsTriggered()
 {
     PDFViewerSettingsDialog::OtherSettings otherSettings;
     otherSettings.maximumRecentFileCount = m_recentFileManager->getRecentFilesLimit();
+    otherSettings.rememberDocuments = isRememberingDocuments();
+    otherSettings.reopenAtLastPage = isReopeningAtLastPage();
 
     PDFViewerSettingsDialog dialog(m_settings->getSettings(), m_settings->getColorManagementSystemSettings(),
                                    otherSettings, m_certificateStore, m_actionManager->getActions(), m_CMSManager,
@@ -3104,6 +3153,7 @@ void PDFProgramController::onActionOptionsTriggered()
         {
             m_recentFileManager->setRecentFilesLimit(dialog.getOtherSettings().maximumRecentFileCount);
         }
+        setDocumentMemorySettings(dialog.getOtherSettings().rememberDocuments, dialog.getOtherSettings().reopenAtLastPage);
         if (m_textToSpeech)
         {
             m_textToSpeech->setSettings(m_settings);

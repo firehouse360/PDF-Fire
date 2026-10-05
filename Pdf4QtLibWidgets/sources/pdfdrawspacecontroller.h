@@ -36,6 +36,9 @@
 #include <QRectF>
 #include <QObject>
 #include <QMarginsF>
+#include <QImage>
+#include <set>
+#include <map>
 
 class QPainter;
 class QScreen;
@@ -599,6 +602,40 @@ private:
     /// independent on the zoom, so the downscaled images cannot be stored in them;
     /// this cache is not counted into the memory limit of their cache either.
     PDFScaledImageCache m_scaledImageCache;
+
+    /// PDF Fire: a picture of a page, which is slow to draw, at the current zoom (see drawPageContent)
+    struct PageImageCacheEntry
+    {
+        quint64 contentId = 0;
+        QSize size;
+        qreal devicePixelRatio = 1.0;
+        PDFRenderer::Features features;
+        QImage image;
+        quint64 lastUsedPass = 0;
+    };
+
+    static constexpr qint64 PAGE_IMAGE_CACHE_SLOW_DRAW_MS = 12;
+    static constexpr qint64 PAGE_IMAGE_CACHE_MAXIMUM_PIXELS = 16 * 1024 * 1024;
+    static constexpr qint64 PAGE_IMAGE_CACHE_MAXIMUM_BYTES = 256 * 1024 * 1024;
+    static constexpr quint64 PAGE_IMAGE_CACHE_MAXIMUM_AGE = 600;
+    static constexpr size_t PAGE_IMAGE_CACHE_MAXIMUM_SLOW_PAGES = 4096;
+
+    /// Draws the content of a compiled page - from a picture, when the page is slow to draw
+    void drawPageContent(QPainter* painter,
+                         QRect placedRect,
+                         const PDFPage* page,
+                         PDFInteger pageIndex,
+                         const PDFPrecompiledPage* compiledPage,
+                         const QTransform& matrix,
+                         PDFRenderer::Features features,
+                         PDFReal transparency);
+
+    /// Throws away the pictures of the pages, which have not been drawn for a while
+    void prunePageImageCache();
+
+    std::map<PDFInteger, PageImageCacheEntry> m_pageImageCache;
+    std::set<quint64> m_slowPageContentIds;
+    quint64 m_pageImageCachePass = 0;
 
     /// Progress
     PDFProgress* m_progress;

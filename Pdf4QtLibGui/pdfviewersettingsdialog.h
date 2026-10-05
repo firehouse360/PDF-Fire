@@ -49,6 +49,8 @@ public:
     struct OtherSettings
     {
         int maximumRecentFileCount = 0;
+        bool rememberDocuments = true;   ///< PDF Fire: keep the recent list, last pages and page layouts
+        bool reopenAtLastPage = true;    ///< PDF Fire: reopen a document at the page, where it was closed
     };
 
     /// Constructor

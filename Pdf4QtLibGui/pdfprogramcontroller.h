@@ -493,6 +493,20 @@ private:
     void saveDocument(const QString& fileName);
     void savePageLayoutPerDocument();
 
+public:
+    /// PDF Fire: when false, nothing about the opened documents is kept - no recent list, no
+    /// last page, no page layout per document (Options > UI Settings)
+    static bool isRememberingDocuments();
+
+    /// PDF Fire: when true, a document reopens at the page, where it was closed
+    static bool isReopeningAtLastPage();
+
+    /// PDF Fire: stores both of the settings above; the stored records are erased, when they
+    /// are switched off
+    void setDocumentMemorySettings(bool rememberDocuments, bool reopenAtLastPage);
+
+private:
+
     /// Asks the user, if the changes, which are held by the plugins and are not
     /// written into the document yet (for example the edited page content), should
     /// be written into the document before it is saved. Confirmed changes are

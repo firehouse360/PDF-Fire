@@ -31,13 +31,16 @@
 #include "pdfwidgetannotation.h"
 #include "pdfpainterutils.h"
 #include "pdfwidgetutils.h"
+#include "pdfblpainter.h"
 
 #include <QTimer>
 #include <QPainter>
+#include <QElapsedTimer>
 #include <QFontMetrics>
 #include <QScreen>
 #include <QGuiApplication>
 
+#include <algorithm>
 #include <array>
 
 #include "pdfdbgheap.h"
@@ -502,6 +505,7 @@ void PDFDrawWidgetProxy::setDocument(const PDFModifiedDocument& document, std::v
     {
         m_cacheClearTimer->stop();
         m_scaledImageCache.clear();
+        m_pageImageCache.clear();
         m_compiler->stop(document.hasReset() || document.hasPageContentsChanged());
         m_textLayoutCompiler->stop(document.hasReset() || document.hasPageContentsChanged());
         m_controller->setDocument(document);
@@ -831,6 +835,8 @@ void PDFDrawWidgetProxy::drawPages(QPainter* painter, QRect rect, PDFRenderer::F
     PDFColorConvertor convertor = cms->getColorConvertor();
     PDFRenderer::applyFeaturesToColorConvertor(features, convertor);
 
+    ++m_pageImageCachePass;
+
     // Iterate trough pages and display them on the painter device
     for (const LayoutItem& item : m_layout.items)
     {
@@ -872,7 +878,7 @@ void PDFDrawWidgetProxy::drawPages(QPainter* painter, QRect rect, PDFRenderer::F
 
                 if (isCompiledPageValid && !isPageContentDrawSuppressed)
                 {
-                    compiledPage->draw(painter, page->getCropBox(), matrix, features, groupInfo.transparency, &m_scaledImageCache);
+                    drawPageContent(painter, placedRect, page, item.pageIndex, compiledPage, matrix, features, groupInfo.transparency);
                 }
 
                 // Draw text blocks/text lines, if it is enabled
@@ -980,6 +986,143 @@ void PDFDrawWidgetProxy::drawPages(QPainter* painter, QRect rect, PDFRenderer::F
                 }
             }
         }
+    }
+
+    prunePageImageCache();
+}
+
+void PDFDrawWidgetProxy::drawPageContent(QPainter* painter,
+                                         QRect placedRect,
+                                         const PDFPage* page,
+                                         PDFInteger pageIndex,
+                                         const PDFPrecompiledPage* compiledPage,
+                                         const QTransform& matrix,
+                                         PDFRenderer::Features features,
+                                         PDFReal transparency)
+{
+    // PDF Fire: a page, which is slow to draw (a page of the form letters, whose dotted lines
+    // are tiling patterns of thousands of tiny tiles, took 70-140 ms), is drawn once into a
+    // picture at the current zoom, and the picture is then just copied while the view is
+    // scrolled - as the document viewers (Evince, Papers, Acrobat) do it. Other pages are drawn
+    // directly as before. Only the page content is in the picture; the annotations, form
+    // fields, selections and the graphics of the tools are drawn over it as before.
+    QPaintDevice* device = painter->device();
+    const bool isBlend2DTarget = device && device->devType() == QInternal::CustomRaster;
+    const bool isScreenTarget = device && (isBlend2DTarget || device->devType() == QInternal::Widget);
+    const qreal devicePixelRatio = device ? device->devicePixelRatioF() : 1.0;
+    const QSize pixelSize(qCeil(placedRect.width() * devicePixelRatio), qCeil(placedRect.height() * devicePixelRatio));
+    const quint64 contentId = compiledPage->getContentId();
+
+    // The picture is used only on the screen, at an untransformed painter (the magnifier draws
+    // the pages zoomed), for an opaque page and for a picture of a reasonable size.
+    const bool isCacheable = isScreenTarget &&
+                             contentId != 0 &&
+                             painter->worldTransform().isIdentity() &&
+                             qFuzzyCompare(transparency, 1.0) &&
+                             !pixelSize.isEmpty() &&
+                             qint64(pixelSize.width()) * qint64(pixelSize.height()) <= PAGE_IMAGE_CACHE_MAXIMUM_PIXELS;
+
+    if (!isCacheable || !m_slowPageContentIds.count(contentId))
+    {
+        QElapsedTimer timer;
+        timer.start();
+        compiledPage->draw(painter, page->getCropBox(), matrix, features, transparency, &m_scaledImageCache);
+
+        if (isCacheable && timer.elapsed() >= PAGE_IMAGE_CACHE_SLOW_DRAW_MS)
+        {
+            if (m_slowPageContentIds.size() >= PAGE_IMAGE_CACHE_MAXIMUM_SLOW_PAGES)
+            {
+                m_slowPageContentIds.clear();
+            }
+            m_slowPageContentIds.insert(contentId);
+        }
+        return;
+    }
+
+    PageImageCacheEntry& entry = m_pageImageCache[pageIndex];
+    if (entry.image.isNull() ||
+        entry.contentId != contentId ||
+        entry.size != placedRect.size() ||
+        entry.devicePixelRatio != devicePixelRatio ||
+        entry.features != features)
+    {
+        QImage image(pixelSize, QImage::Format_ARGB32_Premultiplied);
+        if (image.isNull())
+        {
+            // Out of memory - draw the page directly
+            m_pageImageCache.erase(pageIndex);
+            compiledPage->draw(painter, page->getCropBox(), matrix, features, transparency, &m_scaledImageCache);
+            return;
+        }
+
+        image.setDevicePixelRatio(devicePixelRatio);
+        image.fill(Qt::transparent);
+
+        // The same transformation as on the screen, only at the origin of the picture
+        const QRect imageRect(QPoint(0, 0), placedRect.size());
+        const QTransform imageMatrix = createPagePointToDevicePointMatrix(page, imageRect);
+
+        if (isBlend2DTarget)
+        {
+            PDFBLPaintDevice blPaintDevice(image, getRendererEngine() == RendererEngine::Blend2D_MultiThread);
+            QPainter imagePainter;
+            if (imagePainter.begin(&blPaintDevice))
+            {
+                compiledPage->draw(&imagePainter, page->getCropBox(), imageMatrix, features, 1.0, &m_scaledImageCache);
+                imagePainter.end();
+            }
+        }
+        else
+        {
+            QPainter imagePainter(&image);
+            compiledPage->draw(&imagePainter, page->getCropBox(), imageMatrix, features, 1.0, &m_scaledImageCache);
+            imagePainter.end();
+        }
+
+        entry.contentId = contentId;
+        entry.size = placedRect.size();
+        entry.devicePixelRatio = devicePixelRatio;
+        entry.features = features;
+        entry.image = std::move(image);
+    }
+
+    entry.lastUsedPass = m_pageImageCachePass;
+    painter->drawImage(placedRect.topLeft(), entry.image);
+}
+
+void PDFDrawWidgetProxy::prunePageImageCache()
+{
+    // Pictures of the pages, which have not been seen for a while, are thrown away, and the
+    // total size is limited - the oldest pictures go first.
+    qint64 totalBytes = 0;
+    for (auto it = m_pageImageCache.begin(); it != m_pageImageCache.end();)
+    {
+        if (m_pageImageCachePass - it->second.lastUsedPass > PAGE_IMAGE_CACHE_MAXIMUM_AGE)
+        {
+            it = m_pageImageCache.erase(it);
+        }
+        else
+        {
+            totalBytes += it->second.image.sizeInBytes();
+            ++it;
+        }
+    }
+
+    while (totalBytes > PAGE_IMAGE_CACHE_MAXIMUM_BYTES && !m_pageImageCache.empty())
+    {
+        auto oldest = std::min_element(m_pageImageCache.begin(), m_pageImageCache.end(), [](const auto& left, const auto& right)
+        {
+            return left.second.lastUsedPass < right.second.lastUsedPass;
+        });
+
+        if (oldest->second.lastUsedPass == m_pageImageCachePass)
+        {
+            // Never throw away a picture, which is on the screen right now
+            break;
+        }
+
+        totalBytes -= oldest->second.image.sizeInBytes();
+        m_pageImageCache.erase(oldest);
     }
 }
 

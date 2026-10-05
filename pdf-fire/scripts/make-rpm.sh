@@ -5,7 +5,7 @@
 #        scripts/make-rpm.sh all        both
 #
 # Environment:
-#   PDFFIRE_VERSION  package version (default 0.1.5, same as make-deb.sh)
+#   PDFFIRE_VERSION  package version (default 0.1.6, same as make-deb.sh)
 #   FEDORA           Fedora release (default 44)
 #   FEDORA_IMAGE     base image (default registry.fedoraproject.org/fedora:$FEDORA, falls back to
 #                    quay.io/fedora/fedora:$FEDORA when the Fedora registry is down)
@@ -25,7 +25,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 SRC="$(cd "$HERE/../.." && pwd)"   # the source tree (this repository)
 ROOT="${PDFFIRE_WORK_DIR:-$(dirname "$SRC")}"   # build/, deps/, dist/, repo/ (outside the repository)
-VERSION="${PDFFIRE_VERSION:-0.1.5}"
+VERSION="${PDFFIRE_VERSION:-0.1.6}"
 FEDORA="${FEDORA:-44}"
 JOBS="${JOBS:-14}"
 MODE="${1:-build}"

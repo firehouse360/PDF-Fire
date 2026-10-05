@@ -4,14 +4,14 @@
 # against Fedora's own Qt and libraries, stages `cmake --install` under /opt/pdf-fire, and then
 # runs rpmbuild on this spec in the same container with the stage passed in:
 #
-#   rpmbuild -bb pdf-fire.spec --define "pdffire_stage <dir>" --define "pdffire_version 0.1.5" \
+#   rpmbuild -bb pdf-fire.spec --define "pdffire_stage <dir>" --define "pdffire_version 0.1.6" \
 #            --define "pdffire_engine 1.6.0.0" --define "pdffire_private_libs <regex>"
 #
 # Everything private lives in /opt/pdf-fire (the programs carry RPATH $ORIGIN/../lib), the same
 # layout as the .deb from scripts/make-deb.sh, so nothing collides with a Fedora pdf4qt package.
 # The package is left UNSIGNED on purpose — signing is a separate step.
 
-%{!?pdffire_version: %global pdffire_version 0.1.5}
+%{!?pdffire_version: %global pdffire_version 0.1.6}
 %{!?pdffire_engine: %global pdffire_engine 1.6.0.0}
 %{!?pdffire_stage: %{error:pdffire_stage is not set - build with scripts/make-rpm.sh}}
 
@@ -106,6 +106,14 @@ exit 0
 %{_datadir}/icons/hicolor/*/apps/pdf-fire.*
 
 %changelog
+* Mon Oct 05 2026 PDF Fire <pdffire.constant740@passmail.net> - 0.1.6-1
+- Smooth scrolling on pages that are slow to draw (forms whose dotted lines are made of thousands
+  of tiny pattern tiles took up to 170 ms per frame): such a page is drawn once at the current
+  zoom and the picture is reused while scrolling.
+- Options > UI > Opened documents: "Remember documents I open" (off = no recent list, no last
+  page, no page layout, no last folder; what was remembered is erased) and "Reopen at the page
+  where I left off".
+
 * Mon Oct 05 2026 PDF Fire <pdffire.constant740@passmail.net> - 0.1.5-1
 - PDF files whose names end in .PDF or any other mix of capitals (common for bank statements and scanners) now show
   in Open, Insert Pages and the other file pickers; an All files choice was added as well.

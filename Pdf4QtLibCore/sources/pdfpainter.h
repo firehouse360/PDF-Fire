@@ -259,6 +259,11 @@ public:
     /// Returns memory consumption estimate
     qint64 getMemoryConsumptionEstimate() const { return m_memoryConsumptionEstimate; }
 
+    /// PDF Fire: returns an identifier of the compiled content, unique for every compilation
+    /// (it is assigned by finalize). A picture of the page drawn from this content stays valid
+    /// as long as the identifier is the same - even when the page lives at the same address.
+    quint64 getContentId() const { return m_contentId; }
+
     /// Returns paper color
     QColor getPaperColor() const { return m_paperColor; }
     void setPaperColor(QColor paperColor) { m_paperColor = paperColor; }
@@ -380,6 +385,7 @@ private:
 
     qint64 m_compilingTimeNS = 0;
     qint64 m_memoryConsumptionEstimate = 0;
+    quint64 m_contentId = 0;
     QColor m_paperColor = QColor(Qt::white);
     std::vector<Instruction> m_instructions;
     std::vector<PathPaintData> m_paths;

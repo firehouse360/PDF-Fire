@@ -23,6 +23,7 @@
 #include "pdfviewersettingsdialog.h"
 #include "ui_pdfviewersettingsdialog.h"
 
+#include <QCheckBox>
 #include <QComboBox>
 #include <QLabel>
 
@@ -121,6 +122,36 @@ PDFViewerSettingsDialog::PDFViewerSettingsDialog(const PDFViewerSettings::Settin
     const int openZoomRow = ui->uiGroupBoxLayout->rowCount();
     ui->uiGroupBoxLayout->addWidget(new QLabel(tr("Zoom when a document is opened"), ui->uiGroupBox), openZoomRow, 0);
     ui->uiGroupBoxLayout->addWidget(m_openZoomComboBox, openZoomRow, 1);
+
+    // PDF Fire: what is remembered about the opened documents. Switching it off also erases
+    // what has been remembered so far (done by the program controller, when accepted).
+    QCheckBox* rememberDocumentsCheckBox = new QCheckBox(tr("Remember documents I open"), ui->uiGroupBox);
+    rememberDocumentsCheckBox->setObjectName("rememberDocumentsCheckBox");
+    rememberDocumentsCheckBox->setToolTip(tr("Keeps the recent documents list, the page where each document was left and its page layout. When this is off, PDF Fire keeps no record of the documents you open, and what it remembered so far is erased."));
+    QCheckBox* reopenAtLastPageCheckBox = new QCheckBox(tr("Reopen at the page where I left off"), ui->uiGroupBox);
+    reopenAtLastPageCheckBox->setObjectName("reopenAtLastPageCheckBox");
+    reopenAtLastPageCheckBox->setToolTip(tr("When this is off, a document always opens at its first page."));
+    const int documentMemoryRow = ui->uiGroupBoxLayout->rowCount();
+    ui->uiGroupBoxLayout->addWidget(new QLabel(tr("Opened documents"), ui->uiGroupBox), documentMemoryRow, 0);
+    ui->uiGroupBoxLayout->addWidget(rememberDocumentsCheckBox, documentMemoryRow, 1);
+    ui->uiGroupBoxLayout->addWidget(reopenAtLastPageCheckBox, documentMemoryRow + 1, 1);
+
+    rememberDocumentsCheckBox->setChecked(m_otherSettings.rememberDocuments);
+    reopenAtLastPageCheckBox->setChecked(m_otherSettings.rememberDocuments && m_otherSettings.reopenAtLastPage);
+    reopenAtLastPageCheckBox->setEnabled(m_otherSettings.rememberDocuments);
+    connect(rememberDocumentsCheckBox, &QCheckBox::toggled, this, [this, reopenAtLastPageCheckBox](bool checked)
+    {
+        m_otherSettings.rememberDocuments = checked;
+        reopenAtLastPageCheckBox->setEnabled(checked);
+        reopenAtLastPageCheckBox->setChecked(checked && m_otherSettings.reopenAtLastPage);
+    });
+    connect(reopenAtLastPageCheckBox, &QCheckBox::toggled, this, [this](bool checked)
+    {
+        if (m_otherSettings.rememberDocuments)
+        {
+            m_otherSettings.reopenAtLastPage = checked;
+        }
+    });
 
     // PDF Fire: the natural voices are the only speech engine
     m_textToSpeechEngines = QStringList{ QStringLiteral("pdffire") };

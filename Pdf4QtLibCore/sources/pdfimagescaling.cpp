@@ -614,7 +614,11 @@ QImage PDFImageScaling::scaleDownBitonal(const QImage& image,
     std::array<uint8_t, COVERAGE_LUT_SIZE> grayscaleLookupTable = { };
     std::array<QRgb, COVERAGE_LUT_SIZE> colorLookupTable = { };
 
-    for (int i = 0; i < COVERAGE_LUT_SIZE; ++i)
+    // PDF Fire: an entry of the table costs a power and several interpolations. A small image
+    // (a tile of a pattern, drawn thousands of times on a page) has fewer pixels than the table
+    // has entries, so its entries are computed only when a pixel needs them - the result is the
+    // same, but a page with dotted lines made of 8x8 pattern tiles no longer takes 150 ms a frame.
+    auto computeLookupTableEntry = [&](int i)
     {
         const double coverage = double(i) / double(COVERAGE_LUT_SIZE - 1);
         const double transferredCoverage = (gamma != 1.0) ? std::pow(coverage, gamma) : coverage;
@@ -637,6 +641,16 @@ QImage PDFImageScaling::scaleDownBitonal(const QImage& image,
                                                 PDFImageScalingHelper::interpolateChannel(0, qGreen(inkColor), transferredCoverage),
                                                 PDFImageScalingHelper::interpolateChannel(0, qBlue(inkColor), transferredCoverage),
                                                 PDFImageScalingHelper::interpolateChannel(0, 255, transferredCoverage));
+        }
+    };
+
+    const bool isLookupTableLazy = qint64(targetWidth) * qint64(targetHeight) < qint64(COVERAGE_LUT_SIZE);
+    std::array<bool, COVERAGE_LUT_SIZE> isLookupTableEntryComputed = { };
+    if (!isLookupTableLazy)
+    {
+        for (int i = 0; i < COVERAGE_LUT_SIZE; ++i)
+        {
+            computeLookupTableEntry(i);
         }
     }
 
@@ -702,6 +716,12 @@ QImage PDFImageScaling::scaleDownBitonal(const QImage& image,
             const double coverage = accumulator[size_t(targetColumn)] / sourceBoxArea;
             const int index = static_cast<int>(coverage * double(COVERAGE_LUT_SIZE - 1) + 0.5);
             Q_ASSERT(index >= 0 && index < COVERAGE_LUT_SIZE);
+
+            if (isLookupTableLazy && !isLookupTableEntryComputed[size_t(index)])
+            {
+                computeLookupTableEntry(index);
+                isLookupTableEntryComputed[size_t(index)] = true;
+            }
 
             if (isGrayscaleOutput)
             {

@@ -52,6 +52,7 @@
 #include <QMenu>
 #include <QSet>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QContextMenuEvent>
 #include <QDialog>
 #include <QFileInfo>
@@ -216,7 +217,7 @@ private:
         }
         else if (command == "select")
         {
-            // select:<objectName>=<text> - selects the row with the text (first column) in a tree widget
+            // select:<objectName>=<text> - selects the row with the text (first column) in a tree or list widget
             const QString objectName = argument.section(QChar('='), 0, 0);
             const QString value = argument.section(QChar('='), 1);
             QWidget* window = QApplication::activeModalWidget() ? QApplication::activeModalWidget() : static_cast<QWidget*>(m_window);
@@ -226,6 +227,15 @@ private:
                 if (!items.isEmpty())
                 {
                     treeWidget->setCurrentItem(items.front());
+                }
+            }
+            else if (QListWidget* listWidget = window->findChild<QListWidget*>(objectName))
+            {
+                // the same for a list widget (the pages of the Options dialog)
+                const QList<QListWidgetItem*> items = listWidget->findItems(value, Qt::MatchExactly);
+                if (!items.isEmpty())
+                {
+                    listWidget->setCurrentItem(items.front());
                 }
             }
         }

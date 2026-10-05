@@ -30,6 +30,8 @@
 #include <QCryptographicHash>
 #include <QtMath>
 
+#include <atomic>
+
 #include "pdfdbgheap.h"
 
 namespace pdf
@@ -953,6 +955,10 @@ void PDFPrecompiledPage::finalize(qint64 compilingTimeNS, QList<PDFRenderError> 
 {
     m_compilingTimeNS = compilingTimeNS;
     m_errors = qMove(errors);
+
+    // PDF Fire: a new identifier for every compilation (see getContentId)
+    static std::atomic<quint64> s_lastContentId = 0;
+    m_contentId = ++s_lastContentId;
 
     // Determine memory consumption
     m_memoryConsumptionEstimate = sizeof(*this);
