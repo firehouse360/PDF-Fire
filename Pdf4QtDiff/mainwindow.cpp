@@ -815,7 +815,7 @@ void MainWindow::updateOverlayTransparency()
 
 std::optional<pdf::PDFDocument> MainWindow::openDocument()
 {
-    QString fileName = QFileDialog::getOpenFileName(this, tr("Select PDF document"), m_settings.directory, tr("PDF document (*.pdf *.PDF *.Pdf);;All files (*)"));
+    QString fileName = QFileDialog::getOpenFileName(this, tr("Select PDF document"), m_settings.directory, tr("PDF document (*.pdf *.pdF *.pDf *.pDF *.Pdf *.PdF *.PDf *.PDF);;All files (*)"));
     if (fileName.isEmpty())
     {
         return std::nullopt;

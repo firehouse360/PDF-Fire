@@ -138,7 +138,7 @@ void PDFProgramController::insertPagesFromFile(pdf::PDFInteger position)
         return;
     }
 
-    const QStringList fileNames = QFileDialog::getOpenFileNames(m_mainWindow, tr("Insert Pages from PDF Files"), m_settings->getDirectory(), tr("PDF document (*.pdf *.PDF *.Pdf);;All files (*)"));
+    const QStringList fileNames = QFileDialog::getOpenFileNames(m_mainWindow, tr("Insert Pages from PDF Files"), m_settings->getDirectory(), tr("PDF document (*.pdf *.pdF *.pDf *.pDF *.Pdf *.PdF *.PDf *.PDF);;All files (*)"));
     if (fileNames.isEmpty())
     {
         return;

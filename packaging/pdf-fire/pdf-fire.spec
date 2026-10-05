@@ -107,7 +107,7 @@ exit 0
 
 %changelog
 * Mon Oct 05 2026 PDF Fire <pdffire.constant740@passmail.net> - 0.1.5-1
-- PDF files whose names end in capital .PDF (common for bank statements and scanners) now show
+- PDF files whose names end in .PDF or any other mix of capitals (common for bank statements and scanners) now show
   in Open, Insert Pages and the other file pickers; an All files choice was added as well.
 
 * Sat Oct 03 2026 PDF Fire <pdffire.constant740@passmail.net> - 0.1.4-1

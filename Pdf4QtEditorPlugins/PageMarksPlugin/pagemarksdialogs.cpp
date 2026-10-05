@@ -966,7 +966,7 @@ void BackgroundDialog::updateEnabled()
 
 void BackgroundDialog::browseFile()
 {
-    const QString fileName = QFileDialog::getOpenFileName(this, tr("Background File"), m_fileEdit->text(), tr("PDF document (*.pdf *.PDF *.Pdf);;All files (*)"));
+    const QString fileName = QFileDialog::getOpenFileName(this, tr("Background File"), m_fileEdit->text(), tr("PDF document (*.pdf *.pdF *.pDf *.pDF *.Pdf *.PdF *.PDf *.PDF);;All files (*)"));
     if (!fileName.isEmpty())
     {
         m_fileEdit->setText(fileName);

@@ -3146,7 +3146,7 @@ void PDFProgramController::onPageLayoutChanged()
 
 void PDFProgramController::onActionOpenTriggered()
 {
-    QString fileName = QFileDialog::getOpenFileName(m_mainWindow, tr("Select PDF document"), m_settings->getDirectory(), tr("PDF document (*.pdf *.PDF *.Pdf);;All files (*)"));
+    QString fileName = QFileDialog::getOpenFileName(m_mainWindow, tr("Select PDF document"), m_settings->getDirectory(), tr("PDF document (*.pdf *.pdF *.pDf *.pDF *.Pdf *.PdF *.PDf *.PDF);;All files (*)"));
     if (!fileName.isEmpty())
     {
         openDocument(fileName);
