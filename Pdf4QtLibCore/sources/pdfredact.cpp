@@ -47,6 +47,17 @@ PDFRedact::PDFRedact(const PDFDocument* document,
 
 }
 
+QColor PDFRedact::getLabelColor() const
+{
+    // The chosen color, otherwise (a box has its own text, but no label color was chosen)
+    // a color, which can be read on the fill
+    if (m_labelColor.isValid())
+    {
+        return m_labelColor;
+    }
+    return m_redactFillColor.isValid() && m_redactFillColor.lightness() >= 128 ? QColor(Qt::black) : QColor(Qt::white);
+}
+
 void PDFRedact::writeOutlinedPage(PDFDocumentBuilder* builder, PDFRenderer* renderer, size_t pageIndex, PDFObjectReference newPageReference)
 {
     const PDFPage* page = m_document->getCatalog()->getPage(pageIndex);
@@ -81,13 +92,14 @@ void PDFRedact::writeOutlinedPage(PDFDocumentBuilder* builder, PDFRenderer* rend
     compiledPage.redact(redactPath, matrix, m_redactFillColor);
     compiledPage.draw(painter, QRectF(), matrix, PDFRenderer::None, 1.0);
 
-    // PDF Fire: the label over the filled areas
-    const QPainterPath label = PDFFireRedaction::createLabelPath(page, redactPath, m_labelText);
-    if (m_labelColor.isValid() && !label.isEmpty())
+    // PDF Fire: the labels over the filled areas (the own text of a box, or the default text)
+    const QPainterPath label = PDFFireRedaction::createPageLabels(m_document, page, m_labelText);
+    const QColor labelColor = getLabelColor();
+    if (!label.isEmpty())
     {
         painter->save();
         painter->setWorldTransform(QTransform());
-        painter->fillPath(matrix.map(label), m_labelColor);
+        painter->fillPath(matrix.map(label), labelColor);
         painter->restore();
     }
 
@@ -149,8 +161,8 @@ PDFDocument PDFRedact::perform(Options options)
             const QPainterPath area = PDFFireRedaction::getRedactionArea(m_document, page);
 
             QString failureReason;
-            const QPainterPath label = PDFFireRedaction::createLabelPath(page, area, m_labelText);
-            if (!redaction.writePageContent(i, area, newPageReferences[i], m_redactFillColor, &failureReason, label, m_labelColor))
+            const QPainterPath label = PDFFireRedaction::createPageLabels(m_document, page, m_labelText);
+            if (!redaction.writePageContent(i, area, newPageReferences[i], m_redactFillColor, &failureReason, label, getLabelColor()))
             {
                 writeOutlinedPage(&builder, &renderer, i, newPageReferences[i]);
                 m_messages << PDFTranslationContext::tr("Page %1 was converted to outlines (its text is not searchable): %2").arg(i + 1).arg(failureReason);

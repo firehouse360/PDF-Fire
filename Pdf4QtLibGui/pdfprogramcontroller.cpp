@@ -74,6 +74,9 @@
 #include <QMenuBar>
 #include <QComboBox>
 #include <QStandardPaths>
+#include <QEventLoop>
+#include <QProgressDialog>
+#include <QThread>
 
 #include "pdfdbgheap.h"
 
@@ -1423,8 +1426,12 @@ void PDFProgramController::saveDocument(const QString& fileName)
             originalFile.close();
 
             updateFileWatcher(true);
-            pdf::PDFDocumentWriter incrementalWriter(nullptr);
-            const pdf::PDFOperationResult incrementalResult = incrementalWriter.writeIncrementalUpdate(fileName, originalData, m_pdfDocument.data());
+            const pdf::PDFDocument* document = m_pdfDocument.data();
+            const pdf::PDFOperationResult incrementalResult = runSaving([&fileName, &originalData, document]()
+            {
+                pdf::PDFDocumentWriter incrementalWriter(nullptr);
+                return incrementalWriter.writeIncrementalUpdate(fileName, originalData, document);
+            });
             if (incrementalResult)
             {
                 if (m_undoRedoManager)
@@ -1465,8 +1472,12 @@ void PDFProgramController::saveDocument(const QString& fileName)
 
     updateFileWatcher(true);
 
-    pdf::PDFDocumentWriter writer(nullptr);
-    pdf::PDFOperationResult result = writer.write(fileName, m_pdfDocument.data(), true);
+    const pdf::PDFDocument* document = m_pdfDocument.data();
+    pdf::PDFOperationResult result = runSaving([&fileName, document]()
+    {
+        pdf::PDFDocumentWriter writer(nullptr);
+        return writer.write(fileName, document, true);
+    });
     if (result)
     {
         if (m_undoRedoManager)
@@ -1519,7 +1530,45 @@ void PDFProgramController::setIsBusy(bool isBusy)
 
 bool PDFProgramController::canClose() const
 {
+    // PDF Fire: never while the document is being written
+    if (m_isSaving)
+    {
+        return false;
+    }
     return !(m_futureWatcher && m_futureWatcher->isRunning()) || !m_isBusy;
+}
+
+pdf::PDFOperationResult PDFProgramController::runSaving(const std::function<pdf::PDFOperationResult()>& work)
+{
+    pdf::PDFOperationResult result(false);
+    if (m_isSaving)
+    {
+        return result;
+    }
+    m_isSaving = true;
+
+    // No cancel - a half-written file is worse than waiting
+    QProgressDialog progress(tr("Saving the document... (a large document takes a moment)"), QString(), 0, 0, m_mainWindow);
+    progress.setWindowTitle(tr("Saving"));
+    progress.setWindowModality(Qt::ApplicationModal);
+    progress.setCancelButton(nullptr);
+    progress.setMinimumDuration(500);
+
+    QEventLoop loop;
+    QThread* thread = QThread::create([&result, &work]() { result = work(); });
+    connect(thread, &QThread::finished, &loop, &QEventLoop::quit);
+    QApplication::setOverrideCursor(Qt::BusyCursor);
+    thread->start();
+
+    // Painting and the desktop's "are you alive" checks go on, the clicks and keys wait
+    // until the document is written (nothing may change the document meanwhile)
+    loop.exec(QEventLoop::ExcludeUserInputEvents);
+
+    thread->wait();
+    delete thread;
+    QApplication::restoreOverrideCursor();
+    m_isSaving = false;
+    return result;
 }
 
 bool PDFProgramController::askForSaveDocumentBeforeClose()

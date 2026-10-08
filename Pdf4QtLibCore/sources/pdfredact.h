@@ -59,7 +59,8 @@ public:
     pdf::PDFDocument perform(Options options);
 
     /// PDF Fire: a label (for example "REDACTED") written in the centre of every redacted
-    /// area, over the fill. Empty text = plain boxes (the default).
+    /// area, over the fill. Empty text = plain boxes (the default). A box with its own
+    /// overlay text always gets that text (in this color, or white/black to suit the fill).
     void setLabel(const QString& text, QColor color) { m_labelText = text; m_labelColor = color; }
 
     /// PDF Fire: messages about the pages, which had to be converted to outlines
@@ -69,6 +70,9 @@ public:
 private:
     /// PDF Fire: writes the page converted to outlines (the original method)
     void writeOutlinedPage(PDFDocumentBuilder* builder, PDFRenderer* renderer, size_t pageIndex, PDFObjectReference newPageReference);
+
+    /// PDF Fire: color of the labels on the boxes
+    QColor getLabelColor() const;
 
     QStringList m_messages;
     const PDFDocument* m_document;

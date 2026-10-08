@@ -38,6 +38,8 @@
 #include <QActionGroup>
 #include <QFileSystemWatcher>
 
+#include <functional>
+
 #include <array>
 
 class QMainWindow;
@@ -494,6 +496,12 @@ private:
     void saveDocument(const QString& fileName);
     void savePageLayoutPerDocument();
 
+    /// PDF Fire: writes the document in another thread. A big document (hundreds of MB) took
+    /// so long to write, that the desktop reported the window as "not responding" and offered
+    /// to force-quit it. The window keeps painting meanwhile, but takes no input (a progress
+    /// window appears, when the writing takes longer than a moment) and cannot be closed.
+    pdf::PDFOperationResult runSaving(const std::function<pdf::PDFOperationResult()>& work);
+
 public:
     /// PDF Fire: when false, nothing about the opened documents is kept - no recent list, no
     /// last page, no page layout per document (Options > UI Settings)
@@ -572,6 +580,7 @@ private:
     /// PDF Fire: user has already confirmed, that the signatures of the current
     /// document are lost by saving it, so the question is not asked again.
     bool m_isSignatureLossConfirmed;
+    bool m_isSaving = false;
     bool m_isFactorySettingsBeingRestored;
     pdf::PDFProgress* m_progress;
 

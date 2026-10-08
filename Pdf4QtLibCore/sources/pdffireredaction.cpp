@@ -3776,11 +3776,87 @@ QPainterPath PDFFireRedaction::getRedactionArea(const PDFDocument* document, con
     return area;
 }
 
-QPainterPath PDFFireRedaction::createLabelPath(const PDFPage* page, const QPainterPath& area, const QString& text)
+QPainterPath PDFFireRedaction::createPageLabels(const PDFDocument* document, const PDFPage* page, const QString& defaultText)
 {
     QPainterPath result;
     result.setFillRule(Qt::WindingFill);
-    if (!page || area.isEmpty() || text.isEmpty())
+    if (!document || !page)
+    {
+        return result;
+    }
+
+    // The areas without their own text are united, so touching boxes get one label
+    QPainterPath defaultArea;
+    defaultArea.setFillRule(Qt::WindingFill);
+
+    for (const PDFObjectReference& annotationReference : page->getAnnotations())
+    {
+        PDFAnnotationPtr annotation = PDFAnnotation::parse(&document->getStorage(), annotationReference);
+        const PDFRedactAnnotation* redactAnnotation = annotation && annotation->getType() == AnnotationType::Redact ? dynamic_cast<const PDFRedactAnnotation*>(annotation.get()) : nullptr;
+        if (!redactAnnotation)
+        {
+            continue;
+        }
+
+        QPainterPath region;
+        region.setFillRule(Qt::WindingFill);
+        for (const QPolygonF& polygon : redactAnnotation->getRedactionRegion().getPath().toSubpathPolygons())
+        {
+            QPainterPath subpath;
+            subpath.addPolygon(polygon);
+            subpath.closeSubpath();
+            subpath.setFillRule(Qt::WindingFill);
+            region = PDFPathBoolean::unite(region, subpath);
+        }
+
+        const QString overlayText = redactAnnotation->getOverlayText().trimmed();
+        if (!overlayText.isEmpty())
+        {
+            result.addPath(createLabelPath(page, region, overlayText));
+        }
+        else if (!defaultText.isEmpty())
+        {
+            defaultArea = PDFPathBoolean::unite(defaultArea, region);
+        }
+    }
+
+    if (!defaultText.isEmpty() && !defaultArea.isEmpty())
+    {
+        result.addPath(createLabelPath(page, defaultArea, defaultText));
+    }
+
+    return result;
+}
+
+QPainterPath PDFFireRedaction::createLabelPath(const PDFPage* page, const QPainterPath& area, const QString& text)
+{
+    // The page is shown turned clockwise by its rotation - the label is turned back
+    int degrees = 0;
+    if (page)
+    {
+        switch (page->getPageRotation())
+        {
+            case PageRotation::Rotate90:
+                degrees = 90;
+                break;
+            case PageRotation::Rotate180:
+                degrees = 180;
+                break;
+            case PageRotation::Rotate270:
+                degrees = 270;
+                break;
+            default:
+                break;
+        }
+    }
+    return page ? createLabelPath(degrees, area, text) : QPainterPath();
+}
+
+QPainterPath PDFFireRedaction::createLabelPath(int pageRotationDegrees, const QPainterPath& area, const QString& text)
+{
+    QPainterPath result;
+    result.setFillRule(Qt::WindingFill);
+    if (area.isEmpty() || text.isEmpty())
     {
         return result;
     }
@@ -3798,22 +3874,7 @@ QPainterPath PDFFireRedaction::createLabelPath(const PDFPage* page, const QPaint
         return result;
     }
 
-    // The page is shown turned clockwise by its rotation - the label is turned back
-    int degrees = 0;
-    switch (page->getPageRotation())
-    {
-        case PageRotation::Rotate90:
-            degrees = 90;
-            break;
-        case PageRotation::Rotate180:
-            degrees = 180;
-            break;
-        case PageRotation::Rotate270:
-            degrees = 270;
-            break;
-        default:
-            break;
-    }
+    const int degrees = pageRotationDegrees;
     const bool isSideways = degrees == 90 || degrees == 270;
 
     // One label for every separate part of the area. A hole in a part (its box lies

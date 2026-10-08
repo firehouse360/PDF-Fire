@@ -21,6 +21,7 @@
 // SOFTWARE.
 
 #include "pdfannotation.h"
+#include "pdffireredaction.h"
 #include "pdfdocument.h"
 #include "pdfencoding.h"
 #include "pdfpainter.h"
@@ -3671,6 +3672,19 @@ void PDFRedactAnnotation::draw(AnnotationDrawParameters& parameters) const
     painter.drawPath(m_redactionRegion.getPath());
 
     const qreal penWidth = painter.pen().widthF();
+
+    // PDF Fire: the own text of the box (Overlay text in its properties) is shown on the mark,
+    // as it will be written on the box in the redacted document
+    const QString overlayText = m_overlayText.trimmed();
+    if (!overlayText.isEmpty())
+    {
+        const QPainterPath label = PDFFireRedaction::createLabelPath(0, m_redactionRegion.getPath(), overlayText);
+        const QBrush boxBrush = painter.brush();
+        const bool isDarkBox = boxBrush.style() != Qt::NoBrush && boxBrush.color().alpha() > 0 && boxBrush.color().lightness() < 128;
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(isDarkBox ? QColor(Qt::white) : QColor(Qt::black));
+        painter.drawPath(label);
+    }
     parameters.boundingRectangle.adjust(-penWidth, -penWidth, penWidth, penWidth);
 }
 

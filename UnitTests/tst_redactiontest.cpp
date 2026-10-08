@@ -102,6 +102,7 @@ struct PageSpec
     QByteArray resources;           ///< Additional entries of the resource dictionary
     QByteArray annotations;         ///< Additional annotation dictionaries
     QList<QRectF> areas;            ///< Redacted areas (PDF coordinates)
+    QList<QByteArray> overlayTexts; ///< /OverlayText of the redact annotations (by the index of the area)
     int rotate = 0;
     QSizeF size = QSizeF(400, 300);
 };
@@ -149,6 +150,7 @@ private slots:
     void clipAndUnpaintedPathsInArea();
     void axialShadingInArea();
     void labelOnBoxes();
+    void overlayTextOfBox();
     void redactFileFromEnvironment();
 
 private:
@@ -275,11 +277,14 @@ QByteArray RedactionTest::buildDocument(RawPdf& pdf, const std::vector<PageSpec>
         const int content = pdf.add(RawPdf::stream(QByteArray(), page.content));
 
         QByteArray annotations;
-        for (const QRectF& area : page.areas)
+        for (int areaIndex = 0; areaIndex < page.areas.size(); ++areaIndex)
         {
+            const QRectF& area = page.areas[areaIndex];
+            const QByteArray overlayText = areaIndex < page.overlayTexts.size() && !page.overlayTexts[areaIndex].isEmpty()
+                                               ? " /OverlayText (" + page.overlayTexts[areaIndex] + ")" : QByteArray();
             const int annotation = pdf.add("<< /Type /Annot /Subtype /Redact /Rect [" +
                                            QByteArray::number(area.left()) + ' ' + QByteArray::number(area.top()) + ' ' +
-                                           QByteArray::number(area.right()) + ' ' + QByteArray::number(area.bottom()) + "] /IC [0 0 0] >>");
+                                           QByteArray::number(area.right()) + ' ' + QByteArray::number(area.bottom()) + "] /IC [0 0 0]" + overlayText + " >>");
             annotations += RawPdf::ref(annotation) + ' ';
         }
 
@@ -1381,6 +1386,61 @@ void RedactionTest::labelOnBoxes()
             }
             QVERIFY2(redCount > 100, qPrintable(QString("red pixels: %1").arg(redCount)));
         }
+    }
+}
+
+void RedactionTest::overlayTextOfBox()
+{
+    REQUIRE_ENVIRONMENT();
+
+    // The light pixels inside of a box (page 400 x 300, not rotated, 72 dpi)
+    auto countLight = [this](const QString& fileName, const QRectF& box)
+    {
+        const QImage image = render(fileName, 1);
+        const QRect inside = QRect(QPoint(int(box.left()), int(300 - box.bottom())), QPoint(int(box.right()), int(300 - box.top()))).adjusted(3, 3, -3, -3);
+        int count = 0;
+        for (int v = inside.top(); v <= inside.bottom(); ++v)
+        {
+            for (int u = inside.left(); u <= inside.right(); ++u)
+            {
+                count += image.pixelColor(u, v).lightness() > 200 ? 1 : 0;
+            }
+        }
+        return count;
+    };
+
+    const QRectF ownTextBox(QPointF(40, 180), QPointF(360, 240));
+    const QRectF plainBox(QPointF(40, 60), QPointF(360, 120));
+
+    for (const bool keepText : { true, false })
+    {
+        PageSpec page;
+        page.content = "BT /F1 14 Tf 60 200 Td (Ownsecretx) Tj ET\n"
+                       "BT /F1 14 Tf 60 80 Td (Plainsecretx) Tj ET\n";
+        page.areas << ownTextBox << plainBox;
+        page.overlayTexts << "SSN" << QByteArray();
+        std::vector<PageSpec> pages = { page };
+
+        // No default label: only the box with its own text gets a label (white on the black fill)
+        RawPdf pdf;
+        const int font = addDejaVuFont(pdf);
+        RedactionResult result = redact(buildDocument(pdf, pages, font), QString("overlay_%1").arg(keepText), keepText, Qt::black);
+        QVERIFY(result.ok);
+        checkSecretsRemoved(result, { "Ownsecretx", "Plainsecretx" });
+        QVERIFY(!extractText(result.outputFile).contains("SSN"));
+        QVERIFY2(countLight(result.outputFile, ownTextBox) > 100, "the own text of the box is missing");
+        QCOMPARE(countLight(result.outputFile, plainBox), 0);
+
+        // Default label: the box with its own text keeps it, the other one gets the default
+        RawPdf defaultPdf;
+        const int defaultFont = addDejaVuFont(defaultPdf);
+        RedactionResult withDefault = redact(buildDocument(defaultPdf, pages, defaultFont), QString("overlay_default_%1").arg(keepText), keepText, Qt::black, "REDACTED", Qt::white);
+        QVERIFY(withDefault.ok);
+        const int ownCount = countLight(withDefault.outputFile, ownTextBox);
+        const int defaultCount = countLight(withDefault.outputFile, plainBox);
+        QVERIFY2(ownCount > 100 && defaultCount > 100, qPrintable(QString("own %1, default %2").arg(ownCount).arg(defaultCount)));
+        // "SSN" is a shorter word than "REDACTED", so it covers clearly different pixels
+        QVERIFY(qAbs(ownCount - countLight(result.outputFile, ownTextBox)) < 20);
     }
 }
 

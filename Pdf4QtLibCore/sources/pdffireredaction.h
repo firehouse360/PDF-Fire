@@ -85,6 +85,14 @@ public:
     /// \param text Label text
     static QPainterPath createLabelPath(const PDFPage* page, const QPainterPath& area, const QString& text);
 
+    /// The same, for a page turned by the rotation (0, 90, 180, 270 degrees)
+    static QPainterPath createLabelPath(int pageRotationDegrees, const QPainterPath& area, const QString& text);
+
+    /// Returns the labels of all redacted areas of the page: a redact annotation with its own
+    /// overlay text (/OverlayText, set in its properties) is labelled with that text, the other
+    /// areas with the default text (empty = no label).
+    static QPainterPath createPageLabels(const PDFDocument* document, const PDFPage* page, const QString& defaultText);
+
     /// Writes the filtered content and resources of the page into the new page. Area can be empty,
     /// then the content is copied without any change. If the page cannot be filtered safely, false
     /// is returned with a reason, and the page must be converted to outlines by the caller (the

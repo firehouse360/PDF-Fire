@@ -4,14 +4,14 @@
 # against Fedora's own Qt and libraries, stages `cmake --install` under /opt/pdf-fire, and then
 # runs rpmbuild on this spec in the same container with the stage passed in:
 #
-#   rpmbuild -bb pdf-fire.spec --define "pdffire_stage <dir>" --define "pdffire_version 0.1.7" \
+#   rpmbuild -bb pdf-fire.spec --define "pdffire_stage <dir>" --define "pdffire_version 0.1.8" \
 #            --define "pdffire_engine 1.6.0.0" --define "pdffire_private_libs <regex>"
 #
 # Everything private lives in /opt/pdf-fire (the programs carry RPATH $ORIGIN/../lib), the same
 # layout as the .deb from scripts/make-deb.sh, so nothing collides with a Fedora pdf4qt package.
 # The package is left UNSIGNED on purpose — signing is a separate step.
 
-%{!?pdffire_version: %global pdffire_version 0.1.7}
+%{!?pdffire_version: %global pdffire_version 0.1.8}
 %{!?pdffire_engine: %global pdffire_engine 1.6.0.0}
 %{!?pdffire_stage: %{error:pdffire_stage is not set - build with scripts/make-rpm.sh}}
 
@@ -106,6 +106,13 @@ exit 0
 %{_datadir}/icons/hicolor/*/apps/pdf-fire.*
 
 %changelog
+* Thu Oct 08 2026 PDF Fire <pdffire.constant740@passmail.net> - 0.1.8-1
+- Saving a large document (hundreds of MB) no longer freezes the window: the file is written in
+  the background with a progress window, so the desktop does not report "not responding".
+- Redaction: the Overlay text in the properties of a redaction box (right-click > Edit > Redact)
+  is shown on the box while you work and written on it in the redacted copy - any word per box
+  (SSN, ACCOUNT...). Boxes without their own text get the "Text on the box" choice as before.
+
 * Wed Oct 07 2026 PDF Fire <pdffire.constant740@passmail.net> - 0.1.7-1
 - Scanning: a second click on Scan while the scanner was starting began a second scan; the
   "scanner is busy" message then got stuck behind the progress window and the program froze.

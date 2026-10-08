@@ -1,9 +1,9 @@
 ; PDF Fire - Windows installer (Inno Setup 6).
 ; Built by .github/workflows/pdf-fire-windows.yml:
-;   ISCC /DAppVersion=0.1.7 /DSourceDir=<program folder> /O<output folder> pdf-fire.iss
+;   ISCC /DAppVersion=0.1.8 /DSourceDir=<program folder> /O<output folder> pdf-fire.iss
 
 #ifndef AppVersion
-  #define AppVersion "0.1.7"
+  #define AppVersion "0.1.8"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\..\..\build\install\usr\bin"

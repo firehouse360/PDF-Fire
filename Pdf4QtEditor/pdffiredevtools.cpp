@@ -213,6 +213,9 @@ private:
             if (lineEdit)
             {
                 lineEdit->setText(value);
+                // as after typing - editors, which take the value when the editing is finished
+                // (the properties of an annotation), see it
+                Q_EMIT lineEdit->editingFinished();
             }
         }
         else if (command == "select")
