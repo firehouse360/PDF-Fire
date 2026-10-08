@@ -128,10 +128,22 @@ public:
     /// which can still be used after this function returns.
     void closeStyleWindow();
 
+    /// PDF Fire: the panel at the side of the main window, in which the style is shown
+    /// instead of a floating window over the page (its layout must be a QBoxLayout; the
+    /// dock widget, which contains it, is shown and hidden with the style). Without the
+    /// panel, the floating window is used.
+    static void setOptionsPanel(QWidget* panel);
+
 signals:
     void styleChanged(const pdf::PDFAnnotationStyle& style);
 
 private:
+    /// PDF Fire: a row of the common colors - one click picks a color, without a dialog
+    QWidget* createColorSwatches(bool isFill);
+    void setColor(bool isFill, const QColor& color);
+
+    bool m_isInPanel = false;
+
     void onStrokeColorButtonClicked();
     void onFillColorButtonClicked();
     void onFillEnabledToggled(bool checked);

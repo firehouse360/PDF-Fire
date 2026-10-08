@@ -24,6 +24,9 @@
 #include "pdfwidgetutils.h"
 
 #include <QCheckBox>
+#include <QDockWidget>
+#include <QHBoxLayout>
+#include <QSignalBlocker>
 #include <QColorDialog>
 #include <QCoreApplication>
 #include <QDoubleSpinBox>
@@ -105,6 +108,7 @@ PDFAnnotationStyleWidget::PDFAnnotationStyleWidget(QWidget* parent, StyleItems i
         m_strokeColorButton->setAutoDefault(false);
         connect(m_strokeColorButton, &QPushButton::clicked, this, &PDFAnnotationStyleWidget::onStrokeColorButtonClicked);
         layout->addRow(tr("Color"), m_strokeColorButton);
+        layout->addRow(QString(), createColorSwatches(false));
     }
 
     if (m_items.testFlag(FillColor))
@@ -119,6 +123,7 @@ PDFAnnotationStyleWidget::PDFAnnotationStyleWidget(QWidget* parent, StyleItems i
         connect(m_fillColorButton, &QPushButton::clicked, this, &PDFAnnotationStyleWidget::onFillColorButtonClicked);
 
         layout->addRow(m_fillEnabledCheckBox, m_fillColorButton);
+        layout->addRow(QString(), createColorSwatches(true));
     }
 
     if (m_items.testFlag(PenWidth))
@@ -141,8 +146,100 @@ PDFAnnotationStyleWidget::~PDFAnnotationStyleWidget()
 
 }
 
+namespace
+{
+QPointer<QWidget> s_optionsPanel;
+
+QDockWidget* findDock(QWidget* widget)
+{
+    for (QWidget* parent = widget; parent; parent = parent->parentWidget())
+    {
+        if (QDockWidget* dock = qobject_cast<QDockWidget*>(parent))
+        {
+            return dock;
+        }
+    }
+    return nullptr;
+}
+}   // namespace
+
+void PDFAnnotationStyleWidget::setOptionsPanel(QWidget* panel)
+{
+    s_optionsPanel = panel;
+}
+
+QWidget* PDFAnnotationStyleWidget::createColorSwatches(bool isFill)
+{
+    QWidget* row = new QWidget(this);
+    QHBoxLayout* rowLayout = new QHBoxLayout(row);
+    rowLayout->setContentsMargins(0, 0, 0, 0);
+    rowLayout->setSpacing(PDFWidgetUtils::scaleDPI_x(this, 3));
+
+    const int size = PDFWidgetUtils::scaleDPI_x(this, 18);
+    const std::pair<QColor, QString> colors[] = { { QColor(Qt::black), tr("Black") }, { QColor(Qt::white), tr("White") },
+                                                  { QColor(220, 0, 0), tr("Red") }, { QColor(255, 220, 0), tr("Yellow") },
+                                                  { QColor(0, 170, 0), tr("Green") }, { QColor(0, 90, 220), tr("Blue") },
+                                                  { QColor(255, 140, 0), tr("Orange") }, { QColor(128, 128, 128), tr("Gray") } };
+    for (const auto& [color, name] : colors)
+    {
+        QPushButton* swatch = new QPushButton(row);
+        swatch->setFixedSize(size, size);
+        swatch->setAutoDefault(false);
+        swatch->setToolTip(name);
+        swatch->setStyleSheet(QString("QPushButton { background-color: %1; border: 1px solid #888888; border-radius: 3px; }"
+                                      "QPushButton:hover { border: 2px solid #ff6a2c; }").arg(color.name()));
+        connect(swatch, &QPushButton::clicked, this, [this, isFill, color]() { setColor(isFill, color); });
+        rowLayout->addWidget(swatch);
+    }
+    rowLayout->addStretch(1);
+    return row;
+}
+
+void PDFAnnotationStyleWidget::setColor(bool isFill, const QColor& color)
+{
+    if (isFill)
+    {
+        if (m_fillEnabledCheckBox && !m_fillEnabledCheckBox->isChecked())
+        {
+            const QSignalBlocker blocker(m_fillEnabledCheckBox);
+            m_fillEnabledCheckBox->setChecked(true);
+            if (m_fillColorButton)
+            {
+                m_fillColorButton->setEnabled(true);
+            }
+        }
+        m_style.fillColor = color;
+    }
+    else
+    {
+        m_style.strokeColor = color;
+    }
+
+    updateColorButtons();
+    Q_EMIT styleChanged(m_style);
+}
+
 void PDFAnnotationStyleWidget::showStyleWindow()
 {
+    // PDF Fire: in the options panel at the side of the window, it does not cover the page
+    if (QWidget* panel = s_optionsPanel.data())
+    {
+        if (QBoxLayout* panelLayout = qobject_cast<QBoxLayout*>(panel->layout()))
+        {
+            m_isInPanel = true;
+            setWindowFlags(Qt::Widget);
+            setParent(panel);
+            panelLayout->insertWidget(0, this);
+            show();
+            if (QDockWidget* dock = findDock(panel))
+            {
+                dock->show();
+                dock->raise();
+            }
+            return;
+        }
+    }
+
     QSettings settings = createSettings();
     settings.beginGroup("AnnotationStyles");
     const QPoint position = settings.value("windowPosition").toPoint();
@@ -181,6 +278,37 @@ void PDFAnnotationStyleWidget::showStyleWindow()
 
 void PDFAnnotationStyleWidget::closeStyleWindow()
 {
+    if (m_isInPanel)
+    {
+        hide();
+        QWidget* panel = parentWidget();
+        if (panel && panel->layout())
+        {
+            panel->layout()->removeWidget(this);
+        }
+
+        // The panel is hidden, when no other tool shows its options in it
+        bool isPanelUsed = false;
+        if (panel)
+        {
+            for (const PDFAnnotationStyleWidget* other : panel->findChildren<PDFAnnotationStyleWidget*>(Qt::FindDirectChildrenOnly))
+            {
+                isPanelUsed = isPanelUsed || (other != this && other->isVisibleTo(panel));
+            }
+        }
+        if (!isPanelUsed)
+        {
+            if (QDockWidget* dock = findDock(panel))
+            {
+                dock->hide();
+            }
+        }
+
+        disconnect();
+        deleteLater();
+        return;
+    }
+
     QSettings settings = createSettings();
     settings.beginGroup("AnnotationStyles");
     settings.setValue("windowPosition", pos());

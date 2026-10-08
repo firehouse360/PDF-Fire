@@ -53,8 +53,12 @@
 #include "pdfactioncombobox.h"
 #include "pdffirepermissions.h"
 
+#include "pdfannotationstyle.h"
+
 #include <QPainter>
 #include <QFrame>
+#include <QLabel>
+#include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QPushButton>
 #include <QToolButton>
@@ -415,12 +419,28 @@ PDFEditorMainWindow::PDFEditorMainWindow(QWidget* parent) :
     }
 
     m_advancedFindWidget = new PDFAdvancedFindWidget(m_programController->getPdfWidget()->getDrawWidgetProxy(), this);
-    m_advancedFindDockWidget = new QDockWidget(tr("Advanced find"), this);
+    // PDF Fire: the find panel is at the right side - at the bottom it took half of the
+    // window over the page (on a laptop screen), and its close button was not visible
+    m_advancedFindDockWidget = new QDockWidget(tr("Advanced Find"), this);
     m_advancedFindDockWidget->setObjectName("AdvancedFind");
-    m_advancedFindDockWidget->setAllowedAreas(Qt::TopDockWidgetArea | Qt::BottomDockWidgetArea);
+    m_advancedFindDockWidget->setAllowedAreas(Qt::RightDockWidgetArea);
     m_advancedFindDockWidget->setWidget(m_advancedFindWidget);
-    addDockWidget(Qt::BottomDockWidgetArea, m_advancedFindDockWidget);
+    addDockWidget(Qt::RightDockWidgetArea, m_advancedFindDockWidget);
+    setDockTitleBar(m_advancedFindDockWidget);
     m_advancedFindDockWidget->hide();
+
+    // PDF Fire: the options of the active tool, at the right side (see PDFAnnotationStyleWidget)
+    m_toolOptionsDockWidget = new QDockWidget(tr("Tool Options"), this);
+    m_toolOptionsDockWidget->setObjectName("ToolOptions");
+    m_toolOptionsDockWidget->setAllowedAreas(Qt::RightDockWidgetArea);
+    QWidget* toolOptionsPanel = new QWidget(m_toolOptionsDockWidget);
+    QVBoxLayout* toolOptionsLayout = new QVBoxLayout(toolOptionsPanel);
+    toolOptionsLayout->addStretch(1);
+    m_toolOptionsDockWidget->setWidget(toolOptionsPanel);
+    addDockWidget(Qt::RightDockWidgetArea, m_toolOptionsDockWidget);
+    setDockTitleBar(m_toolOptionsDockWidget);
+    m_toolOptionsDockWidget->hide();
+    pdf::PDFAnnotationStyleWidget::setOptionsPanel(toolOptionsPanel);
     QAction* toggleAdvancedFindAction = m_advancedFindDockWidget->toggleViewAction();
     toggleAdvancedFindAction->setObjectName("actionAdvancedFind");
     toggleAdvancedFindAction->setText(tr("Ad&vanced Find..."));
@@ -443,6 +463,14 @@ PDFEditorMainWindow::PDFEditorMainWindow(QWidget* parent) :
 
     m_programController->finishInitialization();
     updateDeveloperMenu();
+
+    // PDF Fire: a saved window layout can have the find panel at the bottom (where it was
+    // before) - it is moved to the right side; the tool options appear only with a tool
+    addDockWidget(Qt::RightDockWidgetArea, m_advancedFindDockWidget);
+    if (m_toolOptionsDockWidget)
+    {
+        m_toolOptionsDockWidget->hide();
+    }
 
     // PDF Fire: the sidebar belongs to a document - with no document open, it is not
     // restored from the saved layout (2026-10-03: a layout saved with the sidebar open,
@@ -490,6 +518,34 @@ PDFEditorMainWindow::~PDFEditorMainWindow()
     m_actionManager = nullptr;
 
     delete ui;
+}
+
+void PDFEditorMainWindow::setDockTitleBar(QDockWidget* dockWidget)
+{
+    QWidget* titleBar = new QWidget(dockWidget);
+    QHBoxLayout* titleLayout = new QHBoxLayout(titleBar);
+    const int margin = pdf::PDFWidgetUtils::scaleDPI_x(titleBar, 6);
+    titleLayout->setContentsMargins(margin, margin / 2, margin / 2, margin / 2);
+
+    QLabel* titleLabel = new QLabel(dockWidget->windowTitle(), titleBar);
+    QFont titleFont = titleLabel->font();
+    titleFont.setBold(true);
+    titleLabel->setFont(titleFont);
+    titleLayout->addWidget(titleLabel);
+    titleLayout->addStretch(1);
+
+    QToolButton* closeButton = new QToolButton(titleBar);
+    closeButton->setObjectName(dockWidget->objectName() + "CloseButton");
+    closeButton->setText(QString::fromUtf8("✕"));
+    closeButton->setToolTip(tr("Close"));
+    closeButton->setAutoRaise(true);
+    QFont closeFont = closeButton->font();
+    closeFont.setPointSizeF(closeFont.pointSizeF() * 1.2);
+    closeButton->setFont(closeFont);
+    connect(closeButton, &QToolButton::clicked, dockWidget, &QDockWidget::close);
+    titleLayout->addWidget(closeButton);
+
+    dockWidget->setTitleBarWidget(titleBar);
 }
 
 void PDFEditorMainWindow::onSidebarVisibilityRequested()

@@ -112,6 +112,10 @@ exit 0
 - Redaction: the Overlay text in the properties of a redaction box (right-click > Edit > Redact)
   is shown on the box while you work and written on it in the redacted copy - any word per box
   (SSN, ACCOUNT...). Boxes without their own text get the "Text on the box" choice as before.
+- Advanced Find (also opened by Mark Found Text) is a panel at the right side with a visible
+  close button - it used to take the bottom half of the window.
+- The color and pen width of the comment, drawing and redaction tools are in a Tool Options
+  panel at the right side instead of a small window over the page, with one-click colors.
 
 * Wed Oct 07 2026 PDF Fire <pdffire.constant740@passmail.net> - 0.1.7-1
 - Scanning: a second click on Scan while the scanner was starting began a second scan; the

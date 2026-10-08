@@ -137,6 +137,14 @@ private:
     QDockWidget* m_sidebarDockWidget;
     PDFAdvancedFindWidget* m_advancedFindWidget;
     QDockWidget* m_advancedFindDockWidget;
+
+    /// PDF Fire: panel at the right side with the options of the active tool (colors,
+    /// pen width) - they used to be a small window floating over the page
+    QDockWidget* m_toolOptionsDockWidget = nullptr;
+
+    /// PDF Fire: a title bar with the name and a clearly visible close button (the
+    /// close button of the style's own dock title was not visible in the dark theme)
+    void setDockTitleBar(QDockWidget* dockWidget);
     QSpinBox* m_pageNumberSpinBox;
     QLabel* m_pageNumberLabel;
     QDoubleSpinBox* m_pageZoomSpinBox;
