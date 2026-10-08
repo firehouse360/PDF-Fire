@@ -75,6 +75,16 @@ public:
     /// in the page coordinates (default user space of the page). Overlapping regions are united.
     static QPainterPath getRedactionArea(const PDFDocument* document, const PDFPage* page);
 
+    /// Returns the outline of the label text (for example "REDACTED") centred in every separate
+    /// part of the area, in the page coordinates, sized to fit its box. The label is turned
+    /// against the rotation of the page, so it reads upright on the screen. A box too small
+    /// for a readable label gets none. The label is drawn as shapes - no font is needed and
+    /// the word does not become searchable text of the page.
+    /// \param page Page (its rotation is used)
+    /// \param area Redacted area (page coordinates)
+    /// \param text Label text
+    static QPainterPath createLabelPath(const PDFPage* page, const QPainterPath& area, const QString& text);
+
     /// Writes the filtered content and resources of the page into the new page. Area can be empty,
     /// then the content is copied without any change. If the page cannot be filtered safely, false
     /// is returned with a reason, and the page must be converted to outlines by the caller (the
@@ -84,7 +94,10 @@ public:
     /// \param newPage New page in the builder
     /// \param fillColor Color, by which the areas are filled (invalid color = no fill)
     /// \param failureReason Reason, why the page cannot be filtered
-    bool writePageContent(size_t pageIndex, const QPainterPath& area, PDFObjectReference newPage, QColor fillColor, QString* failureReason);
+    /// \param label Outline of the label drawn over the filled areas (see createLabelPath), can be empty
+    /// \param labelColor Color of the label
+    bool writePageContent(size_t pageIndex, const QPainterPath& area, PDFObjectReference newPage, QColor fillColor, QString* failureReason,
+                          const QPainterPath& label = QPainterPath(), QColor labelColor = QColor());
 
     /// Copies annotations of the page, which do not touch the area, into the new page. Redact
     /// annotations, popups, file attachments, multimedia are never copied. Form field widgets are

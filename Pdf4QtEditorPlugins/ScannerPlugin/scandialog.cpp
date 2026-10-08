@@ -198,6 +198,22 @@ ScanDialog::ScanDialog(QWidget* parent) :
 
 void ScanDialog::runInBackground(const QString& message, bool isCancellable, const std::function<void()>& work)
 {
+    // PDF Fire: the controls are switched off while the work runs. The progress window
+    // appears only after a moment, and until then the buttons still took clicks: a second
+    // click on Scan started a second scan inside the first one.
+    m_isBusy = true;
+    std::vector<std::pair<QPointer<QWidget>, bool>> controls;
+    for (QWidget* control : std::initializer_list<QWidget*>{ m_deviceComboBox, m_sourceComboBox, m_colorModeComboBox, m_pageSizeComboBox,
+                                                             m_resolutionSpinBox, m_reloadButton, m_scanButton, m_buttonBox,
+                                                             m_pageTools, m_pageList, m_ocrCheckBox })
+    {
+        if (control)
+        {
+            controls.emplace_back(control, control->isEnabled());
+            control->setEnabled(false);
+        }
+    }
+
     QProgressDialog progress(message, isCancellable ? tr("Cancel") : QString(), 0, 0, this);
     progress.setWindowTitle(windowTitle());
     progress.setWindowModality(Qt::WindowModal);
@@ -227,6 +243,42 @@ void ScanDialog::runInBackground(const QString& message, bool isCancellable, con
     thread->wait();
     delete thread;
     QApplication::restoreOverrideCursor();
+
+    for (const auto& [control, isEnabled] : controls)
+    {
+        if (control)
+        {
+            control->setEnabled(isEnabled);
+        }
+    }
+    m_isBusy = false;
+}
+
+void ScanDialog::reject()
+{
+    if (m_isBusy)
+    {
+        // The scan is cancelled by the Cancel button of the progress window
+        if (m_activeProgress)
+        {
+            m_activeProgress->raise();
+            m_activeProgress->activateWindow();
+        }
+        return;
+    }
+
+    if (!m_pages.empty())
+    {
+        const QString question = m_pages.size() == 1 ? tr("Throw away the scanned page?")
+                                                     : tr("Throw away the %1 scanned pages?").arg(m_pages.size());
+        if (QMessageBox::question(this, tr("Scan Pages"), question + QLatin1Char(' ') + tr("To keep them, click No and then Done."),
+                                  QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
+        {
+            return;
+        }
+    }
+
+    QDialog::reject();
 }
 
 ScanDialog::~ScanDialog() = default;
@@ -250,6 +302,11 @@ std::vector<ScannedPage> ScanDialog::takePages()
 
 void ScanDialog::reloadDevices()
 {
+    if (m_isBusy)
+    {
+        return;
+    }
+
     m_devices.clear();
     m_deviceComboBox->clear();
     m_sourceComboBox->clear();
@@ -316,7 +373,7 @@ void ScanDialog::updateSources()
 
 void ScanDialog::scan()
 {
-    if (!m_backend)
+    if (!m_backend || m_isBusy)
     {
         return;
     }

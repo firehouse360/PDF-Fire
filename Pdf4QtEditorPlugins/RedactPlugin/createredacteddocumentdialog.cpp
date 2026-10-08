@@ -25,6 +25,7 @@
 
 #include <QFileDialog>
 #include <QMessageBox>
+#include <QSettings>
 
 #include "pdfwidgetutils.h"
 
@@ -39,7 +40,15 @@ CreateRedactedDocumentDialog::CreateRedactedDocumentDialog(QString fileName, QCo
     ui->fileNameEdit->setText(fileName);
     ui->fillRedactedAreaColorEdit->setText(fillColor.name(QColor::HexRgb));
 
+    // PDF Fire: a plain box, or a box with REDACTED written in its centre (the choice is remembered)
+    ui->labelStyleComboBox->addItem(tr("None - plain box"), QString());
+    ui->labelStyleComboBox->addItem(tr("REDACTED in white"), QStringLiteral("white"));
+    ui->labelStyleComboBox->addItem(tr("REDACTED in red"), QStringLiteral("red"));
+    const int labelStyleIndex = ui->labelStyleComboBox->findData(QSettings().value(QStringLiteral("RedactPlugin/LabelStyle"), QString()).toString());
+    ui->labelStyleComboBox->setCurrentIndex(qMax(labelStyleIndex, 0));
+
     connect(ui->copyMetadataCheckBox, &QCheckBox::clicked, this, &CreateRedactedDocumentDialog::updateUi);
+    connect(ui->fillRedactedAreaCheckBox, &QCheckBox::clicked, this, &CreateRedactedDocumentDialog::updateUi);
 
     updateUi();
     setMinimumWidth(pdf::PDFWidgetUtils::scaleDPI_x(this, 300));
@@ -89,6 +98,30 @@ bool CreateRedactedDocumentDialog::isKeepingText() const
     return ui->keepTextRadioButton->isChecked();
 }
 
+QString CreateRedactedDocumentDialog::getLabelText() const
+{
+    // The word needs the box under it - without the fill it is not written
+    if (!ui->fillRedactedAreaCheckBox->isChecked() || ui->labelStyleComboBox->currentData().toString().isEmpty())
+    {
+        return QString();
+    }
+    return tr("REDACTED");
+}
+
+QColor CreateRedactedDocumentDialog::getLabelColor() const
+{
+    const QString style = ui->labelStyleComboBox->currentData().toString();
+    if (style == QLatin1String("white"))
+    {
+        return Qt::white;
+    }
+    if (style == QLatin1String("red"))
+    {
+        return QColor(220, 0, 0);
+    }
+    return QColor();
+}
+
 void CreateRedactedDocumentDialog::on_selectDirectoryButton_clicked()
 {
     QString fileName = QFileDialog::getSaveFileName(this, tr("File Name"), ui->fileNameEdit->text());
@@ -111,6 +144,7 @@ void CreateRedactedDocumentDialog::updateUi()
     }
 
     ui->fillRedactedAreaColorEdit->setEnabled(ui->fillRedactedAreaCheckBox->isChecked());
+    ui->labelStyleComboBox->setEnabled(ui->fillRedactedAreaCheckBox->isChecked());
 }
 
 void CreateRedactedDocumentDialog::accept()
@@ -126,6 +160,7 @@ void CreateRedactedDocumentDialog::accept()
         }
     }
 
+    QSettings().setValue(QStringLiteral("RedactPlugin/LabelStyle"), ui->labelStyleComboBox->currentData().toString());
     QDialog::accept();
 }
 

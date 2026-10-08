@@ -37,6 +37,7 @@
 #include "pdfmeshqualitysettings.h"
 
 #include <QBuffer>
+#include <QFont>
 #include <QImage>
 #include <QPainter>
 #include <QPainterPathStroker>
@@ -3775,7 +3776,96 @@ QPainterPath PDFFireRedaction::getRedactionArea(const PDFDocument* document, con
     return area;
 }
 
-bool PDFFireRedaction::writePageContent(size_t pageIndex, const QPainterPath& area, PDFObjectReference newPage, QColor fillColor, QString* failureReason)
+QPainterPath PDFFireRedaction::createLabelPath(const PDFPage* page, const QPainterPath& area, const QString& text)
+{
+    QPainterPath result;
+    result.setFillRule(Qt::WindingFill);
+    if (!page || area.isEmpty() || text.isEmpty())
+    {
+        return result;
+    }
+
+    QFont font(QStringLiteral("Sans Serif"));
+    font.setStyleHint(QFont::SansSerif);
+    font.setBold(true);
+    font.setPointSizeF(100.0);
+
+    QPainterPath textPath;
+    textPath.addText(0.0, 0.0, font, text);
+    const QRectF textRect = textPath.boundingRect();
+    if (textRect.isEmpty())
+    {
+        return result;
+    }
+
+    // The page is shown turned clockwise by its rotation - the label is turned back
+    int degrees = 0;
+    switch (page->getPageRotation())
+    {
+        case PageRotation::Rotate90:
+            degrees = 90;
+            break;
+        case PageRotation::Rotate180:
+            degrees = 180;
+            break;
+        case PageRotation::Rotate270:
+            degrees = 270;
+            break;
+        default:
+            break;
+    }
+    const bool isSideways = degrees == 90 || degrees == 270;
+
+    // One label for every separate part of the area. A hole in a part (its box lies
+    // inside of the box of another part) gets none.
+    std::vector<QRectF> boxes;
+    for (const QPolygonF& polygon : area.simplified().toSubpathPolygons())
+    {
+        const QRectF box = polygon.boundingRect();
+        if (box.isValid() && !box.isEmpty())
+        {
+            boxes.push_back(box);
+        }
+    }
+
+    constexpr PDFReal MIN_LABEL_HEIGHT = 3.0;   // points - smaller can't be read
+    constexpr PDFReal MAX_LABEL_HEIGHT = 48.0;  // points - a whole page gets a stamp, not a poster
+    for (size_t i = 0; i < boxes.size(); ++i)
+    {
+        const QRectF& box = boxes[i];
+        bool isHole = false;
+        for (size_t j = 0; j < boxes.size() && !isHole; ++j)
+        {
+            isHole = j != i && boxes[j] != box && boxes[j].contains(box);
+        }
+        if (isHole)
+        {
+            continue;
+        }
+
+        const PDFReal availableWidth = (isSideways ? box.height() : box.width()) * 0.9;
+        const PDFReal availableHeight = (isSideways ? box.width() : box.height()) * 0.6;
+        PDFReal scale = qMin(availableWidth / textRect.width(), availableHeight / textRect.height());
+        scale = qMin(scale, MAX_LABEL_HEIGHT / textRect.height());
+        if (scale * textRect.height() < MIN_LABEL_HEIGHT)
+        {
+            continue;
+        }
+
+        // Page coordinates have the y axis upwards, the text outline downwards
+        QTransform transform;
+        transform.translate(box.center().x(), box.center().y());
+        transform.rotate(degrees);
+        transform.scale(scale, -scale);
+        transform.translate(-textRect.center().x(), -textRect.center().y());
+        result.addPath(transform.map(textPath));
+    }
+
+    return result;
+}
+
+bool PDFFireRedaction::writePageContent(size_t pageIndex, const QPainterPath& area, PDFObjectReference newPage, QColor fillColor, QString* failureReason,
+                                        const QPainterPath& label, QColor labelColor)
 {
     const PDFPage* page = m_impl->document->getCatalog()->getPage(pageIndex);
     if (!page)
@@ -3805,6 +3895,15 @@ bool PDFFireRedaction::writePageContent(size_t pageIndex, const QPainterPath& ar
         content += formatNumber(fillColor.redF()) + ' ' + formatNumber(fillColor.greenF()) + ' ' + formatNumber(fillColor.blueF()) + " rg\n";
         writePath(content, area);
         content += area.fillRule() == Qt::OddEvenFill ? "f*\n" : "f\n";
+        content += "Q\n";
+    }
+
+    if (labelColor.isValid() && !label.isEmpty())
+    {
+        content += "q\n";
+        content += formatNumber(labelColor.redF()) + ' ' + formatNumber(labelColor.greenF()) + ' ' + formatNumber(labelColor.blueF()) + " rg\n";
+        writePath(content, label);
+        content += label.fillRule() == Qt::OddEvenFill ? "f*\n" : "f\n";
         content += "Q\n";
     }
 

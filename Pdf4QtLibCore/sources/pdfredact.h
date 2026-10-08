@@ -58,6 +58,10 @@ public:
 
     pdf::PDFDocument perform(Options options);
 
+    /// PDF Fire: a label (for example "REDACTED") written in the centre of every redacted
+    /// area, over the fill. Empty text = plain boxes (the default).
+    void setLabel(const QString& text, QColor color) { m_labelText = text; m_labelColor = color; }
+
     /// PDF Fire: messages about the pages, which had to be converted to outlines
     /// (when the content of the page could not be filtered safely)
     const QStringList& getMessages() const { return m_messages; }
@@ -73,6 +77,8 @@ private:
     const PDFOptionalContentActivity* m_optionalContentActivity;
     const PDFMeshQualitySettings* m_meshQualitySettings;
     QColor m_redactFillColor;
+    QString m_labelText;
+    QColor m_labelColor;
 };
 
 }   // namespace pdf

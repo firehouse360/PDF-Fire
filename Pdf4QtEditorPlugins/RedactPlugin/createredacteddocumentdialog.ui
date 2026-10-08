@@ -77,8 +77,8 @@
      <property name="title">
       <string>Appearance</string>
      </property>
-     <layout class="QHBoxLayout" name="horizontalLayout_2">
-      <item>
+     <layout class="QGridLayout" name="appearanceLayout">
+      <item row="0" column="0">
        <widget class="QCheckBox" name="fillRedactedAreaCheckBox">
         <property name="text">
          <string>Fill redacted area with color:</string>
@@ -88,8 +88,22 @@
         </property>
        </widget>
       </item>
-      <item>
+      <item row="0" column="1">
        <widget class="QLineEdit" name="fillRedactedAreaColorEdit"/>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="labelStyleLabel">
+        <property name="text">
+         <string>Text on the box:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QComboBox" name="labelStyleComboBox">
+        <property name="toolTip">
+         <string>Writes the word REDACTED in the centre of every redacted box, so a reader can see that something was removed on purpose. The word is drawn as shapes, it is not searchable text.</string>
+        </property>
+       </widget>
       </item>
      </layout>
     </widget>

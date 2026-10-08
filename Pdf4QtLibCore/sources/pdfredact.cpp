@@ -80,6 +80,17 @@ void PDFRedact::writeOutlinedPage(PDFDocumentBuilder* builder, PDFRenderer* rend
     QPainter* painter = contentStreamBuilder.begin(newPageReference);
     compiledPage.redact(redactPath, matrix, m_redactFillColor);
     compiledPage.draw(painter, QRectF(), matrix, PDFRenderer::None, 1.0);
+
+    // PDF Fire: the label over the filled areas
+    const QPainterPath label = PDFFireRedaction::createLabelPath(page, redactPath, m_labelText);
+    if (m_labelColor.isValid() && !label.isEmpty())
+    {
+        painter->save();
+        painter->setWorldTransform(QTransform());
+        painter->fillPath(matrix.map(label), m_labelColor);
+        painter->restore();
+    }
+
     contentStreamBuilder.end(painter);
 }
 
@@ -138,7 +149,8 @@ PDFDocument PDFRedact::perform(Options options)
             const QPainterPath area = PDFFireRedaction::getRedactionArea(m_document, page);
 
             QString failureReason;
-            if (!redaction.writePageContent(i, area, newPageReferences[i], m_redactFillColor, &failureReason))
+            const QPainterPath label = PDFFireRedaction::createLabelPath(page, area, m_labelText);
+            if (!redaction.writePageContent(i, area, newPageReferences[i], m_redactFillColor, &failureReason, label, m_labelColor))
             {
                 writeOutlinedPage(&builder, &renderer, i, newPageReferences[i]);
                 m_messages << PDFTranslationContext::tr("Page %1 was converted to outlines (its text is not searchable): %2").arg(i + 1).arg(failureReason);

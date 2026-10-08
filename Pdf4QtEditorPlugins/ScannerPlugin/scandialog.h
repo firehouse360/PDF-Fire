@@ -55,6 +55,10 @@ public:
     void setOcrAvailable(bool available);
     bool isOcrRequested() const;
 
+    /// PDF Fire: closing the window while the scanner works is refused (the scan
+    /// must be cancelled first), and scanned pages are not thrown away unasked
+    virtual void reject() override;
+
 private:
     void reloadDevices();
     void updateSources();
@@ -104,6 +108,11 @@ private:
     QPushButton* m_moveEarlierButton = nullptr;
     QPushButton* m_moveLaterButton = nullptr;
     QProgressDialog* m_activeProgress = nullptr;
+
+    /// PDF Fire: the scanner is working (searching, connecting, scanning) - a second
+    /// click must not start a second scan: the scanner answers "busy", and the error
+    /// window then got stuck under the progress window of the first scan (the app froze)
+    bool m_isBusy = false;
     QPushButton* m_reloadButton = nullptr;
     QPushButton* m_scanButton = nullptr;
     QDialogButtonBox* m_buttonBox = nullptr;

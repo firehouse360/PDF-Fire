@@ -197,6 +197,7 @@ void RedactPlugin::onCreateRedactedDocumentTriggered()
                                        m_widget->getDrawWidgetProxy()->getOptionalContentActivity(),
                                        &m_widget->getDrawWidgetProxy()->getMeshQualitySettings(),
                                        dialog.getRedactColor());
+        redactProcessor.setLabel(dialog.getLabelText(), dialog.getLabelColor()); // PDF Fire: REDACTED on the boxes
 
         pdf::PDFRedact::Options options;
         options.setFlag(pdf::PDFRedact::CopyTitle, dialog.isCopyingTitle());

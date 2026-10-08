@@ -53,6 +53,10 @@ public:
     /// PDF Fire: keep the content outside of the redacted areas (text stays searchable)
     bool isKeepingText() const;
 
+    /// PDF Fire: the word written in the centre of every box (empty = plain box) and its color
+    QString getLabelText() const;
+    QColor getLabelColor() const;
+
 private slots:
     void on_selectDirectoryButton_clicked();
 

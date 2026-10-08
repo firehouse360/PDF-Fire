@@ -4,14 +4,14 @@
 # against Fedora's own Qt and libraries, stages `cmake --install` under /opt/pdf-fire, and then
 # runs rpmbuild on this spec in the same container with the stage passed in:
 #
-#   rpmbuild -bb pdf-fire.spec --define "pdffire_stage <dir>" --define "pdffire_version 0.1.6" \
+#   rpmbuild -bb pdf-fire.spec --define "pdffire_stage <dir>" --define "pdffire_version 0.1.7" \
 #            --define "pdffire_engine 1.6.0.0" --define "pdffire_private_libs <regex>"
 #
 # Everything private lives in /opt/pdf-fire (the programs carry RPATH $ORIGIN/../lib), the same
 # layout as the .deb from scripts/make-deb.sh, so nothing collides with a Fedora pdf4qt package.
 # The package is left UNSIGNED on purpose — signing is a separate step.
 
-%{!?pdffire_version: %global pdffire_version 0.1.6}
+%{!?pdffire_version: %global pdffire_version 0.1.7}
 %{!?pdffire_engine: %global pdffire_engine 1.6.0.0}
 %{!?pdffire_stage: %{error:pdffire_stage is not set - build with scripts/make-rpm.sh}}
 
@@ -106,6 +106,14 @@ exit 0
 %{_datadir}/icons/hicolor/*/apps/pdf-fire.*
 
 %changelog
+* Wed Oct 07 2026 PDF Fire <pdffire.constant740@passmail.net> - 0.1.7-1
+- Scanning: a second click on Scan while the scanner was starting began a second scan; the
+  "scanner is busy" message then got stuck behind the progress window and the program froze.
+  The buttons are now off while the scanner works, and closing the window asks before scanned
+  pages are thrown away.
+- Create Redacted Document: "Text on the box" - a plain box (as before), or REDACTED written in
+  white or red in the centre of every redacted box.
+
 * Mon Oct 05 2026 PDF Fire <pdffire.constant740@passmail.net> - 0.1.6-1
 - Smooth scrolling on pages that are slow to draw (forms whose dotted lines are made of thousands
   of tiny pattern tiles took up to 170 ms per frame): such a page is drawn once at the current

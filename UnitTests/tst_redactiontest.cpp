@@ -148,6 +148,7 @@ private slots:
     void inconsistentContentFallsBack();
     void clipAndUnpaintedPathsInArea();
     void axialShadingInArea();
+    void labelOnBoxes();
     void redactFileFromEnvironment();
 
 private:
@@ -159,7 +160,8 @@ private:
     QRectF wordArea(PDFReal x, PDFReal y, const QByteArray& before, const QByteArray& word, PDFReal fontSize) const;
 
     // Redaction
-    RedactionResult redact(const QByteArray& source, const QString& name, bool keepText = true, QColor fillColor = Qt::black);
+    RedactionResult redact(const QByteArray& source, const QString& name, bool keepText = true, QColor fillColor = Qt::black,
+                           const QString& label = QString(), QColor labelColor = QColor());
 
     // Checks
     bool hasTool(const QString& tool) const;
@@ -306,7 +308,8 @@ QByteArray RedactionTest::buildDocument(RawPdf& pdf, const std::vector<PageSpec>
     return pdf.build(catalog);
 }
 
-RedactionResult RedactionTest::redact(const QByteArray& source, const QString& name, bool keepText, QColor fillColor)
+RedactionResult RedactionTest::redact(const QByteArray& source, const QString& name, bool keepText, QColor fillColor,
+                                      const QString& label, QColor labelColor)
 {
     RedactionResult result;
     result.sourceFile = m_directory.filePath(name + ".pdf");
@@ -339,6 +342,7 @@ RedactionResult RedactionTest::redact(const QByteArray& source, const QString& n
     fontCache.setCacheShrinkEnabled(nullptr, false);
 
     PDFRedact redactor(&document, &fontCache, cms.get(), &optionalContentActivity, &meshQualitySettings, fillColor);
+    redactor.setLabel(label, labelColor);
     PDFRedact::Options options = PDFRedact::CopyTitle;
     options.setFlag(PDFRedact::KeepTextSearchable, keepText);
     PDFDocument redacted = redactor.perform(options);
@@ -1282,6 +1286,104 @@ void RedactionTest::axialShadingInArea()
     QVERIFY(after.pixelColor(100, 300 - 150).value() < 120);
 }
 
+void RedactionTest::labelOnBoxes()
+{
+    REQUIRE_ENVIRONMENT();
+
+    // The light pixels (the label) inside of the box, as seen on the screen
+    auto getLabelBox = [this](const QString& fileName, QRect displayedBox)
+    {
+        const QImage image = render(fileName, 1);
+        QRect labelBox;
+        int count = 0;
+        const QRect inside = displayedBox.adjusted(3, 3, -3, -3);
+        for (int v = inside.top(); v <= inside.bottom(); ++v)
+        {
+            for (int u = inside.left(); u <= inside.right(); ++u)
+            {
+                if (image.pixelColor(u, v).lightness() > 200)
+                {
+                    labelBox |= QRect(u, v, 1, 1);
+                    ++count;
+                }
+            }
+        }
+        return std::make_pair(labelBox, count);
+    };
+
+    for (const int rotate : { 0, 90 })
+    {
+        for (const bool keepText : { true, false })
+        {
+            RawPdf pdf;
+            const int font = addDejaVuFont(pdf);
+
+            PageSpec page;
+            page.rotate = rotate;
+            page.content = "BT /F1 14 Tf 20 250 Td (Alpha Gamma) Tj ET\n"
+                           "BT /F1 14 Tf 60 150 Td (Labelsecretx) Tj ET\n";
+            const QRectF bigBox(QPointF(40, 100), QPointF(360, 200));
+            page.areas << bigBox;
+            page.areas << QRectF(QPointF(20, 30), QPointF(200, 32)); // 2 points - too thin for a label
+
+            // Page 400 x 300; turned by 90 degrees clockwise on the screen it is 300 x 400, u = y, v = x
+            const QRect displayedBox = rotate == 0 ? QRect(QPoint(40, 300 - 200), QPoint(360, 300 - 100))
+                                                   : QRect(QPoint(100, 40), QPoint(200, 360));
+            const QRect displayedThinBox = rotate == 0 ? QRect(QPoint(20, 300 - 32), QPoint(200, 300 - 30))
+                                                       : QRect(QPoint(30, 20), QPoint(32, 200));
+
+            std::vector<PageSpec> pages = { page };
+            const QString name = QString("label_%1_%2").arg(rotate).arg(keepText ? "text" : "outlines");
+            RedactionResult result = redact(buildDocument(pdf, pages, font), name, keepText, Qt::black, "REDACTED", Qt::white);
+            QVERIFY(result.ok);
+            checkSecretsRemoved(result, { "Labelsecretx" });
+            // The label is drawn as shapes - it is not text of the page
+            QVERIFY(!extractText(result.outputFile).contains("REDACTED"));
+            if (keepText)
+            {
+                checkTextKept(result, { "Alpha", "Gamma" });
+            }
+
+            const auto [labelBox, count] = getLabelBox(result.outputFile, displayedBox);
+            QVERIFY2(count > 100, qPrintable(QString("label pixels: %1").arg(count)));
+            // Upright on the screen: wider than tall, and centred in the box
+            QVERIFY2(labelBox.width() > 2 * labelBox.height(), qPrintable(QString("label %1x%2").arg(labelBox.width()).arg(labelBox.height())));
+            QVERIFY(qAbs(labelBox.center().x() - displayedBox.center().x()) <= 3);
+            QVERIFY(qAbs(labelBox.center().y() - displayedBox.center().y()) <= 3);
+            QVERIFY(labelBox.width() <= displayedBox.width() * 0.92);
+
+            // The thin box has no label (stays black)
+            const QImage image = render(result.outputFile, 1);
+            const QPoint thinCenter = displayedThinBox.center();
+            QVERIFY(image.pixelColor(thinCenter).lightness() < 60);
+
+            // A plain box has no label
+            RawPdf plainPdf;
+            const int plainFont = addDejaVuFont(plainPdf);
+            RedactionResult plain = redact(buildDocument(plainPdf, pages, plainFont), name + "_plain", keepText, Qt::black);
+            QCOMPARE(getLabelBox(plain.outputFile, displayedBox).second, 0);
+
+            // Red label: red pixels in the box
+            RawPdf redPdf;
+            const int redFont = addDejaVuFont(redPdf);
+            RedactionResult red = redact(buildDocument(redPdf, pages, redFont), name + "_red", keepText, Qt::black, "REDACTED", QColor(220, 0, 0));
+            const QString prefix = red.outputFile + "_color";
+            QProcess::execute("pdftoppm", { "-r", "72", "-png", "-hide-annotations", "-singlefile", red.outputFile, prefix });
+            const QImage colorImage(prefix + ".png");
+            int redCount = 0;
+            for (int v = displayedBox.top() + 3; v < displayedBox.bottom() - 3; ++v)
+            {
+                for (int u = displayedBox.left() + 3; u < displayedBox.right() - 3; ++u)
+                {
+                    const QColor color = colorImage.pixelColor(u, v);
+                    redCount += color.red() > 150 && color.green() < 60 && color.blue() < 60 ? 1 : 0;
+                }
+            }
+            QVERIFY2(redCount > 100, qPrintable(QString("red pixels: %1").arg(redCount)));
+        }
+    }
+}
+
 void RedactionTest::redactFileFromEnvironment()
 {
     // Redaction of a real document for manual checks: PDFFIRE_REDACT_INPUT (a COPY of the document!),
@@ -1319,7 +1421,11 @@ void RedactionTest::redactFileFromEnvironment()
 
     QFile markedData(markedFile);
     QVERIFY(markedData.open(QIODevice::ReadOnly));
-    RedactionResult result = redact(markedData.readAll(), QFileInfo(output).completeBaseName());
+    // PDFFIRE_REDACT_LABEL = white / red: REDACTED on the boxes, PDFFIRE_REDACT_OUTLINES = 1: the outlines method
+    const QString labelStyle = qEnvironmentVariable("PDFFIRE_REDACT_LABEL");
+    const QColor labelColor = labelStyle == "red" ? QColor(220, 0, 0) : QColor(Qt::white);
+    RedactionResult result = redact(markedData.readAll(), QFileInfo(output).completeBaseName(), !qEnvironmentVariableIsSet("PDFFIRE_REDACT_OUTLINES"),
+                                    Qt::black, labelStyle.isEmpty() ? QString() : QString("REDACTED"), labelColor);
     QVERIFY(result.ok);
     QFile::remove(output);
     QVERIFY(QFile::copy(result.outputFile, output));
