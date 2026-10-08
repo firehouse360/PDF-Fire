@@ -31,6 +31,7 @@
 #include <QAbstractItemDelegate>
 
 class QAction;
+class QLabel;
 class QPushButton;
 class QToolButton;
 class QWidget;
@@ -114,6 +115,13 @@ public:
     /// empty, if the thumbnails are not displayed, or no page is selected.
     std::vector<pdf::PDFInteger> getSelectedThumbnailPages() const;
 
+    /// PDF Fire: selects the pages in the thumbnails (for example the pages, which were
+    /// just rotated or moved, so the next operation works on them again) and scrolls to them
+    void selectThumbnailPages(const std::vector<pdf::PDFInteger>& pages);
+
+    /// PDF Fire: the Select button of the thumbnails is on (clicks pick pages)
+    bool isThumbnailSelectMode() const;
+
     /// PDF Fire: the content of the side panel can be collapsed, so only the column
     /// of the buttons stays visible. A click on the button of the displayed page
     /// collapses the panel, a click on any button expands it again.
@@ -164,6 +172,11 @@ private:
     void onAttachmentDoubleClicked(const QModelIndex& index);
     void onAttachmentCustomContextMenuRequested(const QPoint& pos);
     void onThumbnailClicked(const QModelIndex& index);
+
+    /// PDF Fire: the Select button of the thumbnails - every click adds a page to the
+    /// selection (or removes it), and the hint under the toolbar says what to do next
+    void setThumbnailSelectMode(bool enabled);
+    void updateThumbnailsHint();
     void onSignatureCustomContextMenuRequested(const QPoint& pos);
     void onOutlineTreeViewContextMenuRequested(const QPoint& pos);
     void onNotesTreeViewContextMenuRequested(const QPoint& pos);
@@ -249,6 +262,8 @@ private:
     pdf::PDFOutlineTreeItemModel* m_outlineTreeModel;
     QSortFilterProxyModel* m_outlineSortProxyTreeModel;
     pdf::PDFThumbnailsItemModel* m_thumbnailsModel;
+    QToolButton* m_thumbnailsSelectButton = nullptr;
+    QLabel* m_thumbnailsHintLabel = nullptr;
     pdf::PDFOptionalContentTreeItemModel* m_optionalContentTreeModel;
     PDFBookmarkItemModel* m_bookmarkItemModel;
     QStandardItemModel* m_notesTreeModel;

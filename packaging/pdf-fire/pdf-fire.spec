@@ -113,6 +113,10 @@ exit 0
   pages are thrown away.
 - Create Redacted Document: "Text on the box" - a plain box (as before), or REDACTED written in
   white or red in the centre of every redacted box.
+- Page thumbnails: deleting, rotating or moving pages no longer switches the side panel to the
+  bookmarks - the thumbnails stay where they were. New Select button: click several pages, then
+  right-click to rotate, move, extract or delete them all (the Delete key works too); a click
+  still shows the page. Rotated and moved pages stay selected.
 
 * Mon Oct 05 2026 PDF Fire <pdffire.constant740@passmail.net> - 0.1.6-1
 - Smooth scrolling on pages that are slow to draw (forms whose dotted lines are made of thousands

@@ -305,11 +305,89 @@ void PDFEditorMainWindow::setupRibbon()
 
     connect(insertBlankPageAction, &QAction::triggered, this, [this]() { const auto pages = getTargetPages(); if (!pages.empty()) { m_programController->insertBlankPage(pages.back() + 1); } });
     connect(insertPagesFromFileAction, &QAction::triggered, this, [this]() { const auto pages = getTargetPages(); if (!pages.empty()) { m_programController->insertPagesFromFile(pages.back() + 1); } });
-    connect(deletePagesAction, &QAction::triggered, this, [this]() { m_programController->deletePages(getTargetPages()); });
-    connect(rotatePagesLeftAction, &QAction::triggered, this, [this]() { m_programController->rotatePages(getTargetPages(), false); });
-    connect(rotatePagesRightAction, &QAction::triggered, this, [this]() { m_programController->rotatePages(getTargetPages(), true); });
-    connect(movePagesUpAction, &QAction::triggered, this, [this]() { m_programController->movePages(getTargetPages(), false); });
-    connect(movePagesDownAction, &QAction::triggered, this, [this]() { m_programController->movePages(getTargetPages(), true); });
+    // PDF Fire: after an operation the thumbnails select the pages it worked on (rotated pages
+    // stay selected, moved pages are followed to their new place, after a delete the page now
+    // at that place is selected), so the user keeps the place in a long document
+    connect(deletePagesAction, &QAction::triggered, this, [this]()
+    {
+        const std::vector<pdf::PDFInteger> pages = getTargetPages();
+        if (m_programController->deletePages(pages) && m_programController->getDocument())
+        {
+            // While pages are picked with the Select button nothing stays picked - the page
+            // now at that place was not chosen by the user
+            const pdf::PDFInteger pageCount = pdf::PDFInteger(m_programController->getDocument()->getCatalog()->getPageCount());
+            m_sidebarWidget->selectThumbnailPages(m_sidebarWidget->isThumbnailSelectMode() ? std::vector<pdf::PDFInteger>()
+                                                                                           : std::vector<pdf::PDFInteger>{ qMin(pages.front(), pageCount - 1) });
+        }
+    });
+    auto rotatePages = [this](bool right)
+    {
+        const std::vector<pdf::PDFInteger> pages = getTargetPages();
+        if (m_programController->rotatePages(pages, right))
+        {
+            m_sidebarWidget->selectThumbnailPages(pages);
+        }
+    };
+    connect(rotatePagesLeftAction, &QAction::triggered, this, [rotatePages]() { rotatePages(false); });
+    connect(rotatePagesRightAction, &QAction::triggered, this, [rotatePages]() { rotatePages(true); });
+    auto movePages = [this](bool towardsEnd)
+    {
+        const std::vector<pdf::PDFInteger> pages = getTargetPages();
+        if (!m_programController->getDocument())
+        {
+            return;
+        }
+        const size_t pageCount = m_programController->getDocument()->getCatalog()->getPageCount();
+        if (!m_programController->movePages(pages, towardsEnd))
+        {
+            return;
+        }
+
+        // The same swaps as PDFPageOperations::movePages - a moved page swaps with its
+        // neighbour, unless the neighbour is moved too
+        std::vector<bool> isMoved(pageCount, false);
+        for (const pdf::PDFInteger page : pages)
+        {
+            if (page >= 0 && size_t(page) < pageCount)
+            {
+                isMoved[page] = true;
+            }
+        }
+        if (towardsEnd)
+        {
+            for (pdf::PDFInteger i = pdf::PDFInteger(pageCount) - 2; i >= 0; --i)
+            {
+                if (isMoved[i] && !isMoved[i + 1])
+                {
+                    isMoved[i] = false;
+                    isMoved[i + 1] = true;
+                }
+            }
+        }
+        else
+        {
+            for (size_t i = 1; i < pageCount; ++i)
+            {
+                if (isMoved[i] && !isMoved[i - 1])
+                {
+                    isMoved[i] = false;
+                    isMoved[i - 1] = true;
+                }
+            }
+        }
+
+        std::vector<pdf::PDFInteger> movedPages;
+        for (size_t i = 0; i < pageCount; ++i)
+        {
+            if (isMoved[i])
+            {
+                movedPages.push_back(pdf::PDFInteger(i));
+            }
+        }
+        m_sidebarWidget->selectThumbnailPages(movedPages);
+    };
+    connect(movePagesUpAction, &QAction::triggered, this, [movePages]() { movePages(false); });
+    connect(movePagesDownAction, &QAction::triggered, this, [movePages]() { movePages(true); });
     connect(extractPagesAction, &QAction::triggered, this, [this]() { m_programController->extractPages(getTargetPages()); });
 
     m_pageActions = { insertBlankPageAction, insertPagesFromFileAction, deletePagesAction, rotatePagesLeftAction, rotatePagesRightAction,

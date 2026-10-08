@@ -320,9 +320,10 @@ public:
     void newDocument();
     void insertBlankPage(pdf::PDFInteger position);
     void insertPagesFromFile(pdf::PDFInteger position);
-    void deletePages(const std::vector<pdf::PDFInteger>& pages);
-    void rotatePages(const std::vector<pdf::PDFInteger>& pages, bool right);
-    void movePages(const std::vector<pdf::PDFInteger>& pages, bool towardsEnd);
+    /// PDF Fire: these return true, when the document was changed (not cancelled, no error)
+    bool deletePages(const std::vector<pdf::PDFInteger>& pages);
+    bool rotatePages(const std::vector<pdf::PDFInteger>& pages, bool right);
+    bool movePages(const std::vector<pdf::PDFInteger>& pages, bool towardsEnd);
     void extractPages(const std::vector<pdf::PDFInteger>& pages);
     bool canModifyPages() const;
     pdf::PDFInteger getCurrentPageIndex() const;

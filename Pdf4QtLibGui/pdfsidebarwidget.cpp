@@ -43,6 +43,10 @@
 
 #include <QMenu>
 #include <QAction>
+#include <QLabel>
+#include <QScrollBar>
+#include <QShortcut>
+#include <QToolButton>
 #include <QFileDialog>
 #include <QStandardPaths>
 #include <QDesktopServices>
@@ -144,6 +148,25 @@ PDFSidebarWidget::PDFSidebarWidget(pdf::PDFDrawWidgetProxy* proxy,
     connect(ui->thumbnailsSizeSlider, &QSlider::valueChanged, this, &PDFSidebarWidget::onThumbnailsSizeChanged);
     connect(ui->thumbnailsListView, &QListView::clicked, this, &PDFSidebarWidget::onThumbnailClicked);
     onThumbnailsSizeChanged(ui->thumbnailsSizeSlider->value());
+
+    // PDF Fire: several pages can be picked by Ctrl/Shift + click, or - without the keyboard -
+    // with the Select button. A click still shows the page, the hint says what to do next.
+    m_thumbnailsSelectButton = new QToolButton(ui->thumbnailsToolbarWidget);
+    m_thumbnailsSelectButton->setObjectName("thumbnailsSelectButton");
+    m_thumbnailsSelectButton->setText(tr("Select"));
+    m_thumbnailsSelectButton->setCheckable(true);
+    m_thumbnailsSelectButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    m_thumbnailsSelectButton->setToolTip(tr("Pick several pages: every click adds a page or removes it again. Then right-click a picked page "
+                                            "to rotate, move, extract or delete them all (or press Delete). Ctrl + click and Shift + click work too."));
+    ui->thumbnailsToolbarLayout->insertWidget(1, m_thumbnailsSelectButton);
+    connect(m_thumbnailsSelectButton, &QToolButton::toggled, this, &PDFSidebarWidget::setThumbnailSelectMode);
+
+    m_thumbnailsHintLabel = new QLabel(ui->thumbnailsPage);
+    m_thumbnailsHintLabel->setObjectName("thumbnailsHintLabel");
+    m_thumbnailsHintLabel->setWordWrap(true);
+    m_thumbnailsHintLabel->setVisible(false);
+    ui->thumbnailsLayout->insertWidget(ui->thumbnailsLayout->indexOf(ui->thumbnailsToolbarWidget) + 1, m_thumbnailsHintLabel);
+    connect(ui->thumbnailsListView->selectionModel(), &QItemSelectionModel::selectionChanged, this, &PDFSidebarWidget::updateThumbnailsHint);
 
     // Optional content
     ui->optionalContentTreeView->header()->hide();
@@ -247,8 +270,17 @@ void PDFSidebarWidget::setDocument(const pdf::PDFModifiedDocument& document, con
     m_outlineTreeModel->setDocument(document);
     updateOutlineActions();
 
-    // Thumbnails
+    // Thumbnails. PDF Fire: a change of the same document (pages deleted, rotated, moved...)
+    // is not a newly opened document - the list keeps its place instead of jumping to the top.
+    const bool isSameDocument = document && (!document.hasReset() || document.hasPreserveView());
+    const int thumbnailsScrollPosition = ui->thumbnailsListView->verticalScrollBar()->value();
     m_thumbnailsModel->setDocument(document);
+    if (isSameDocument)
+    {
+        ui->thumbnailsListView->doItemsLayout();
+        ui->thumbnailsListView->verticalScrollBar()->setValue(thumbnailsScrollPosition);
+    }
+    updateThumbnailsHint();
 
     // Update optional content
     m_optionalContentTreeModel->setDocument(document);
@@ -311,7 +343,9 @@ void PDFSidebarWidget::setDocument(const pdf::PDFModifiedDocument& document, con
         }
     }
 
-    if (!document.hasReset() && preferred == Invalid && m_currentPage != Invalid && !isEmpty(m_currentPage))
+    // PDF Fire: the shown panel stays (it used to switch to the bookmarks after a page was
+    // deleted from the thumbnails, because the page operations relayout the document)
+    if (isSameDocument && m_currentPage != Invalid && !isEmpty(m_currentPage))
     {
         preferred = m_currentPage;
     }
@@ -459,9 +493,116 @@ std::vector<pdf::PDFInteger> PDFSidebarWidget::getSelectedThumbnailPages() const
 
 void PDFSidebarWidget::setThumbnailActions(const QList<QAction*>& actions)
 {
-    ui->thumbnailsListView->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    ui->thumbnailsListView->setSelectionMode(m_thumbnailsSelectButton && m_thumbnailsSelectButton->isChecked() ? QAbstractItemView::MultiSelection
+                                                                                                                 : QAbstractItemView::ExtendedSelection);
     ui->thumbnailsListView->setContextMenuPolicy(Qt::ActionsContextMenu);
     ui->thumbnailsListView->addActions(actions);
+
+    // PDF Fire: the Delete key deletes the selected pages (the action asks first)
+    for (QAction* action : actions)
+    {
+        if (action && action->objectName() == QLatin1String("actionDeletePages"))
+        {
+            QShortcut* deleteShortcut = new QShortcut(QKeySequence::Delete, ui->thumbnailsListView);
+            deleteShortcut->setContext(Qt::WidgetShortcut);
+            connect(deleteShortcut, &QShortcut::activated, action, &QAction::trigger);
+        }
+    }
+}
+
+void PDFSidebarWidget::selectThumbnailPages(const std::vector<pdf::PDFInteger>& pages)
+{
+    QItemSelectionModel* selectionModel = ui->thumbnailsListView->selectionModel();
+    if (!selectionModel)
+    {
+        return;
+    }
+
+    if (pages.empty())
+    {
+        selectionModel->clearSelection();
+        return;
+    }
+
+    QItemSelection selection;
+    QModelIndex firstIndex;
+    for (const pdf::PDFInteger page : pages)
+    {
+        const QModelIndex index = m_thumbnailsModel->index(int(page), 0, QModelIndex());
+        if (index.isValid())
+        {
+            selection.select(index, index);
+            if (!firstIndex.isValid())
+            {
+                firstIndex = index;
+            }
+        }
+    }
+
+    if (!firstIndex.isValid())
+    {
+        return;
+    }
+
+    selectionModel->setCurrentIndex(firstIndex, QItemSelectionModel::NoUpdate);
+    selectionModel->select(selection, QItemSelectionModel::ClearAndSelect);
+    ui->thumbnailsListView->scrollTo(firstIndex, QAbstractItemView::EnsureVisible);
+}
+
+bool PDFSidebarWidget::isThumbnailSelectMode() const
+{
+    return m_thumbnailsSelectButton && m_thumbnailsSelectButton->isChecked();
+}
+
+void PDFSidebarWidget::setThumbnailSelectMode(bool enabled)
+{
+    ui->thumbnailsListView->setSelectionMode(enabled ? QAbstractItemView::MultiSelection : QAbstractItemView::ExtendedSelection);
+
+    // Entering the mode starts with nothing picked - the one highlighted thumbnail is only the
+    // page shown in the document, and it would otherwise be deleted with the picked pages without
+    // the user noticing (several pages picked by Ctrl/Shift + click before are kept)
+    if (enabled && ui->thumbnailsListView->selectionModel() && ui->thumbnailsListView->selectionModel()->selectedIndexes().size() <= 1)
+    {
+        ui->thumbnailsListView->selectionModel()->clearSelection();
+    }
+
+    // Leaving the mode keeps only the page shown in the document selected
+    if (!enabled && ui->thumbnailsListView->selectionModel())
+    {
+        const QModelIndex currentIndex = ui->thumbnailsListView->currentIndex();
+        ui->thumbnailsListView->selectionModel()->clearSelection();
+        if (currentIndex.isValid())
+        {
+            ui->thumbnailsListView->selectionModel()->select(currentIndex, QItemSelectionModel::Select);
+        }
+    }
+
+    updateThumbnailsHint();
+}
+
+void PDFSidebarWidget::updateThumbnailsHint()
+{
+    if (!m_thumbnailsHintLabel || !ui->thumbnailsListView->selectionModel())
+    {
+        return;
+    }
+
+    const int count = int(ui->thumbnailsListView->selectionModel()->selectedIndexes().size());
+    const bool isSelectMode = m_thumbnailsSelectButton && m_thumbnailsSelectButton->isChecked();
+
+    QString hint;
+    if (count > 1 || (isSelectMode && count == 1))
+    {
+        hint = count == 1 ? tr("1 page selected - right-click it to rotate, move, extract or delete it.")
+                          : tr("%1 pages selected - right-click one of them to rotate, move, extract or delete them all.").arg(count);
+    }
+    else if (isSelectMode)
+    {
+        hint = tr("Click the pages you want. A second click removes a page again.");
+    }
+
+    m_thumbnailsHintLabel->setText(hint);
+    m_thumbnailsHintLabel->setVisible(!hint.isEmpty());
 }
 
 void PDFSidebarWidget::setCurrentPages(const std::vector<pdf::PDFInteger>& currentPages)
@@ -469,6 +610,13 @@ void PDFSidebarWidget::setCurrentPages(const std::vector<pdf::PDFInteger>& curre
     // PDF Fire: several selected thumbnails are a selection of pages made by the user
     // for an operation, scrolling of the document must not replace it by the current page
     if (ui->thumbnailsListView->selectionModel() && ui->thumbnailsListView->selectionModel()->selectedIndexes().size() > 1)
+    {
+        return;
+    }
+
+    // While the pages are picked by the Select button, the selection belongs to the user
+    // (the current index would toggle the selection of a page in this mode)
+    if (m_thumbnailsSelectButton && m_thumbnailsSelectButton->isChecked())
     {
         return;
     }

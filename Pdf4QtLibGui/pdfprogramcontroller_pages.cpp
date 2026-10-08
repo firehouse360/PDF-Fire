@@ -197,11 +197,11 @@ void PDFProgramController::insertPagesFromFile(pdf::PDFInteger position)
     applyPageOperation(true, std::move(document), position);
 }
 
-void PDFProgramController::deletePages(const std::vector<pdf::PDFInteger>& pages)
+bool PDFProgramController::deletePages(const std::vector<pdf::PDFInteger>& pages)
 {
     if (!canModifyPages() || pages.empty())
     {
-        return;
+        return false;
     }
 
     const QString question = pages.size() == 1 ? tr("Delete page %1?").arg(pages.front() + 1)
@@ -209,31 +209,33 @@ void PDFProgramController::deletePages(const std::vector<pdf::PDFInteger>& pages
     const QString message = tr("%1\n\nThe pages are removed from the document together with their content. Until the document is closed, this can be undone.").arg(question);
     if (QMessageBox::question(m_mainWindow, tr("Delete Pages"), message, QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Yes) != QMessageBox::Yes)
     {
-        return;
+        return false;
     }
 
     pdf::PDFDocument document;
     const pdf::PDFOperationResult result = pdf::PDFPageOperations::deletePages(m_pdfDocument.data(), pages, &document);
     applyPageOperation(result, std::move(document), *std::min_element(pages.cbegin(), pages.cend()));
+    return bool(result);
 }
 
-void PDFProgramController::rotatePages(const std::vector<pdf::PDFInteger>& pages, bool right)
+bool PDFProgramController::rotatePages(const std::vector<pdf::PDFInteger>& pages, bool right)
 {
     if (!canModifyPages() || pages.empty())
     {
-        return;
+        return false;
     }
 
     pdf::PDFDocument document;
     const pdf::PDFOperationResult result = pdf::PDFPageOperations::rotatePages(m_pdfDocument.data(), pages, right, &document);
     applyPageOperation(result, std::move(document), *std::min_element(pages.cbegin(), pages.cend()));
+    return bool(result);
 }
 
-void PDFProgramController::movePages(const std::vector<pdf::PDFInteger>& pages, bool towardsEnd)
+bool PDFProgramController::movePages(const std::vector<pdf::PDFInteger>& pages, bool towardsEnd)
 {
     if (!canModifyPages() || pages.empty())
     {
-        return;
+        return false;
     }
 
     pdf::PDFDocument document;
@@ -241,6 +243,7 @@ void PDFProgramController::movePages(const std::vector<pdf::PDFInteger>& pages, 
 
     const pdf::PDFInteger firstPage = *std::min_element(pages.cbegin(), pages.cend());
     applyPageOperation(result, std::move(document), firstPage + (towardsEnd ? 1 : -1));
+    return bool(result);
 }
 
 void PDFProgramController::extractPages(const std::vector<pdf::PDFInteger>& pages)
