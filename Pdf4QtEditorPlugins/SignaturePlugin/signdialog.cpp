@@ -66,6 +66,7 @@ constexpr const char* SETTINGS_RECORD_OPERATING_SYSTEM = "Record/OperatingSystem
 constexpr const char* SETTINGS_RECORD_COMPUTER = "Record/Computer";
 constexpr const char* SETTINGS_RECORD_LOCAL_ADDRESSES = "Record/LocalAddresses";
 constexpr const char* SETTINGS_RECORD_PUBLIC_ADDRESS = "Record/PublicAddress";
+constexpr const char* SETTINGS_RECORD_DEFAULTS_VERSION = "Record/DefaultsVersion";
 
 /// Timestamp authorities offered to the user. The combo box is editable, so
 /// any other authority can be used, too.
@@ -250,10 +251,21 @@ void SignDialog::updateSigningPolicy()
     {
         QSettings settings;
         settings.beginGroup(SETTINGS_GROUP);
-        m_operatingSystemCheckBox->setChecked(settings.value(SETTINGS_RECORD_OPERATING_SYSTEM, false).toBool());
+
+        // PDF Fire (2026-10-10, Mike): the operating system and the public IP address are
+        // recorded (and shown on the signature) by default. A choice saved before this
+        // default existed is switched on once, then the choice of the user is kept again.
+        if (!settings.value(SETTINGS_RECORD_DEFAULTS_VERSION, 0).toInt())
+        {
+            settings.setValue(SETTINGS_RECORD_OPERATING_SYSTEM, true);
+            settings.setValue(SETTINGS_RECORD_PUBLIC_ADDRESS, true);
+            settings.setValue(SETTINGS_RECORD_DEFAULTS_VERSION, 1);
+        }
+
+        m_operatingSystemCheckBox->setChecked(settings.value(SETTINGS_RECORD_OPERATING_SYSTEM, true).toBool());
         m_computerCheckBox->setChecked(settings.value(SETTINGS_RECORD_COMPUTER, false).toBool());
         m_localAddressCheckBox->setChecked(settings.value(SETTINGS_RECORD_LOCAL_ADDRESSES, false).toBool());
-        m_publicAddressCheckBox->setChecked(settings.value(SETTINGS_RECORD_PUBLIC_ADDRESS, false).toBool());
+        m_publicAddressCheckBox->setChecked(settings.value(SETTINGS_RECORD_PUBLIC_ADDRESS, true).toBool());
         settings.endGroup();
     }
     m_policyLabel->setVisible(m_isPolicyApplied);

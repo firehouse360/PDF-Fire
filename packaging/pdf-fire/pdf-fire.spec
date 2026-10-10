@@ -112,6 +112,8 @@ exit 0
   when they are chosen under Signing record (they were only recorded inside the signature).
 - Sign dialog: the look of the signature is next to the signing record, so the dialog fits a
   laptop screen; the preview no longer covers the text under it, and it shows the chosen details.
+- Signing record: the operating system and the public IP address are recorded (and shown) by
+  default; they are switched on once after the update, then your own choice is kept.
 
 * Thu Oct 08 2026 PDF Fire <pdffire.constant740@passmail.net> - 0.1.8-1
 - Saving a large document (hundreds of MB) no longer freezes the window: the file is written in
