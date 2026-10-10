@@ -36,6 +36,7 @@
 #include <QFormLayout>
 #include <QGridLayout>
 #include <QVBoxLayout>
+#include <QHBoxLayout>
 #include <QGroupBox>
 #include <QLabel>
 #include <QLineEdit>
@@ -198,11 +199,24 @@ void SignDialog::createRecordWidgets()
     m_policyLabel->setVisible(false);
     recordLayout->addWidget(m_policyLabel);
 
-    // Under the settings of the signature, above the buttons
+    // Under the settings of the signature, above the buttons. PDF Fire: the look of the
+    // signature is next to the record (in one column the dialog was taller than a laptop
+    // screen, and the squeezed preview covered the text under it)
     if (QVBoxLayout* mainLayout = qobject_cast<QVBoxLayout*>(this->layout()))
     {
-        mainLayout->insertWidget(mainLayout->indexOf(ui->parametersGroupBox) + 1, m_recordGroup);
+        mainLayout->removeWidget(m_appearanceGroup);
+        QHBoxLayout* rowLayout = new QHBoxLayout();
+        rowLayout->addWidget(m_recordGroup, 1);
+        rowLayout->addWidget(m_appearanceGroup, 0);
+        mainLayout->insertLayout(mainLayout->indexOf(ui->parametersGroupBox) + 1, rowLayout);
     }
+
+    // The preview shows the chosen details
+    for (QCheckBox* checkBox : { m_operatingSystemCheckBox, m_computerCheckBox, m_localAddressCheckBox, m_publicAddressCheckBox })
+    {
+        connect(checkBox, &QCheckBox::toggled, this, &SignDialog::updatePreview);
+    }
+    connect(ui->reasonEdit, &QLineEdit::textChanged, this, &SignDialog::updatePreview);
 }
 
 void SignDialog::updateSigningPolicy()
@@ -313,12 +327,15 @@ void SignDialog::createAppearanceGroup()
     connect(m_styleCombo, &QComboBox::currentIndexChanged, this, &SignDialog::updatePreview);
     layout->addRow(tr("Style:"), m_styleCombo);
 
+    // The proportions of the signature placed on the page (300 x 75)
     m_previewLabel = new QLabel(m_appearanceGroup);
-    m_previewLabel->setFixedSize(360, 110);
+    m_previewLabel->setFixedSize(400, 100);
     m_previewLabel->setFrameShape(QFrame::StyledPanel);
     layout->addRow(tr("Preview:"), m_previewLabel);
 
-    m_detailsCheckBox = new QCheckBox(tr("Add \"Digitally signed by\" with the date under the name"), m_appearanceGroup);
+    m_detailsCheckBox = new QCheckBox(tr("Show the details next to the name"), m_appearanceGroup);
+    m_detailsCheckBox->setToolTip(tr("Digitally signed by, the date and the reason - and the operating system, computer and "
+                                     "IP addresses, which are chosen under Signing record"));
     m_detailsCheckBox->setChecked(true);
     connect(m_detailsCheckBox, &QCheckBox::toggled, this, &SignDialog::updatePreview);
     layout->addRow(QString(), m_detailsCheckBox);
@@ -380,21 +397,97 @@ bool SignDialog::isAppearanceDetailsShown() const
     return m_detailsCheckBox->isChecked();
 }
 
-void SignDialog::drawNameAppearance(QPainter* painter, const QRectF& rect, const QString& name, const QFont& font,
-                                    bool showDetails, const QDateTime& dateTime, const QString& reason)
+QStringList SignDialog::getAppearanceDetails(const QString& name, const QDateTime& dateTime, const QString& reason, const QString& operatingSystem,
+                                             const QString& computer, const QStringList& localAddresses, const QString& publicAddress)
+{
+    // The recorded texts carry explanations in brackets ("Ubuntu 26.04 (linux ...)",
+    // "203.0.113.5 (reported by ...)") - the page shows only the value
+    auto shortValue = [](const QString& value) { return value.section(QStringLiteral(" ("), 0, 0).trimmed(); };
+
+    QStringList details;
+    details << tr("Digitally signed by %1").arg(name);
+    details << tr("Date: %1").arg(QLocale().toString(dateTime, QLocale::ShortFormat));
+    if (!reason.trimmed().isEmpty())
+    {
+        details << tr("Reason: %1").arg(reason.trimmed());
+    }
+    if (!operatingSystem.isEmpty())
+    {
+        details << tr("OS: %1").arg(shortValue(operatingSystem));
+    }
+    if (!computer.isEmpty())
+    {
+        details << tr("Computer: %1").arg(computer);
+    }
+    if (!localAddresses.isEmpty())
+    {
+        details << tr("IP: %1").arg(localAddresses.mid(0, 2).join(QStringLiteral(", ")));
+    }
+    if (!publicAddress.isEmpty())
+    {
+        details << tr("Public IP: %1").arg(shortValue(publicAddress));
+    }
+    return details;
+}
+
+QStringList SignDialog::getPreviewDetails(const QDateTime& dateTime) const
+{
+    if (!isAppearanceDetailsShown())
+    {
+        return QStringList();
+    }
+
+    pdf::PDFFireSigningRecord record;
+    record.collectComputerInformation(isOperatingSystemRecorded(), isComputerRecorded(), isLocalAddressRecorded());
+    const QString computer = record.hostName.isEmpty() ? QString() : (record.userAccount.isEmpty() ? record.hostName : QString("%1 (%2)").arg(record.hostName, record.userAccount));
+    return getAppearanceDetails(getAppearanceName(), dateTime, ui->reasonEdit->text(), record.operatingSystem, computer, record.localAddresses,
+                                isPublicAddressRecorded() ? tr("looked up when signing") : QString());
+}
+
+void SignDialog::drawNameAppearance(QPainter* painter, const QRectF& rect, const QString& name, const QFont& font, const QStringList& details)
 {
     painter->save();
     painter->setRenderHint(QPainter::Antialiasing, true);
     painter->setRenderHint(QPainter::TextAntialiasing, true);
 
-    // The details take the bottom quarter, the name the rest
-    QRectF nameRect = rect.adjusted(rect.width() * 0.03, rect.height() * 0.04, -rect.width() * 0.03, 0);
+    // PDF Fire: the name at the left side, the details at the right side of it
+    const bool showDetails = !details.isEmpty();
+    const qreal margin = qMin(rect.width(), rect.height()) * 0.06;
+    QRectF nameRect = rect.adjusted(margin, margin, -margin, -margin);
     QRectF detailsRect;
+    // The details are written in one or two columns - whichever gives the larger
+    // letters (two columns help with many short lines, one with a few long ones)
+    QFont detailsFont(QStringLiteral("Sans Serif"));
+    detailsFont.setPixelSize(100);
+    const QFontMetricsF metrics(detailsFont);
+    int columnCount = 1;
+    qreal scale = 0.0;
     if (showDetails)
     {
-        const qreal detailsHeight = rect.height() * 0.28;
-        detailsRect = QRectF(rect.left() + rect.width() * 0.03, rect.bottom() - detailsHeight, rect.width() * 0.94, detailsHeight);
-        nameRect.setBottom(detailsRect.top());
+        qreal maxLineWidth = 0.0;
+        for (const QString& line : details)
+        {
+            maxLineWidth = qMax(maxLineWidth, metrics.horizontalAdvance(line));
+        }
+
+        for (const int columns : { 1, 2 })
+        {
+            const qreal nameShare = columns == 2 ? 0.40 : 0.46;
+            const qreal width = (rect.width() - 2 * margin) * (1.0 - nameShare) - margin;
+            const qreal columnWidth = (width - (columns - 1) * margin) / columns;
+            const int lines = (int(details.size()) + columns - 1) / columns;
+            const qreal lineHeight = (rect.height() - 2 * margin) / qMax(lines, 2);
+            const qreal candidate = qMin((lineHeight * 0.78) / metrics.height(), maxLineWidth > 0 ? columnWidth / maxLineWidth : 1.0);
+            if (candidate > scale * 1.05)
+            {
+                scale = candidate;
+                columnCount = columns;
+            }
+        }
+
+        const qreal nameShare = columnCount == 2 ? 0.40 : 0.46;
+        nameRect.setWidth((rect.width() - 2 * margin) * nameShare);
+        detailsRect = QRectF(QPointF(nameRect.right() + margin, rect.top() + margin), QPointF(rect.right() - margin, rect.bottom() - margin));
     }
 
     // The texts are drawn as outlines - they fit the box exactly on any device, and
@@ -431,18 +524,35 @@ void SignDialog::drawNameAppearance(QPainter* painter, const QRectF& rect, const
         painter->restore();
     };
 
-    drawFitted(name.isEmpty() ? QStringLiteral(" ") : name, font, nameRect.adjusted(0, nameRect.height() * 0.06, 0, -nameRect.height() * 0.06), Qt::AlignHCenter, QColor(15, 30, 90));
+    drawFitted(name.isEmpty() ? QStringLiteral(" ") : name, font, nameRect.adjusted(0, nameRect.height() * 0.06, 0, -nameRect.height() * 0.06), Qt::AlignLeft, QColor(15, 30, 90));
 
     if (showDetails)
     {
-        QString details = tr("Digitally signed by %1").arg(name) + QStringLiteral(" \u2022 ") + QLocale().toString(dateTime, QLocale::ShortFormat);
-        if (!reason.isEmpty())
+        // All lines in one size (chosen above) - as a small print
+        const int linesPerColumn = (int(details.size()) + columnCount - 1) / columnCount;
+        const qreal columnGap = margin;
+        const qreal columnWidth = (detailsRect.width() - (columnCount - 1) * columnGap) / columnCount;
+
+        // The block of the lines is centred vertically next to the name
+        const qreal usedLineHeight = metrics.height() * scale / 0.78;
+        const qreal blockTop = detailsRect.top() + (detailsRect.height() - usedLineHeight * linesPerColumn) * 0.5;
+        for (int i = 0; i < int(details.size()); ++i)
         {
-            details += QStringLiteral(" \u2022 ") + reason;
+            const int column = i / linesPerColumn;
+            const int row = i % linesPerColumn;
+
+            QPainterPath path;
+            path.addText(0, metrics.ascent(), detailsFont, details[i]);
+            QTransform transform;
+            transform.translate(detailsRect.left() + column * (columnWidth + columnGap), blockTop + row * usedLineHeight + (usedLineHeight - metrics.height() * scale) * 0.5);
+            transform.scale(scale, scale);
+
+            painter->save();
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(QColor(70, 70, 70));
+            painter->drawPath(transform.map(path));
+            painter->restore();
         }
-        // The details are not larger than a small print
-        QRectF target = detailsRect.adjusted(0, detailsRect.height() * 0.2, 0, -detailsRect.height() * 0.1);
-        drawFitted(details, QFont(QStringLiteral("Sans Serif")), target, Qt::AlignLeft, QColor(70, 70, 70));
     }
 
     painter->restore();
@@ -461,7 +571,7 @@ void SignDialog::updatePreview()
     pixmap.fill(Qt::white);
     QPainter painter(&pixmap);
     drawNameAppearance(&painter, QRectF(QPointF(0, 0), QSizeF(m_previewLabel->size())), getAppearanceName(), getAppearanceFont(),
-                       isAppearanceDetailsShown(), QDateTime::currentDateTime(), ui->reasonEdit->text());
+                       getPreviewDetails(QDateTime::currentDateTime()));
     painter.end();
     m_previewLabel->setPixmap(pixmap);
 }

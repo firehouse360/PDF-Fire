@@ -95,9 +95,7 @@ private:
                                                 const QString& fieldName,
                                                 const QString& name,
                                                 const QFont& font,
-                                                bool showDetails,
-                                                const QDateTime& dateTime,
-                                                const QString& reason);
+                                                const QStringList& details);
     void onOpenCertificatesManager();
     void onOpenDepartmentAuthority();
     void applyPermissions();

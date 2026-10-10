@@ -678,9 +678,7 @@ pdf::PDFObjectReference SignaturePlugin::createNameSignature(pdf::PDFDocumentBui
                                                              const QString& fieldName,
                                                              const QString& name,
                                                              const QFont& font,
-                                                             bool showDetails,
-                                                             const QDateTime& dateTime,
-                                                             const QString& reason)
+                                                             const QStringList& details)
 {
     const pdf::PDFObjectStorage* storage = builder.getStorage();
     const pdf::PDFPage* page = m_document->getCatalog()->getPage(target.pageIndex);
@@ -700,7 +698,7 @@ pdf::PDFObjectReference SignaturePlugin::createNameSignature(pdf::PDFDocumentBui
     // The appearance: the name (in the handwriting font) and the details
     pdf::PDFContentStreamBuilder contentBuilder(size, pdf::PDFContentStreamBuilder::CoordinateSystem::Qt);
     QPainter* painter = contentBuilder.begin();
-    SignDialog::drawNameAppearance(painter, QRectF(QPointF(0, 0), size), name, font, showDetails, dateTime, reason);
+    SignDialog::drawNameAppearance(painter, QRectF(QPointF(0, 0), size), name, font, details);
     pdf::PDFContentStreamBuilder::ContentStream contentStream = contentBuilder.end(painter);
 
     std::vector<pdf::PDFObject> copiedObjects = builder.copyFrom({ contentStream.resources, contentStream.contents }, contentStream.document.getStorage(), true);
@@ -814,7 +812,8 @@ void SignaturePlugin::signDigitally(const SignTarget& initialTarget)
         if (target.kind == SignTarget::Kind::Rectangle && target.rect.isEmpty() && signatureType != SignDialog::TimestampOnly)
         {
             // The size used last time (the preview keeps the proportions of the default size)
-            const QSizeF defaultSize(dialog.isAppearanceDetailsShown() ? 200.0 : 180.0, dialog.isAppearanceDetailsShown() ? 60.0 : 50.0);
+            // PDF Fire: with the details next to the name, the signature is wider
+            const QSizeF defaultSize(dialog.isAppearanceDetailsShown() ? 300.0 : 180.0, dialog.isAppearanceDetailsShown() ? 75.0 : 50.0);
             const qreal sizeFactor = qBound(0.2, QSettings().value(QStringLiteral("SignaturePlugin/PlacementScale"), 1.0).toDouble(), 3.0);
             const QSizeF size = defaultSize * sizeFactor;
             QImage preview(QSize(int(size.width() * 3), int(size.height() * 3)), QImage::Format_ARGB32_Premultiplied);
@@ -822,7 +821,7 @@ void SignaturePlugin::signDigitally(const SignTarget& initialTarget)
             {
                 QPainter painter(&preview);
                 SignDialog::drawNameAppearance(&painter, QRectF(QPointF(0, 0), QSizeF(preview.size())), dialog.getAppearanceName(), dialog.getAppearanceFont(),
-                                               dialog.isAppearanceDetailsShown(), QDateTime::currentDateTime(), dialog.getReasonText());
+                                               dialog.getPreviewDetails(QDateTime::currentDateTime()));
             }
 
             QEventLoop loop;
@@ -995,6 +994,18 @@ void SignaturePlugin::signDigitally(const SignTarget& initialTarget)
             }
         }
 
+        // PDF Fire: the details shown next to the name are the recorded ones - the same
+        // values, which are sealed in the signing record
+        QStringList appearanceDetails;
+        if (isAppearanceDetailsShown)
+        {
+            const QString computer = signingRecord.hostName.isEmpty() ? QString()
+                                                                      : (signingRecord.userAccount.isEmpty() ? signingRecord.hostName
+                                                                                                             : QString("%1 (%2)").arg(signingRecord.hostName, signingRecord.userAccount));
+            appearanceDetails = SignDialog::getAppearanceDetails(appearanceName, parameters.signingTime, reasonText, signingRecord.operatingSystem,
+                                                                 computer, signingRecord.localAddresses, signingRecord.publicAddress);
+        }
+
         pdf::PDFSignatureFactory::TimestampSettings timestampSettings;
         timestampSettings.url = dialog.getTimestampUrl();
 
@@ -1041,7 +1052,7 @@ void SignaturePlugin::signDigitally(const SignTarget& initialTarget)
             if (isNameSignature)
             {
                 signatureField = createNameSignature(builder, signatureDictionary, target, signatureName, appearanceName, appearanceFont,
-                                                     isAppearanceDetailsShown, parameters.signingTime, reasonText);
+                                                     appearanceDetails);
             }
             else if (!visibleSignature)
             {

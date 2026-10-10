@@ -114,10 +114,18 @@ public:
     /// Families of the handwriting fonts coming with PDF Fire (loaded on the first call)
     static QStringList getHandwritingFontFamilies();
 
-    /// Draws the look of a signature: the name in the font, scaled to fit, and
-    /// optionally the line "Digitally signed by ..." with the date under it
-    static void drawNameAppearance(QPainter* painter, const QRectF& rect, const QString& name, const QFont& font,
-                                   bool showDetails, const QDateTime& dateTime, const QString& reason);
+    /// Draws the look of a signature: the name in the font, at the left side, and the
+    /// details (if any) at the right side of it - in two columns, when there are many
+    static void drawNameAppearance(QPainter* painter, const QRectF& rect, const QString& name, const QFont& font, const QStringList& details);
+
+    /// PDF Fire: the detail lines shown next to the name - signed by, date, reason, and the
+    /// computer details, which are recorded (empty ones are left out)
+    static QStringList getAppearanceDetails(const QString& name, const QDateTime& dateTime, const QString& reason, const QString& operatingSystem,
+                                            const QString& computer, const QStringList& localAddresses, const QString& publicAddress);
+
+    /// PDF Fire: the detail lines for the previews - the computer details as they are now
+    /// (the public address is looked up only when signing)
+    QStringList getPreviewDetails(const QDateTime& dateTime) const;
 
 private:
     /// Enables only the settings, which are used by the selected signature type

@@ -4,14 +4,14 @@
 # against Fedora's own Qt and libraries, stages `cmake --install` under /opt/pdf-fire, and then
 # runs rpmbuild on this spec in the same container with the stage passed in:
 #
-#   rpmbuild -bb pdf-fire.spec --define "pdffire_stage <dir>" --define "pdffire_version 0.1.8" \
+#   rpmbuild -bb pdf-fire.spec --define "pdffire_stage <dir>" --define "pdffire_version 0.1.9" \
 #            --define "pdffire_engine 1.6.0.0" --define "pdffire_private_libs <regex>"
 #
 # Everything private lives in /opt/pdf-fire (the programs carry RPATH $ORIGIN/../lib), the same
 # layout as the .deb from scripts/make-deb.sh, so nothing collides with a Fedora pdf4qt package.
 # The package is left UNSIGNED on purpose — signing is a separate step.
 
-%{!?pdffire_version: %global pdffire_version 0.1.8}
+%{!?pdffire_version: %global pdffire_version 0.1.9}
 %{!?pdffire_engine: %global pdffire_engine 1.6.0.0}
 %{!?pdffire_stage: %{error:pdffire_stage is not set - build with scripts/make-rpm.sh}}
 
@@ -106,6 +106,13 @@ exit 0
 %{_datadir}/icons/hicolor/*/apps/pdf-fire.*
 
 %changelog
+* Sat Oct 10 2026 PDF Fire <pdffire.constant740@passmail.net> - 0.1.9-1
+- Signature on the page: the handwritten name at the left, the details at the right of it -
+  signed by, date, reason, and the operating system, computer and IP addresses (local and public)
+  when they are chosen under Signing record (they were only recorded inside the signature).
+- Sign dialog: the look of the signature is next to the signing record, so the dialog fits a
+  laptop screen; the preview no longer covers the text under it, and it shows the chosen details.
+
 * Thu Oct 08 2026 PDF Fire <pdffire.constant740@passmail.net> - 0.1.8-1
 - Saving a large document (hundreds of MB) no longer freezes the window: the file is written in
   the background with a progress window, so the desktop does not report "not responding".
