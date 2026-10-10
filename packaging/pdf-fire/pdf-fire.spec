@@ -115,8 +115,6 @@ exit 0
 - The contact info is shown on the signature (under the reason).
 - Signing record: the operating system and the public IP address are recorded (and shown) by
   default; they are switched on once after the update, then your own choice is kept.
-- Signing record: the operating system and the public IP address are recorded (and shown) by
-  default; they are switched on once after the update, then your own choice is kept.
 
 * Thu Oct 08 2026 PDF Fire <pdffire.constant740@passmail.net> - 0.1.8-1
 - Saving a large document (hundreds of MB) no longer freezes the window: the file is written in
