@@ -1002,7 +1002,7 @@ void SignaturePlugin::signDigitally(const SignTarget& initialTarget)
             const QString computer = signingRecord.hostName.isEmpty() ? QString()
                                                                       : (signingRecord.userAccount.isEmpty() ? signingRecord.hostName
                                                                                                              : QString("%1 (%2)").arg(signingRecord.hostName, signingRecord.userAccount));
-            appearanceDetails = SignDialog::getAppearanceDetails(appearanceName, parameters.signingTime, reasonText, signingRecord.operatingSystem,
+            appearanceDetails = SignDialog::getAppearanceDetails(appearanceName, parameters.signingTime, reasonText, contactInfoText, signingRecord.operatingSystem,
                                                                  computer, signingRecord.localAddresses, signingRecord.publicAddress);
         }
 

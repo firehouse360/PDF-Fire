@@ -112,6 +112,9 @@ exit 0
   when they are chosen under Signing record (they were only recorded inside the signature).
 - Sign dialog: the look of the signature is next to the signing record, so the dialog fits a
   laptop screen; the preview no longer covers the text under it, and it shows the chosen details.
+- The contact info is shown on the signature (under the reason).
+- Signing record: the operating system and the public IP address are recorded (and shown) by
+  default; they are switched on once after the update, then your own choice is kept.
 - Signing record: the operating system and the public IP address are recorded (and shown) by
   default; they are switched on once after the update, then your own choice is kept.
 

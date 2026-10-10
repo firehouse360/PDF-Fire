@@ -218,6 +218,7 @@ void SignDialog::createRecordWidgets()
         connect(checkBox, &QCheckBox::toggled, this, &SignDialog::updatePreview);
     }
     connect(ui->reasonEdit, &QLineEdit::textChanged, this, &SignDialog::updatePreview);
+    connect(ui->contactInfoEdit, &QLineEdit::textChanged, this, &SignDialog::updatePreview);
 }
 
 void SignDialog::updateSigningPolicy()
@@ -409,7 +410,7 @@ bool SignDialog::isAppearanceDetailsShown() const
     return m_detailsCheckBox->isChecked();
 }
 
-QStringList SignDialog::getAppearanceDetails(const QString& name, const QDateTime& dateTime, const QString& reason, const QString& operatingSystem,
+QStringList SignDialog::getAppearanceDetails(const QString& name, const QDateTime& dateTime, const QString& reason, const QString& contactInfo, const QString& operatingSystem,
                                              const QString& computer, const QStringList& localAddresses, const QString& publicAddress)
 {
     // The recorded texts carry explanations in brackets ("Ubuntu 26.04 (linux ...)",
@@ -422,6 +423,10 @@ QStringList SignDialog::getAppearanceDetails(const QString& name, const QDateTim
     if (!reason.trimmed().isEmpty())
     {
         details << tr("Reason: %1").arg(reason.trimmed());
+    }
+    if (!contactInfo.trimmed().isEmpty())
+    {
+        details << tr("Contact: %1").arg(contactInfo.trimmed());
     }
     if (!operatingSystem.isEmpty())
     {
@@ -452,7 +457,7 @@ QStringList SignDialog::getPreviewDetails(const QDateTime& dateTime) const
     pdf::PDFFireSigningRecord record;
     record.collectComputerInformation(isOperatingSystemRecorded(), isComputerRecorded(), isLocalAddressRecorded());
     const QString computer = record.hostName.isEmpty() ? QString() : (record.userAccount.isEmpty() ? record.hostName : QString("%1 (%2)").arg(record.hostName, record.userAccount));
-    return getAppearanceDetails(getAppearanceName(), dateTime, ui->reasonEdit->text(), record.operatingSystem, computer, record.localAddresses,
+    return getAppearanceDetails(getAppearanceName(), dateTime, ui->reasonEdit->text(), ui->contactInfoEdit->text(), record.operatingSystem, computer, record.localAddresses,
                                 isPublicAddressRecorded() ? tr("looked up when signing") : QString());
 }
 

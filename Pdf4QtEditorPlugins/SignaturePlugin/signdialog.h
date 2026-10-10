@@ -120,7 +120,7 @@ public:
 
     /// PDF Fire: the detail lines shown next to the name - signed by, date, reason, and the
     /// computer details, which are recorded (empty ones are left out)
-    static QStringList getAppearanceDetails(const QString& name, const QDateTime& dateTime, const QString& reason, const QString& operatingSystem,
+    static QStringList getAppearanceDetails(const QString& name, const QDateTime& dateTime, const QString& reason, const QString& contactInfo, const QString& operatingSystem,
                                             const QString& computer, const QStringList& localAddresses, const QString& publicAddress);
 
     /// PDF Fire: the detail lines for the previews - the computer details as they are now
