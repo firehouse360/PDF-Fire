@@ -1725,8 +1725,33 @@ void PDFDocumentBuilder::updateAnnotationAppearanceStreams(PDFObjectReference an
         annotationFactory << boundingRectangle;
         annotationFactory.endDictionaryItem();
 
+        PDFObject appearanceDictionary = asDictionaryFactory.takeObject();
+        if (missingOnly)
+        {
+            // PDF Fire: the created streams are merged into the appearance dictionary the
+            // annotation has. The merge goes into dictionaries only - an indirect /AP, or an
+            // indirect /N, /R or /D, would be replaced by the created streams, and the streams
+            // of the document (for example the unchecked state of a check box) would be lost.
+            if (const PDFDictionary* annotationDictionary = m_storage.getDictionaryFromObject(m_storage.getObjectByReference(annotationReference)))
+            {
+                if (const PDFDictionary* existingAppearance = m_storage.getDictionaryFromObject(annotationDictionary->get("AP")))
+                {
+                    PDFDictionaryBuilder directAppearance(*existingAppearance);
+                    for (const char* key : { "N", "R", "D" })
+                    {
+                        const PDFObject& states = m_storage.getObject(existingAppearance->get(key));
+                        if (states.isDictionary())
+                        {
+                            directAppearance.setEntry(PDFInplaceOrMemoryString(key), states);
+                        }
+                    }
+                    appearanceDictionary = PDFObjectManipulator::merge(PDFObject::createDictionary(qMove(directAppearance)), qMove(appearanceDictionary), PDFObjectManipulator::NoFlag);
+                }
+            }
+        }
+
         annotationFactory.beginDictionaryItem("AP");
-        annotationFactory << asDictionaryFactory.takeObject();
+        annotationFactory << qMove(appearanceDictionary);
         annotationFactory.endDictionaryItem();
 
         annotationFactory.endDictionary();

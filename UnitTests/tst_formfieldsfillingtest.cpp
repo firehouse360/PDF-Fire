@@ -87,7 +87,8 @@ public:
         UncheckedOnly,  ///< Normal appearance of the unchecked state only
         UncheckedDown,  ///< Normal appearance of the unchecked state only, both states have a down appearance
         UncheckedGreen, ///< Normal appearance of the unchecked state only, it is a green rectangle
-        SingleStream    ///< Normal appearance is a single stream instead of the dictionary of the states
+        SingleStream,   ///< Normal appearance is a single stream instead of the dictionary of the states
+        UncheckedDownIndirect ///< PDF Fire: as UncheckedDown, but the appearance dictionary and its normal states are indirect objects
     };
 
     static constexpr QSizeF PAGE_SIZE = QSizeF(200, 200);
@@ -225,7 +226,34 @@ public:
         addName(factory, "DV", defaultValue);
         addName(factory, "AS", appearanceState);
 
-        if (appearance != Appearance::None)
+        if (appearance == Appearance::UncheckedDownIndirect)
+        {
+            // PDF Fire: /AP 12 0 R with /N 13 0 R - the indirect objects must not be replaced
+            // by the created stream of the checked state, they are merged with it
+            const PDFObjectReference checked = createAppearanceStream(builder, CHECK_BOX, true);
+            const PDFObjectReference unchecked = createAppearanceStream(builder, CHECK_BOX, false);
+
+            PDFObjectFactory normalFactory;
+            normalFactory.beginDictionary();
+            normalFactory.beginDictionaryItem("Off");
+            normalFactory << unchecked;
+            normalFactory.endDictionaryItem();
+            normalFactory.endDictionary();
+            const PDFObjectReference normal = builder.addObject(normalFactory.takeObject());
+
+            PDFObjectFactory appearanceFactory;
+            appearanceFactory.beginDictionary();
+            appearanceFactory.beginDictionaryItem("N");
+            appearanceFactory << normal;
+            appearanceFactory.endDictionaryItem();
+            addStates(appearanceFactory, "D", { { "Off", unchecked }, { onState, checked } });
+            appearanceFactory.endDictionary();
+
+            factory.beginDictionaryItem("AP");
+            factory << builder.addObject(appearanceFactory.takeObject());
+            factory.endDictionaryItem();
+        }
+        else if (appearance != Appearance::None)
         {
             const PDFObjectReference checked = createAppearanceStream(builder, CHECK_BOX, true);
             const PDFObjectReference unchecked = createAppearanceStream(builder, CHECK_BOX, false);
@@ -904,6 +932,7 @@ void FormFieldsTest::checkBoxUncheckedAppearanceIsKept_data()
 
     QTest::newRow("empty") << FormFieldsTestHelper::Appearance::UncheckedOnly << QByteArray("Off");
     QTest::newRow("empty, down appearance") << FormFieldsTestHelper::Appearance::UncheckedDown << QByteArray("Off");
+    QTest::newRow("empty, indirect appearance") << FormFieldsTestHelper::Appearance::UncheckedDownIndirect << QByteArray("Off");
     QTest::newRow("green") << FormFieldsTestHelper::Appearance::UncheckedGreen << QByteArray("Off");
     QTest::newRow("green, checked") << FormFieldsTestHelper::Appearance::UncheckedGreen << QByteArray("On");
 }
