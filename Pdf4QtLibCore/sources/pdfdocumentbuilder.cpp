@@ -1552,7 +1552,7 @@ void PDFPageContentStreamBuilder::replaceResources(PDFObjectReference contentStr
     }
 }
 
-void PDFDocumentBuilder::updateAnnotationAppearanceStreams(PDFObjectReference annotationReference)
+void PDFDocumentBuilder::updateAnnotationAppearanceStreams(PDFObjectReference annotationReference, bool missingOnly)
 {
     PDFAnnotationPtr annotation = PDFAnnotation::parse(&m_storage, annotationReference);
     if (!annotation)
@@ -1595,6 +1595,12 @@ void PDFDocumentBuilder::updateAnnotationAppearanceStreams(PDFObjectReference an
     }
 
     std::vector<PDFAppeareanceStreams::Key> keys = annotation->getDrawKeys(m_formManager);
+    if (missingOnly)
+    {
+        const std::vector<PDFAppeareanceStreams::Key> existingKeys = annotation->getAppearanceStreams().getAppearanceKeys();
+        keys.erase(std::remove_if(keys.begin(), keys.end(), [&existingKeys](const PDFAppeareanceStreams::Key& key) { return std::find(existingKeys.cbegin(), existingKeys.cend(), key) != existingKeys.cend(); }), keys.end());
+    }
+
     std::map<PDFAppeareanceStreams::Key, PDFObjectReference> appearanceStreams;
 
     QRectF boundingRectangle;
@@ -1687,8 +1693,11 @@ void PDFDocumentBuilder::updateAnnotationAppearanceStreams(PDFObjectReference an
 
             asDictionaryFactory.beginDictionaryItem(name);
             const size_t streamCount = std::distance(it, itEnd);
-            if (streamCount == 1)
+            if (streamCount == 1 && it->first.second.isEmpty())
             {
+                // Single appearance stream without the appearance state. Stream of the appearance
+                // state is always written to the dictionary of the states, so its name is not lost
+                // and it is merged with the streams of the other states of the annotation.
                 asDictionaryFactory << it->second;
             }
             else

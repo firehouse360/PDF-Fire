@@ -357,6 +357,17 @@ if(NOT PDF4QT_BUILD_ONLY_CORE_LIBRARY)
     )
     add_test(UnitTestsNaturalSpeech "${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}/UnitTestsNaturalSpeech")
     set_tests_properties(UnitTestsNaturalSpeech PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+    # PDF4QT issue #392: filling of the form fields (upstream test, renamed - PDF Fire has its own tst_formfieldstest)
+    add_executable(UnitTestsFormFieldsFilling tst_formfieldsfillingtest.cpp)
+    target_link_libraries(UnitTestsFormFieldsFilling PRIVATE Pdf4QtLibWidgets Pdf4QtLibCore Qt6::Widgets Qt6::Test)
+    set_target_properties(UnitTestsFormFieldsFilling PROPERTIES
+        WIN32_EXECUTABLE OFF
+        MACOSX_BUNDLE OFF
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}
+    )
+    add_test(UnitTestsFormFieldsFilling "${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}/UnitTestsFormFieldsFilling")
+    set_tests_properties(UnitTestsFormFieldsFilling PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
 add_executable(UnitTestsDocumentWriter tst_documentwritertest.cpp)

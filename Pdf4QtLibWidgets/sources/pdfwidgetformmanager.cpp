@@ -1596,7 +1596,11 @@ void PDFFormFieldComboBoxEditor::initializeTextEdit(PDFTextEditPseudowidget* tex
 
     PDFDocumentDataLoaderDecorator loader(m_formManager->getDocument());
 
-    QByteArray defaultAppearance = m_formManager->getForm()->getDefaultAppearance().value_or(QByteArray());
+    QByteArray defaultAppearance = parentField->getDefaultAppearance();
+    if (defaultAppearance.isEmpty())
+    {
+        defaultAppearance = m_formManager->getForm()->getDefaultAppearance().value_or(QByteArray());
+    }
     Qt::Alignment alignment = m_formManager->getForm()->getDefaultAlignment();
 
     // Initialize text edit
@@ -2319,7 +2323,13 @@ void PDFFormFieldListBoxEditor::initializeListBox(PDFListBoxPseudowidget* listBo
     const PDFFormFieldChoice* parentField = dynamic_cast<const PDFFormFieldChoice*>(m_formWidget.getParent());
     Q_ASSERT(parentField);
 
-    listBox->setAppearance(PDFAnnotationDefaultAppearance::parse(m_formManager->getForm()->getDefaultAppearance().value_or(QByteArray())),
+    QByteArray defaultAppearance = parentField->getDefaultAppearance();
+    if (defaultAppearance.isEmpty())
+    {
+        defaultAppearance = m_formManager->getForm()->getDefaultAppearance().value_or(QByteArray());
+    }
+
+    listBox->setAppearance(PDFAnnotationDefaultAppearance::parse(defaultAppearance),
                            m_formManager->getForm()->getDefaultAlignment(),
                            m_formManager->getWidgetRectangle(m_formWidget),
                            parentField->getOptions(),
