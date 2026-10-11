@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata (the app's page in GNOME Software / Discover). make-deb.sh and make-rpm.sh
+     substitute @VERSION@ and @DATE@. -->
+<component type="desktop-application">
+  <id>com.firehouse360.PDFFire</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>PDF Fire</name>
+  <summary>View, edit, sign and protect PDF documents</summary>
+  <developer id="com.firehouse360">
+    <name>Firehouse 360</name>
+  </developer>
+  <description>
+    <p>
+      PDF Fire is a native PDF editor for Linux and Windows. It is based on PDF4QT by Jakub Melka.
+    </p>
+    <ul>
+      <li>View, annotate and edit PDF files, fill in and create forms</li>
+      <li>Sign documents with a digital signature, and check signatures</li>
+      <li>Redact text and images permanently</li>
+      <li>Encrypt and password-protect documents</li>
+      <li>Merge, split and reorder pages; read scanned pages with OCR</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">pdf-fire.desktop</launchable>
+  <icon type="stock">pdf-fire</icon>
+  <url type="homepage">https://firehouse360.com/tools/pdf-fire</url>
+  <categories>
+    <category>Office</category>
+    <category>Viewer</category>
+  </categories>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </supports>
+  <provides>
+    <binary>pdf-fire</binary>
+    <mediatype>application/pdf</mediatype>
+  </provides>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="@VERSION@" date="@DATE@"/>
+  </releases>
+</component>

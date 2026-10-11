@@ -88,6 +88,10 @@ inside_build() {
   find "$APP/lib" -maxdepth 1 -name 'libPdf4Qt*.so' -type l -delete
 
   install -Dm644 "$PKGSRC/pdf-fire.desktop" "$STAGE/usr/share/applications/pdf-fire.desktop"
+  # The app's page in GNOME Software / Discover
+  mkdir -p "$STAGE/usr/share/metainfo"
+  sed -e "s/@VERSION@/$VERSION/" -e "s/@DATE@/$(date +%F)/" "$PKGSRC/com.firehouse360.PDFFire.metainfo.xml.in" \
+    > "$STAGE/usr/share/metainfo/com.firehouse360.PDFFire.metainfo.xml"
   # The public key of the update repository (%post adds the repository - see pdf-fire.spec)
   install -Dm644 "$PKGSRC/pdf-fire-signing-key.asc" "$STAGE/etc/pki/rpm-gpg/RPM-GPG-KEY-pdf-fire"
   mkdir -p "$STAGE/usr/share" && cp -r "$PKGSRC/icons" "$STAGE/usr/share/"

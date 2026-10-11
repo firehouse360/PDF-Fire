@@ -103,6 +103,7 @@ exit 0
 /opt/pdf-fire
 %{_bindir}/pdf-fire
 %{_datadir}/applications/pdf-fire.desktop
+%{_datadir}/metainfo/com.firehouse360.PDFFire.metainfo.xml
 %{_datadir}/icons/hicolor/*/apps/pdf-fire.*
 
 %changelog

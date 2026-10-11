@@ -31,6 +31,10 @@ find "$APP/lib" -maxdepth 1 -name 'libPdf4Qt*.so' -type l -delete
 # scripts/build.sh), so nothing can collide with a distribution package of PDF4QT.
 
 install -Dm644 "$PKGSRC/pdf-fire.desktop" "$STAGE/usr/share/applications/pdf-fire.desktop"
+# The app's page in GNOME Software / Discover
+mkdir -p "$STAGE/usr/share/metainfo"
+sed -e "s/@VERSION@/$VERSION/" -e "s/@DATE@/$(date +%F)/" "$PKGSRC/com.firehouse360.PDFFire.metainfo.xml.in" \
+    > "$STAGE/usr/share/metainfo/com.firehouse360.PDFFire.metainfo.xml"
 cp -r "$PKGSRC/icons" "$STAGE/usr/share/"
 mkdir -p "$STAGE/usr/bin"
 ln -s /opt/pdf-fire/bin/Pdf4QtEditor "$STAGE/usr/bin/pdf-fire"
