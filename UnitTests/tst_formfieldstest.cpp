@@ -537,10 +537,10 @@ void FormFieldsTest::appearanceOfText()
     QVERIFY(PDFFireFormFields::createAppearanceContent(check, QSizeF(14, 14), true).contains("(4) Tj"));
     QVERIFY(!PDFFireFormFields::createAppearanceContent(check, QSizeF(14, 14), false).contains("(4) Tj"));
 
-    // Signature: a line and an X
+    // Signature: nothing drawn - no line and no X (the form has its own line)
     const QByteArray signature = PDFFireFormFields::createAppearanceContent(settings(PDFFireFormFields::Type::Signature, "S"), QSizeF(200, 36), false);
-    QVERIFY(signature.contains(" l S"));
-    QVERIFY(signature.contains("(X) Tj"));
+    QVERIFY(!signature.contains(" l S"));
+    QVERIFY(!signature.contains("(X) Tj"));
 
     QCOMPARE(PDFFireFormFields::getHelveticaTextWidth("Hi"), (722 + 222) / 1000.0);
 }

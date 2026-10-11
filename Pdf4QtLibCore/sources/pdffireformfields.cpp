@@ -437,7 +437,7 @@ PDFFireFormFields::Settings PDFFireFormFields::getDefaultSettings(Type type)
             break;
 
         case Type::Signature:
-            // A signature line: no box, a line along the bottom (see the appearance)
+            // A signature field: no box and nothing drawn (see the appearance)
             settings.borderColor = QColor();
             break;
 
@@ -650,16 +650,10 @@ QByteArray PDFFireFormFields::createAppearanceContent(const Settings& settings, 
         }
 
         case Type::Signature:
-        {
-            // A signature line: a line along the bottom and an "X" before it, so the
-            // place for the signature is clear also on a printed, blank form
-            const PDFReal lineY = qMin(4.0, height * 0.2);
-            const PDFReal fontSize = qBound(6.0, height * 0.4, 14.0);
-            content += "q\n0.25 g\n0.25 G\n0.75 w\n";
-            content += "2 " + formatNumber(lineY) + " m " + formatNumber(width - 2.0) + " " + formatNumber(lineY) + " l S\n";
-            content += "BT\n/Helv " + formatNumber(fontSize) + " Tf\n3 " + formatNumber(lineY + 2.0) + " Td\n(X) Tj\nET\nQ\n";
+            // PDF Fire: a signature field draws nothing - no line and no "X". The field
+            // is usually placed on a line, which the form already has, and an own line
+            // would cover it or show twice
             break;
-        }
 
         case Type::Text:
         case Type::MultilineText:
