@@ -27,6 +27,7 @@
 #include "pdfdrawwidget.h"
 #include "pdfdrawspacecontroller.h"
 #include "pdfform.h"
+#include "pdfoptionalcontent.h"
 #include "pdfprogress.h"
 #include "pdfwidgetannotation.h"
 #include "pdfwidgetformmanager.h"
@@ -528,6 +529,7 @@ struct FormFixture
         { &actions[0], &actions[1], &actions[2], &actions[3], &actions[4], &actions[5],
           &actions[6], &actions[7], &actions[8], &actions[9] }, nullptr, &widget };
     int modificationCount = 0;
+    std::unique_ptr<PDFOptionalContentActivity> activity;
 
     explicit FormFixture(PDFDocument initialDocument) :
         document(new PDFDocument(std::move(initialDocument)))
@@ -567,6 +569,15 @@ struct FormFixture
 
     void apply(PDFModifiedDocument modified)
     {
+        // PDF Fire: the application always gives the document its optional content activity
+        // (the annotation manager asserts it); upstream passed nullptr, which aborts in debug
+        // builds. The previous activity is kept alive until the managers have the new one.
+        std::unique_ptr<PDFOptionalContentActivity> previousActivity = std::move(activity);
+        if (modified.getDocument())
+        {
+            activity = std::make_unique<PDFOptionalContentActivity>(modified.getDocument(), OCUsage::View, nullptr);
+        }
+        modified = PDFModifiedDocument(modified.getDocument(), activity.get(), modified.getFlags());
         widget.setDocument(modified, {});
         annotations.setDocument(modified);
         forms.setDocument(modified);
