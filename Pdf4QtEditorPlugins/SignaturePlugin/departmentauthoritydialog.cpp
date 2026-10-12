@@ -23,6 +23,7 @@
 #include "departmentauthoritydialog.h"
 
 #include "pdfcertificatemanager.h"
+#include "pdffirefirehouse360.h"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -368,6 +369,24 @@ void DepartmentAuthorityDialog::onCreateAuthority()
     form->addRow(tr("Name:"), nameEdit);
     form->addRow(tr("Organization:"), organizationEdit);
     form->addRow(tr("Revocation list address:"), crlUrlEdit);
+
+    // PDF Fire: with Firehouse 360 Secure Share the department's address is known - it is
+    // filled in when this computer is connected; otherwise the page that shows it is linked
+    const QString settingsUrl = pdf::PDFFireFirehouse360::getSettingsUrl();
+    const QString slug = pdf::PDFFireFirehouse360::isConnected() ? pdf::PDFFireFirehouse360::getDepartmentSlug() : QString();
+    if (!slug.isEmpty())
+    {
+        crlUrlEdit->setText(pdf::PDFFireFirehouse360::getServerUrl() + QStringLiteral("/pki/") + slug + QStringLiteral("/authority.crl"));
+    }
+    QLabel* crlHelp = new QLabel(slug.isEmpty() ? tr("Using Firehouse 360 Secure Share? Copy your department's address from "
+                                                    "<a href=\"%1\">Secure Share ▸ Settings ▸ PDF Fire signing</a>, and upload authority.cer and "
+                                                    "authority.crl there after creating the authority.").arg(settingsUrl.toHtmlEscaped())
+                                                 : tr("This is your department's address on Firehouse 360. After creating the authority, upload authority.cer and "
+                                                    "authority.crl in <a href=\"%1\">Secure Share ▸ Settings ▸ PDF Fire signing</a>.").arg(settingsUrl.toHtmlEscaped()), &dialog);
+    crlHelp->setObjectName("crlHelpLabel");
+    crlHelp->setWordWrap(true);
+    crlHelp->setOpenExternalLinks(true);
+    form->addRow(QString(), crlHelp);
     form->addRow(tr("Folder:"), directoryWidget);
     form->addRow(tr("Passphrase:"), passphraseEdit);
     form->addRow(tr("Repeat passphrase:"), repeatEdit);
@@ -421,11 +440,15 @@ void DepartmentAuthorityDialog::onCreateAuthority()
 void DepartmentAuthorityDialog::onOpenAuthority()
 {
     const QString lastDirectory = QSettings().value(SETTINGS_AUTHORITY_DIRECTORY).toString();
-    const QString directory = QFileDialog::getExistingDirectory(this, tr("Open the Folder of the Authority"), lastDirectory);
-    if (directory.isEmpty())
+    // PDF Fire: any file of the authority's folder is chosen (a folder picker greys the files
+    // out, which looked like nothing could be opened - Mike, 2026-10-11)
+    const QString chosenFile = QFileDialog::getOpenFileName(this, tr("Open Authority - choose any file in the authority's folder"), lastDirectory,
+                                                            tr("Authority files (authority.cer authority.crl register.json authority-private.p12);;All files (*)"));
+    if (chosenFile.isEmpty())
     {
         return;
     }
+    const QString directory = QFileInfo(chosenFile).absolutePath();
 
     bool isOk = false;
     const QString passphrase = QInputDialog::getText(this, tr("Open Authority"), tr("Passphrase of the authority:"), QLineEdit::Password, QString(), &isOk);

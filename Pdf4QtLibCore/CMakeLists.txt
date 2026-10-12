@@ -123,6 +123,8 @@ add_library(Pdf4QtLibCore SHARED
     sources/pdffirecertificateauthority.h
     sources/pdffiresigningrecord.cpp
     sources/pdffiresigningrecord.h
+    sources/pdffirefirehouse360.cpp
+    sources/pdffirefirehouse360.h
     sources/pdffiresmtpclient.cpp
     sources/pdffiresmtpclient.h
     sources/pdffirepageoperations.cpp

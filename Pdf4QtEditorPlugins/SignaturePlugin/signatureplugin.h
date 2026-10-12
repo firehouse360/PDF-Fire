@@ -95,9 +95,11 @@ private:
                                                 const QString& fieldName,
                                                 const QString& name,
                                                 const QFont& font,
-                                                const QStringList& details);
+                                                const QStringList& details,
+                                                const QString& qrText);
     void onOpenCertificatesManager();
     void onOpenDepartmentAuthority();
+    void onOpenFirehouse360();          ///< PDF Fire: the connection to the department's Firehouse 360
     void applyPermissions();
     void onSceneActivityChanged();
 
@@ -133,6 +135,7 @@ private:
         Certificates,
         DepartmentAuthority,    ///< PDF Fire
         Certify,                ///< PDF Fire
+        Firehouse360,           ///< PDF Fire
 
         LastAction
     };

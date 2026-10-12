@@ -38,6 +38,8 @@
 #include "pdffiresigningrecord.h"
 #include "pdffirecertificateauthority.h"
 #include "pdffirepermissions.h"
+#include "pdffirefirehouse360.h"
+#include "firehouse360dialog.h"
 #include <QButtonGroup>
 #include <QSettings>
 #include <cmath>
@@ -341,6 +343,19 @@ void SignaturePlugin::setWidget(pdf::PDFWidget* widget)
     connect(certifyAction, &QAction::triggered, this, &SignaturePlugin::onCertifyDocument);
     connect(departmentAuthorityAction, &QAction::triggered, this, &SignaturePlugin::onOpenDepartmentAuthority);
 
+    // PDF Fire: the optional connection to the department's Firehouse 360 (off by default)
+    QAction* firehouse360Action = new QAction(QIcon(":/pdfplugins/signatureplugin/department.svg"), tr("&Firehouse 360"), this);
+    firehouse360Action->setObjectName("signaturetool_firehouse360Action");
+    m_actions[Firehouse360] = firehouse360Action;
+    connect(firehouse360Action, &QAction::triggered, this, &SignaturePlugin::onOpenFirehouse360);
+
+    // Signatures made while offline are sent a little after the start - quietly, and
+    // only when the connection is switched on
+    if (pdf::PDFFireFirehouse360::isConnected() && pdf::PDFFireFirehouse360::getPendingCount() > 0)
+    {
+        QTimer::singleShot(15000, this, []() { pdf::PDFFireFirehouse360::flushQueue(); });
+    }
+
     QFile acceptMarkFile(":/pdfplugins/signatureplugin/accept-mark.svg");
     QByteArray acceptMarkContent;
     if (acceptMarkFile.open(QFile::ReadOnly))
@@ -448,6 +463,7 @@ std::vector<QAction*> SignaturePlugin::getActions() const
     result.push_back(m_actions[Certificates]);
     result.push_back(m_actions[DepartmentAuthority]);
     result.push_back(m_actions[Certify]);
+    result.push_back(m_actions[Firehouse360]);
 
     return result;
 }
@@ -678,7 +694,8 @@ pdf::PDFObjectReference SignaturePlugin::createNameSignature(pdf::PDFDocumentBui
                                                              const QString& fieldName,
                                                              const QString& name,
                                                              const QFont& font,
-                                                             const QStringList& details)
+                                                             const QStringList& details,
+                                                             const QString& qrText)
 {
     const pdf::PDFObjectStorage* storage = builder.getStorage();
     const pdf::PDFPage* page = m_document->getCatalog()->getPage(target.pageIndex);
@@ -698,7 +715,7 @@ pdf::PDFObjectReference SignaturePlugin::createNameSignature(pdf::PDFDocumentBui
     // The appearance: the name (in the handwriting font) and the details
     pdf::PDFContentStreamBuilder contentBuilder(size, pdf::PDFContentStreamBuilder::CoordinateSystem::Qt);
     QPainter* painter = contentBuilder.begin();
-    SignDialog::drawNameAppearance(painter, QRectF(QPointF(0, 0), size), name, font, details);
+    SignDialog::drawNameAppearance(painter, QRectF(QPointF(0, 0), size), name, font, details, qrText);
     pdf::PDFContentStreamBuilder::ContentStream contentStream = contentBuilder.end(painter);
 
     std::vector<pdf::PDFObject> copiedObjects = builder.copyFrom({ contentStream.resources, contentStream.contents }, contentStream.document.getStorage(), true);
@@ -821,7 +838,7 @@ void SignaturePlugin::signDigitally(const SignTarget& initialTarget)
             {
                 QPainter painter(&preview);
                 SignDialog::drawNameAppearance(&painter, QRectF(QPointF(0, 0), QSizeF(preview.size())), dialog.getAppearanceName(), dialog.getAppearanceFont(),
-                                               dialog.getPreviewDetails(QDateTime::currentDateTime()));
+                                               dialog.getPreviewDetails(QDateTime::currentDateTime()), SignDialog::getPreviewQrText());
             }
 
             QEventLoop loop;
@@ -994,6 +1011,15 @@ void SignaturePlugin::signDigitally(const SignTarget& initialTarget)
             }
         }
 
+        // PDF Fire: connected to the department's Firehouse 360 - the signature gets a verify
+        // code (on the signature, with a QR code, and in the signing record). The code is made
+        // here, before signing, so it is part of what is signed; it works offline too (the
+        // registration waits until the computer is online).
+        const bool isRegisteredOnline = !isDocumentTimestamp && pdf::PDFFireFirehouse360::isConnected();
+        const QString verifyCode = isRegisteredOnline ? pdf::PDFFireFirehouse360::newVerifyCode() : QString();
+        signingRecord.verifyCode = verifyCode;
+        const QString verifyQrText = isRegisteredOnline ? pdf::PDFFireFirehouse360::getVerifyUrl(verifyCode).toUpper() : QString();
+
         // PDF Fire: the details shown next to the name are the recorded ones - the same
         // values, which are sealed in the signing record
         QStringList appearanceDetails;
@@ -1004,6 +1030,10 @@ void SignaturePlugin::signDigitally(const SignTarget& initialTarget)
                                                                                                              : QString("%1 (%2)").arg(signingRecord.hostName, signingRecord.userAccount));
             appearanceDetails = SignDialog::getAppearanceDetails(appearanceName, parameters.signingTime, reasonText, contactInfoText, signingRecord.operatingSystem,
                                                                  computer, signingRecord.localAddresses, signingRecord.publicAddress);
+        }
+        if (isRegisteredOnline)
+        {
+            appearanceDetails << tr("Verify: %1").arg(pdf::PDFFireFirehouse360::getVerifyDisplayUrl(verifyCode));
         }
 
         pdf::PDFSignatureFactory::TimestampSettings timestampSettings;
@@ -1042,6 +1072,24 @@ void SignaturePlugin::signDigitally(const SignTarget& initialTarget)
                 return;
         }
 
+        // PDF Fire: the signature blob (/Contents) is kept for the Firehouse 360 registration -
+        // the server proves it; the document itself is never sent. The signer may call the
+        // function again (more space needed), so the last blob is the one in the file.
+        QByteArray signatureBlob;
+        auto keepSignatureBlob = [&signatureBlob](std::function<bool(const QByteArray&, QByteArray&)> signFunction)
+        {
+            return [signFunction, &signatureBlob](const QByteArray& dataToBeSigned, QByteArray& signature)
+            {
+                const bool isSigned = signFunction(dataToBeSigned, signature);
+                if (isSigned)
+                {
+                    signatureBlob = signature;
+                }
+                return isSigned;
+            };
+        };
+        parameters.signFunction = keepSignatureBlob(parameters.signFunction);
+
         // Jakub Melka: the signature field is created by the signer, because the
         // document must be built again, when the space reserved for the signature
         // turns out to be too small.
@@ -1052,7 +1100,7 @@ void SignaturePlugin::signDigitally(const SignTarget& initialTarget)
             if (isNameSignature)
             {
                 signatureField = createNameSignature(builder, signatureDictionary, target, signatureName, appearanceName, appearanceFont,
-                                                     appearanceDetails);
+                                                     appearanceDetails, verifyQrText);
             }
             else if (!visibleSignature)
             {
@@ -1157,10 +1205,10 @@ void SignaturePlugin::signDigitally(const SignTarget& initialTarget)
             timestampErrorMessage.clear();
             signingRecord.signatureType = QStringLiteral("Signature (the timestamp authority could not be reached)");
             signingRecord.timestampAuthority.clear();
-            parameters.signFunction = [certificate, &dialog](const QByteArray& dataToBeSigned, QByteArray& signature)
+            parameters.signFunction = keepSignatureBlob([certificate, &dialog](const QByteArray& dataToBeSigned, QByteArray& signature)
             {
                 return pdf::PDFSignatureFactory::sign(*certificate, dialog.getPassword(), dataToBeSigned, signature);
-            };
+            });
             QApplication::setOverrideCursor(Qt::WaitCursor);
             signingResult = pdf::PDFDocumentSigner::sign(parameters, signedDocument);
             QApplication::restoreOverrideCursor();
@@ -1186,9 +1234,41 @@ void SignaturePlugin::signDigitally(const SignTarget& initialTarget)
                 {
                     signingRecord.appendToLog(fileName, signedDocument);
                 }
+
+                // PDF Fire: registration for the online verification (verification data only)
+                QString registrationText;
+                if (isRegisteredOnline && !signatureBlob.isEmpty())
+                {
+                    pdf::PDFFireFirehouse360::QueueItem item;
+                    item.verifyCode = verifyCode;
+                    item.cms = signatureBlob;
+                    item.signedAt = parameters.signingTime;
+                    item.fileName = QFileInfo(fileName).fileName();
+                    pdf::PDFFireFirehouse360::enqueue(item);
+
+                    QApplication::setOverrideCursor(Qt::WaitCursor);
+                    const pdf::PDFFireFirehouse360::FlushResult flushResult = pdf::PDFFireFirehouse360::flushQueue();
+                    QApplication::restoreOverrideCursor();
+
+                    const QString verifyUrl = pdf::PDFFireFirehouse360::getVerifyUrl(verifyCode);
+                    if (flushResult.pending == 0 && flushResult.rejected == 0)
+                    {
+                        registrationText = tr("\n\nRegistered with Firehouse 360 - anyone can check it at:\n%1").arg(verifyUrl);
+                    }
+                    else if (flushResult.rejected > 0)
+                    {
+                        registrationText = tr("\n\nFirehouse 360 did not accept the registration:\n%1").arg(flushResult.messages.join(QLatin1Char('\n')));
+                    }
+                    else
+                    {
+                        registrationText = tr("\n\nFirehouse 360 could not be reached - the registration waits on this computer and is sent "
+                                              "automatically later. Verify address:\n%1").arg(verifyUrl);
+                    }
+                }
+
                 // The signed document is opened, so the signature is seen at once
                 if (QMessageBox::question(m_widget, tr("Signed"),
-                                          tr("The document was signed and saved as:\n%1\n\nOpen the signed document now?").arg(fileName),
+                                          tr("The document was signed and saved as:\n%1%2\n\nOpen the signed document now?").arg(fileName, registrationText),
                                           QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes) == QMessageBox::Yes)
                 {
                     const QString signedFileName = fileName;
@@ -1226,6 +1306,12 @@ void SignaturePlugin::onCertifyDocument()
 void SignaturePlugin::onOpenDepartmentAuthority()
 {
     DepartmentAuthorityDialog dialog(m_dataExchangeInterface->getMainWindow());
+    dialog.exec();
+}
+
+void SignaturePlugin::onOpenFirehouse360()
+{
+    Firehouse360Dialog dialog(m_dataExchangeInterface->getMainWindow());
     dialog.exec();
 }
 
@@ -1348,7 +1434,8 @@ void SignaturePlugin::updateActions()
 
             if (action == m_actions[Activate] ||
                 action == m_actions[Certificates] ||
-                action == m_actions[DepartmentAuthority])
+                action == m_actions[DepartmentAuthority] ||
+                action == m_actions[Firehouse360])
             {
                 continue;
             }

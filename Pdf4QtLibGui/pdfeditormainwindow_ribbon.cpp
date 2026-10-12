@@ -719,6 +719,12 @@ void PDFEditorMainWindow::setupRibbon()
         action->setToolTip(tr("The certificate authority of the department: issue and revoke the signing certificates of the members, and trust the department's signatures"));
         digitalSignatureGroup->addLargeAction(action);
     }
+    if (QAction* action = findMenuAction(signatureMenu, "signaturetool_firehouse360Action"))
+    {
+        action->setIconText(tr("Firehouse 360"));
+        action->setToolTip(tr("Connect to your department's Firehouse 360 (Secure Share): signatures get a verify code and QR code that anyone can check online, and the department's authority is trusted automatically. Off unless you turn it on."));
+        digitalSignatureGroup->addLargeAction(action);
+    }
     ui->actionCertificateManager->setIconText(tr("Trusted Certificates"));
     ui->actionCertificateManager->setToolTip(tr("Certificates which are trusted, when the signatures of a document are verified"));
     digitalSignatureGroup->addLargeAction(ui->actionCertificateManager);

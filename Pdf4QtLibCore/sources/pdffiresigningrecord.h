@@ -97,6 +97,7 @@ public:
     QDateTime signingTime;
     QString documentName;
     QString documentFingerprint;    ///< SHA-256 of the document before this signature
+    QString verifyCode;             ///< Firehouse 360 verify code (PF-XXXX-XXXX-XXXX), empty = not connected
     int pageNumber = 0;             ///< Page of the visible signature (1-based), 0 = invisible
     bool consentAccepted = false;
 

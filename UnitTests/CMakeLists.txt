@@ -253,6 +253,17 @@ set_target_properties(UnitTestsFormFieldFormat PROPERTIES
 )
 add_test(UnitTestsFormFieldFormat  "${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}/UnitTestsFormFieldFormat")
 
+# PDF Fire: the optional Firehouse 360 connection (end-to-end part only with a test server)
+add_executable(UnitTestsFirehouse360 tst_firehouse360test.cpp)
+target_link_libraries(UnitTestsFirehouse360 PRIVATE Pdf4QtLibCore Qt6::Core Qt6::Test)
+set_target_properties(UnitTestsFirehouse360 PROPERTIES
+    WIN32_EXECUTABLE OFF
+    MACOSX_BUNDLE OFF
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_LIB_DIR}
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}
+)
+add_test(UnitTestsFirehouse360  "${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}/UnitTestsFirehouse360")
+
 add_executable(UnitTestsTextLayout tst_textlayouttest.cpp)
 target_link_libraries(UnitTestsTextLayout PRIVATE Pdf4QtLibCore Qt6::Core Qt6::Gui Qt6::Test)
 set_target_properties(UnitTestsTextLayout PROPERTIES
@@ -428,7 +439,7 @@ add_test(UnitTestsPDFObject "${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}/UnitT
 if(NOT PDF4QT_BUILD_ONLY_CORE_LIBRARY)
     add_executable(UnitTestsSignatureAppearance
         tst_signatureappearancetest.cpp
-        ../Pdf4QtEditorPlugins/SignaturePlugin/signdialog.cpp
+        ../Pdf4QtEditorPlugins/SignaturePlugin/signdialog.cpp ../Pdf4QtEditorPlugins/SignaturePlugin/qrcodegen/qrcodegen.cpp
         ../Pdf4QtEditorPlugins/SignaturePlugin/signdialog.ui
     )
     target_include_directories(UnitTestsSignatureAppearance PRIVATE ${CMAKE_SOURCE_DIR}/Pdf4QtEditorPlugins/SignaturePlugin)

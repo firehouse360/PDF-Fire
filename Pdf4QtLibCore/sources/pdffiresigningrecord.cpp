@@ -161,6 +161,7 @@ QString PDFFireSigningRecord::toText() const
     addLine("Contact", contactInfo);
     addLine("Document", documentName);
     addLine("File SHA-256 before signing", documentFingerprint);
+    addLine("Verify code (Firehouse 360)", verifyCode);
     addLine("Signature on page", pageNumber > 0 ? QString::number(pageNumber) : QStringLiteral("invisible signature"));
     addLine("Consent to sign electronically", consentAccepted ? QString("accepted - \"%1\"").arg(getConsentText()) : QStringLiteral("not recorded"));
     addLine("Operating system", operatingSystem);

@@ -21,6 +21,8 @@
 // SOFTWARE.
 
 #include "signdialog.h"
+#include "qrcodegen/qrcodegen.hpp"
+#include "pdffirefirehouse360.h"
 #include "ui_signdialog.h"
 
 #include "pdfcertificatemanager.h"
@@ -324,6 +326,7 @@ void SignDialog::createAppearanceGroup()
     QFormLayout* layout = new QFormLayout(m_appearanceGroup);
 
     m_nameEdit = new QLineEdit(m_appearanceGroup);
+    m_nameEdit->setObjectName("appearanceNameEdit");
     m_nameEdit->setPlaceholderText(tr("Your name"));
     connect(m_nameEdit, &QLineEdit::textEdited, this, [this]() { m_isNameEdited = true; updatePreview(); });
     layout->addRow(tr("Name:"), m_nameEdit);
@@ -447,25 +450,92 @@ QStringList SignDialog::getAppearanceDetails(const QString& name, const QDateTim
     return details;
 }
 
+QString SignDialog::getPreviewQrText()
+{
+    // PDF Fire: when connected to Firehouse 360 the signature gets a verify code - the
+    // preview shows where it goes (the real code is made when signing)
+    return pdf::PDFFireFirehouse360::isConnected() ? pdf::PDFFireFirehouse360::getVerifyUrl(QStringLiteral("PF-0000-0000-0000")).toUpper() : QString();
+}
+
 QStringList SignDialog::getPreviewDetails(const QDateTime& dateTime) const
 {
+    const QString verifyLine = pdf::PDFFireFirehouse360::isConnected() ? tr("Verify: %1").arg(pdf::PDFFireFirehouse360::getVerifyDisplayUrl(QStringLiteral("PF-…")))
+                                                                       : QString();
     if (!isAppearanceDetailsShown())
     {
-        return QStringList();
+        return verifyLine.isEmpty() ? QStringList() : QStringList{ verifyLine };
     }
 
     pdf::PDFFireSigningRecord record;
     record.collectComputerInformation(isOperatingSystemRecorded(), isComputerRecorded(), isLocalAddressRecorded());
     const QString computer = record.hostName.isEmpty() ? QString() : (record.userAccount.isEmpty() ? record.hostName : QString("%1 (%2)").arg(record.hostName, record.userAccount));
-    return getAppearanceDetails(getAppearanceName(), dateTime, ui->reasonEdit->text(), ui->contactInfoEdit->text(), record.operatingSystem, computer, record.localAddresses,
-                                isPublicAddressRecorded() ? tr("looked up when signing") : QString());
+    QStringList details = getAppearanceDetails(getAppearanceName(), dateTime, ui->reasonEdit->text(), ui->contactInfoEdit->text(), record.operatingSystem, computer, record.localAddresses,
+                                               isPublicAddressRecorded() ? tr("looked up when signing") : QString());
+    if (!verifyLine.isEmpty())
+    {
+        details << verifyLine;
+    }
+    return details;
 }
 
-void SignDialog::drawNameAppearance(QPainter* painter, const QRectF& rect, const QString& name, const QFont& font, const QStringList& details)
+void SignDialog::drawQrCode(QPainter* painter, const QRectF& rect, const QString& text)
+{
+    // PDF Fire: QR code (Project Nayuki's generator, MIT) as vector squares, with the
+    // white quiet zone of 2 modules around it, so it scans when printed
+    try
+    {
+        const qrcodegen::QrCode code = qrcodegen::QrCode::encodeText(text.toUtf8().constData(), qrcodegen::QrCode::Ecc::MEDIUM);
+        const int size = code.getSize();
+        const int quietZone = 2;
+        const qreal module = qMin(rect.width(), rect.height()) / (size + 2 * quietZone);
+        const QPointF origin(rect.center().x() - module * (size * 0.5), rect.center().y() - module * (size * 0.5));
+
+        QPainterPath modules;
+        for (int y = 0; y < size; ++y)
+        {
+            for (int x = 0; x < size; ++x)
+            {
+                if (code.getModule(x, y))
+                {
+                    modules.addRect(QRectF(origin.x() + x * module, origin.y() + y * module, module, module));
+                }
+            }
+        }
+
+        painter->save();
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(Qt::white);
+        painter->drawRect(QRectF(origin.x() - quietZone * module, origin.y() - quietZone * module, (size + 2 * quietZone) * module, (size + 2 * quietZone) * module));
+        painter->setBrush(Qt::black);
+        painter->drawPath(modules.simplified());
+        painter->restore();
+    }
+    catch (const std::exception&)
+    {
+        // Too long for a QR code - the address is still written as text
+    }
+}
+
+void SignDialog::drawNameAppearance(QPainter* painter, const QRectF& fullRect, const QString& name, const QFont& font, const QStringList& details, const QString& qrText)
 {
     painter->save();
     painter->setRenderHint(QPainter::Antialiasing, true);
     painter->setRenderHint(QPainter::TextAntialiasing, true);
+
+    // PDF Fire: the QR code of the Firehouse 360 verify address at the right edge
+    // (a square of the full height), the name and the details in the rest
+    QRectF rect = fullRect;
+    if (!qrText.isEmpty())
+    {
+        const qreal qrMargin = qMin(fullRect.width(), fullRect.height()) * 0.06;
+        const qreal side = qMin(fullRect.height() - 2 * qrMargin, fullRect.width() * 0.3);
+        if (side > 0)
+        {
+            const QRectF qrRect(fullRect.right() - qrMargin - side, fullRect.center().y() - side * 0.5, side, side);
+            drawQrCode(painter, qrRect, qrText);
+            rect.setRight(qrRect.left() - qrMargin * 0.5);
+        }
+    }
 
     // PDF Fire: the name at the left side, the details at the right side of it
     const bool showDetails = !details.isEmpty();
@@ -588,7 +658,7 @@ void SignDialog::updatePreview()
     pixmap.fill(Qt::white);
     QPainter painter(&pixmap);
     drawNameAppearance(&painter, QRectF(QPointF(0, 0), QSizeF(m_previewLabel->size())), getAppearanceName(), getAppearanceFont(),
-                       getPreviewDetails(QDateTime::currentDateTime()));
+                       getPreviewDetails(QDateTime::currentDateTime()), getPreviewQrText());
     painter.end();
     m_previewLabel->setPixmap(pixmap);
 }

@@ -116,7 +116,13 @@ public:
 
     /// Draws the look of a signature: the name in the font, at the left side, and the
     /// details (if any) at the right side of it - in two columns, when there are many
-    static void drawNameAppearance(QPainter* painter, const QRectF& rect, const QString& name, const QFont& font, const QStringList& details);
+    static void drawNameAppearance(QPainter* painter, const QRectF& rect, const QString& name, const QFont& font, const QStringList& details, const QString& qrText = QString());
+
+    /// PDF Fire: placeholder QR text for previews (empty when not connected to Firehouse 360)
+    static QString getPreviewQrText();
+
+    /// PDF Fire: QR code of the text, centred in the rectangle
+    static void drawQrCode(QPainter* painter, const QRectF& rect, const QString& text);
 
     /// PDF Fire: the detail lines shown next to the name - signed by, date, reason, and the
     /// computer details, which are recorded (empty ones are left out)
