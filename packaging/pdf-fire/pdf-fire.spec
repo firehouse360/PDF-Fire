@@ -4,14 +4,14 @@
 # against Fedora's own Qt and libraries, stages `cmake --install` under /opt/pdf-fire, and then
 # runs rpmbuild on this spec in the same container with the stage passed in:
 #
-#   rpmbuild -bb pdf-fire.spec --define "pdffire_stage <dir>" --define "pdffire_version 0.1.9" \
+#   rpmbuild -bb pdf-fire.spec --define "pdffire_stage <dir>" --define "pdffire_version 0.1.10" \
 #            --define "pdffire_engine 1.6.0.0" --define "pdffire_private_libs <regex>"
 #
 # Everything private lives in /opt/pdf-fire (the programs carry RPATH $ORIGIN/../lib), the same
 # layout as the .deb from scripts/make-deb.sh, so nothing collides with a Fedora pdf4qt package.
 # The package is left UNSIGNED on purpose — signing is a separate step.
 
-%{!?pdffire_version: %global pdffire_version 0.1.9}
+%{!?pdffire_version: %global pdffire_version 0.1.10}
 %{!?pdffire_engine: %global pdffire_engine 1.6.0.0}
 %{!?pdffire_stage: %{error:pdffire_stage is not set - build with scripts/make-rpm.sh}}
 
@@ -107,6 +107,17 @@ exit 0
 %{_datadir}/icons/hicolor/*/apps/pdf-fire.*
 
 %changelog
+* Sun Oct 11 2026 PDF Fire <pdffire.constant740@passmail.net> - 0.1.10-1
+- Scanning: "Make the scanned pages searchable" now really recognizes the text. Before, the
+  scanned pages were added without any text, even with the box ticked.
+- Text recognition (OCR): pages turned sideways or upside down (for example a wide table scanned
+  upright) are recognized the right way up; before, their text came out as nonsense.
+- Forms: check boxes made by other programs without a "checked" picture can be ticked; a check
+  box keeps its own look when it is unticked again; combo and list boxes use their own font
+  settings; text in forms that ask the viewer to draw the fields is shown.
+- Signature fields no longer draw their own X and line, which could cover a line of the form.
+- GNOME Software shows a full PDF Fire page (description, screenshots, licence).
+
 * Sat Oct 10 2026 PDF Fire <pdffire.constant740@passmail.net> - 0.1.9-1
 - Signature on the page: the handwritten name at the left, the details at the right of it -
   signed by, date, reason, and the operating system, computer and IP addresses (local and public)
