@@ -4,14 +4,14 @@
 # against Fedora's own Qt and libraries, stages `cmake --install` under /opt/pdf-fire, and then
 # runs rpmbuild on this spec in the same container with the stage passed in:
 #
-#   rpmbuild -bb pdf-fire.spec --define "pdffire_stage <dir>" --define "pdffire_version 0.1.12" \
+#   rpmbuild -bb pdf-fire.spec --define "pdffire_stage <dir>" --define "pdffire_version 0.1.13" \
 #            --define "pdffire_engine 1.6.0.0" --define "pdffire_private_libs <regex>"
 #
 # Everything private lives in /opt/pdf-fire (the programs carry RPATH $ORIGIN/../lib), the same
 # layout as the .deb from scripts/make-deb.sh, so nothing collides with a Fedora pdf4qt package.
 # The package is left UNSIGNED on purpose — signing is a separate step.
 
-%{!?pdffire_version: %global pdffire_version 0.1.12}
+%{!?pdffire_version: %global pdffire_version 0.1.13}
 %{!?pdffire_engine: %global pdffire_engine 1.6.0.0}
 %{!?pdffire_stage: %{error:pdffire_stage is not set - build with scripts/make-rpm.sh}}
 
@@ -108,6 +108,11 @@ exit 0
 %{_datadir}/icons/hicolor/*/apps/pdf-fire.*
 
 %changelog
+* Sun Oct 11 2026 PDF Fire <pdffire.constant740@passmail.net> - 0.1.13-1
+- Firehouse 360: the QR code and the "Verify:" line on a signature are links - a click opens the
+  verify page (the text of a signature is drawn as outlines, so it can't be selected).
+- Placing a signature: a hint under it shows that + / - (or Ctrl + mouse wheel) change its size.
+
 * Sun Oct 11 2026 PDF Fire <pdffire.constant740@passmail.net> - 0.1.12-1
 - Fixed: after signing, "Open the signed document now?" showed the old page when the signed copy
   was saved over a file that was already open - the new signature (and its Firehouse 360 QR code)
