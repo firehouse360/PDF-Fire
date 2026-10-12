@@ -116,7 +116,8 @@ public:
 
     /// Draws the look of a signature: the name in the font, at the left side, and the
     /// details (if any) at the right side of it - in two columns, when there are many
-    static void drawNameAppearance(QPainter* painter, const QRectF& rect, const QString& name, const QFont& font, const QStringList& details, const QString& qrText = QString());
+    static void drawNameAppearance(QPainter* painter, const QRectF& rect, const QString& name, const QFont& font, const QStringList& details, const QString& qrText = QString(),
+                                   QRectF* qrArea = nullptr, QRectF* verifyLineArea = nullptr);
 
     /// PDF Fire: placeholder QR text for previews (empty unless connected to Firehouse 360
     /// and the chosen certificate was issued by the department's authority)

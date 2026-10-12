@@ -533,7 +533,8 @@ void SignDialog::drawQrCode(QPainter* painter, const QRectF& rect, const QString
     }
 }
 
-void SignDialog::drawNameAppearance(QPainter* painter, const QRectF& fullRect, const QString& name, const QFont& font, const QStringList& details, const QString& qrText)
+void SignDialog::drawNameAppearance(QPainter* painter, const QRectF& fullRect, const QString& name, const QFont& font, const QStringList& details, const QString& qrText,
+                                    QRectF* qrArea, QRectF* verifyLineArea)
 {
     painter->save();
     painter->setRenderHint(QPainter::Antialiasing, true);
@@ -551,6 +552,11 @@ void SignDialog::drawNameAppearance(QPainter* painter, const QRectF& fullRect, c
             const QRectF qrRect(fullRect.right() - qrMargin - side, fullRect.center().y() - side * 0.5, side, side);
             drawQrCode(painter, qrRect, qrText);
             rect.setRight(qrRect.left() - qrMargin * 0.5);
+            if (qrArea)
+            {
+                // PDF Fire: the caller puts a link over it (the drawn text can't be clicked)
+                *qrArea = qrRect;
+            }
         }
     }
 
@@ -656,6 +662,12 @@ void SignDialog::drawNameAppearance(QPainter* painter, const QRectF& fullRect, c
             painter->setBrush(QColor(70, 70, 70));
             painter->drawPath(transform.map(path));
             painter->restore();
+
+            // PDF Fire: the verify line is the last one - a link goes over it
+            if (verifyLineArea && !qrText.isEmpty() && i == int(details.size()) - 1)
+            {
+                *verifyLineArea = transform.map(path).boundingRect();
+            }
         }
     }
 

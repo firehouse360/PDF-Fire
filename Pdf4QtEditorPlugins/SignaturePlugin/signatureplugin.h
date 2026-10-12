@@ -96,7 +96,8 @@ private:
                                                 const QString& name,
                                                 const QFont& font,
                                                 const QStringList& details,
-                                                const QString& qrText);
+                                                const QString& qrText,
+                                                const QString& verifyUrl);
     void onOpenCertificatesManager();
     void onOpenDepartmentAuthority();
     void onOpenFirehouse360();          ///< PDF Fire: the connection to the department's Firehouse 360

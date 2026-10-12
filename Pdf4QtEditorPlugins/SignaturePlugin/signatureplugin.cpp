@@ -71,6 +71,12 @@ namespace
 /// PDF Fire: places a signature on a page - a half transparent preview of the signature,
 /// of a preset size, follows the mouse; a click places it (Ctrl + wheel changes the size,
 /// Esc cancels). The placed rectangle is returned through the callback.
+/// PDF Fire: the hint shown under a signature being placed
+struct PDFFireSignHint
+{
+    static QString text() { return QCoreApplication::translate("SignaturePlugin", "+ / - or Ctrl + wheel: size  ·  click: place  ·  Esc: cancel"); }
+};
+
 class SignaturePlacementTool : public pdf::PDFWidgetTool
 {
 public:
@@ -118,6 +124,20 @@ public:
         painter->setPen(QPen(QColor(232, 89, 12), 1.0, Qt::DashLine));
         painter->setBrush(Qt::NoBrush);
         painter->drawRect(deviceRect);
+
+        // PDF Fire: the hint right under the signature (the status bar is easy to miss)
+        const QString hint = PDFFireSignHint::text();
+        QFont hintFont = painter->font();
+        hintFont.setPixelSize(12);
+        painter->setFont(hintFont);
+        const QFontMetricsF hintMetrics(hintFont);
+        const QSizeF hintSize(hintMetrics.horizontalAdvance(hint) + 12, hintMetrics.height() + 6);
+        const QRectF hintRect(QPointF(deviceRect.center().x() - hintSize.width() * 0.5, deviceRect.bottom() + 4), hintSize);
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(QColor(30, 30, 30, 215));
+        painter->drawRoundedRect(hintRect, 4, 4);
+        painter->setPen(Qt::white);
+        painter->drawText(hintRect, Qt::AlignCenter, hint);
         painter->restore();
     }
 
@@ -695,7 +715,8 @@ pdf::PDFObjectReference SignaturePlugin::createNameSignature(pdf::PDFDocumentBui
                                                              const QString& name,
                                                              const QFont& font,
                                                              const QStringList& details,
-                                                             const QString& qrText)
+                                                             const QString& qrText,
+                                                             const QString& verifyUrl)
 {
     const pdf::PDFObjectStorage* storage = builder.getStorage();
     const pdf::PDFPage* page = m_document->getCatalog()->getPage(target.pageIndex);
@@ -715,8 +736,49 @@ pdf::PDFObjectReference SignaturePlugin::createNameSignature(pdf::PDFDocumentBui
     // The appearance: the name (in the handwriting font) and the details
     pdf::PDFContentStreamBuilder contentBuilder(size, pdf::PDFContentStreamBuilder::CoordinateSystem::Qt);
     QPainter* painter = contentBuilder.begin();
-    SignDialog::drawNameAppearance(painter, QRectF(QPointF(0, 0), size), name, font, details, qrText);
+    QRectF qrArea;
+    QRectF verifyLineArea;
+    SignDialog::drawNameAppearance(painter, QRectF(QPointF(0, 0), size), name, font, details, qrText, &qrArea, &verifyLineArea);
     pdf::PDFContentStreamBuilder::ContentStream contentStream = contentBuilder.end(painter);
+
+    // PDF Fire: the text of the signature is drawn as outlines, so it can't be clicked - an
+    // invisible link over the QR code and over the verify line opens the verify page. The
+    // links are made before signing, so the signature covers them too.
+    if (!verifyUrl.isEmpty())
+    {
+        // Appearance (Qt, y down) -> form space (y up) -> rotated with the page -> page space
+        auto toPage = [&](const QPointF& point)
+        {
+            QPointF form(point.x(), size.height() - point.y());
+            switch (rotation)
+            {
+                case 90: form = QPointF(-form.y() + size.height(), form.x()); break;
+                case 180: form = QPointF(-form.x() + size.width(), -form.y() + size.height()); break;
+                case 270: form = QPointF(form.y(), -form.x() + size.width()); break;
+                default: break;
+            }
+            return QPointF(rect.left() + form.x(), rect.top() + form.y());
+        };
+        for (const QRectF& area : { qrArea, verifyLineArea })
+        {
+            if (area.isEmpty())
+            {
+                continue;
+            }
+            const QRectF pageArea = QRectF(toPage(area.topLeft()), toPage(area.bottomRight())).normalized();
+            const pdf::PDFObjectReference link = builder.createAnnotationLink(page->getPageReference(), pageArea, verifyUrl, pdf::LinkHighlightMode::Invert);
+            pdf::PDFObjectFactory linkFactory;
+            linkFactory.beginDictionary();
+            linkFactory.beginDictionaryItem("Border");     // no box around it
+            linkFactory << std::vector<pdf::PDFInteger>{ 0, 0, 0 };
+            linkFactory.endDictionaryItem();
+            linkFactory.beginDictionaryItem("F");          // printed (with the signature)
+            linkFactory << pdf::PDFInteger(4);
+            linkFactory.endDictionaryItem();
+            linkFactory.endDictionary();
+            builder.mergeTo(link, linkFactory.takeObject());
+        }
+    }
 
     std::vector<pdf::PDFObject> copiedObjects = builder.copyFrom({ contentStream.resources, contentStream.contents }, contentStream.document.getStorage(), true);
     Q_ASSERT(copiedObjects.size() == 2);
@@ -1114,7 +1176,8 @@ void SignaturePlugin::signDigitally(const SignTarget& initialTarget)
             if (isNameSignature)
             {
                 signatureField = createNameSignature(builder, signatureDictionary, target, signatureName, appearanceName, appearanceFont,
-                                                     appearanceDetails, verifyQrText);
+                                                     appearanceDetails, verifyQrText,
+                                                     isRegisteredOnline ? pdf::PDFFireFirehouse360::getVerifyUrl(verifyCode) : QString());
             }
             else if (!visibleSignature)
             {
