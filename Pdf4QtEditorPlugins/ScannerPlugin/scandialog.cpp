@@ -285,13 +285,16 @@ ScanDialog::~ScanDialog() = default;
 
 void ScanDialog::setOcrAvailable(bool available)
 {
+    m_isOcrAvailable = available;
     m_ocrCheckBox->setVisible(available);
 }
 
 bool ScanDialog::isOcrRequested() const
 {
+    // PDF Fire: asked after the dialog is closed - a hidden dialog's check box is never
+    // isVisible(), so the scanned pages were never recognized (found 2026-10-11)
     QSettings().setValue(QStringLiteral("ScannerPlugin/RecognizeText"), m_ocrCheckBox->isChecked());
-    return m_ocrCheckBox->isVisible() && m_ocrCheckBox->isChecked();
+    return m_isOcrAvailable && m_ocrCheckBox->isChecked();
 }
 
 std::vector<ScannedPage> ScanDialog::takePages()

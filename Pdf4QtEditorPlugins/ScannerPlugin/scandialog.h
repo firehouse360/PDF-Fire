@@ -99,6 +99,7 @@ private:
     QSpinBox* m_pageCountSpinBox = nullptr;
     QLabel* m_statusLabel = nullptr;
     QCheckBox* m_ocrCheckBox = nullptr;
+    bool m_isOcrAvailable = false;
     QLabel* m_previewLabel = nullptr;
     QListWidget* m_pageList = nullptr;
     QWidget* m_pageTools = nullptr;
