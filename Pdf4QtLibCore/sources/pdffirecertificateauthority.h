@@ -84,8 +84,8 @@ public:
 
     struct AuthorityInfo
     {
-        QString name;               ///< Common name, e.g. "Prospect VFD Signing Authority"
-        QString organization;       ///< e.g. "Prospect VFD"
+        QString name;               ///< Common name, e.g. "Name VFD Signing Authority"
+        QString organization;       ///< e.g. "Name VFD"
         QString country = "US";
         QString crlUrl;             ///< Web address of the revocation list (can be empty)
         int validityYears = 20;

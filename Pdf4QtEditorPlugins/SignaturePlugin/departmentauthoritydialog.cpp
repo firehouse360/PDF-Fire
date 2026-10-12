@@ -332,15 +332,17 @@ void DepartmentAuthorityDialog::onCreateAuthority()
     // Nothing is filled in - every department creates its own authority, under its own name
     QLineEdit* nameEdit = new QLineEdit(&dialog);
     nameEdit->setObjectName("authorityNameEdit");
-    nameEdit->setPlaceholderText(tr("e.g. Prospect VFD Signing Authority"));
+    nameEdit->setPlaceholderText(tr("e.g. Name VFD Signing Authority"));
     QLineEdit* organizationEdit = new QLineEdit(&dialog);
     organizationEdit->setObjectName("organizationEdit");
-    organizationEdit->setPlaceholderText(tr("e.g. Prospect VFD"));
+    organizationEdit->setPlaceholderText(tr("e.g. Name VFD"));
     QLineEdit* crlUrlEdit = new QLineEdit(&dialog);
     crlUrlEdit->setObjectName("crlUrlEdit");
-    crlUrlEdit->setPlaceholderText(tr("e.g. https://prospectfd.com/pki/authority.crl"));
+    crlUrlEdit->setPlaceholderText(tr("e.g. https://firehouse360.com/pki/your-department/authority.crl"));
     crlUrlEdit->setToolTip(tr("The revocation list (authority.crl) is uploaded to this address. It is written into every "
-                              "certificate and can't be changed later. Leave it empty to publish no list."));
+                              "certificate and can't be changed later. With Firehouse 360 Secure Share, copy your "
+                              "department's address from Secure Share ▸ Settings ▸ PDF Fire signing. Leave it empty to "
+                              "publish no list."));
     QLineEdit* directoryEdit = nullptr;
     QWidget* directoryWidget = createPathEdit(&dialog, &directoryEdit, [&dialog](const QString& current)
     {
