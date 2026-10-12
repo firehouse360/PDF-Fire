@@ -4,14 +4,14 @@
 # against Fedora's own Qt and libraries, stages `cmake --install` under /opt/pdf-fire, and then
 # runs rpmbuild on this spec in the same container with the stage passed in:
 #
-#   rpmbuild -bb pdf-fire.spec --define "pdffire_stage <dir>" --define "pdffire_version 0.1.10" \
+#   rpmbuild -bb pdf-fire.spec --define "pdffire_stage <dir>" --define "pdffire_version 0.1.11" \
 #            --define "pdffire_engine 1.6.0.0" --define "pdffire_private_libs <regex>"
 #
 # Everything private lives in /opt/pdf-fire (the programs carry RPATH $ORIGIN/../lib), the same
 # layout as the .deb from scripts/make-deb.sh, so nothing collides with a Fedora pdf4qt package.
 # The package is left UNSIGNED on purpose — signing is a separate step.
 
-%{!?pdffire_version: %global pdffire_version 0.1.10}
+%{!?pdffire_version: %global pdffire_version 0.1.11}
 %{!?pdffire_engine: %global pdffire_engine 1.6.0.0}
 %{!?pdffire_stage: %{error:pdffire_stage is not set - build with scripts/make-rpm.sh}}
 
@@ -34,7 +34,8 @@ Summary:        PDF editor - view, annotate, edit, sign, redact and protect PDF 
 
 # PDF Fire and the PDF4QT engine are MIT. Bundled: ONNX Runtime (MIT), the Kokoro voice
 # model (Apache-2.0), the misaki pronunciation data (Apache-2.0); the static Clipper2 (BSL-1.0),
-# blend2d and asmjit (Zlib); the signature fonts in the resources (OFL-1.1, Apache-2.0).
+# blend2d and asmjit (Zlib); the signature fonts in the resources (OFL-1.1, Apache-2.0);
+# the QR Code generator of Project Nayuki (MIT).
 # Their texts are in /usr/share/licenses/pdf-fire (src/3rdparty_licenses) and next to the
 # voice data in /opt/pdf-fire/share/pdf-fire/voice.
 License:        MIT AND Apache-2.0 AND BSL-1.0 AND Zlib AND OFL-1.1
@@ -107,6 +108,17 @@ exit 0
 %{_datadir}/icons/hicolor/*/apps/pdf-fire.*
 
 %changelog
+* Sun Oct 11 2026 PDF Fire <pdffire.constant740@passmail.net> - 0.1.11-1
+- New: connect PDF Fire to your department's Firehouse 360 (Sign > Firehouse 360, off unless you
+  turn it on). Every signature then gets a verify code and a QR code that anyone can check at
+  firehouse360.com/verify - only the verification details are sent, never the document. Signing
+  works offline too; the details are sent when the computer is online again.
+- New: the department's authority and revocation list are trusted from Firehouse 360, and a member
+  can keep an encrypted copy of their certificate online (locked with their own passphrase).
+- Department Certificates: the examples are generic (Name VFD); the revocation list address comes
+  from Firehouse 360 (filled in when connected); Open Authority lets you pick any file in the
+  authority's folder instead of a folder picker that greyed every file out.
+
 * Sun Oct 11 2026 PDF Fire <pdffire.constant740@passmail.net> - 0.1.10-1
 - Scanning: "Make the scanned pages searchable" now really recognizes the text. Before, the
   scanned pages were added without any text, even with the box ticked.
