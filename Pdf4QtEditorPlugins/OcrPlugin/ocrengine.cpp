@@ -301,6 +301,75 @@ OcrPageText OcrEngine::recognize(const QImage& image,
     return result;
 }
 
+int OcrEngine::detectOrientation(const QImage& image, int dpi)
+{
+    if (image.isNull() || m_isOrientationUnavailable)
+    {
+        return 0;
+    }
+
+    if (!m_orientationApi)
+    {
+        const QString directory = getTessdataDirectory();
+        if (directory.isEmpty() || !QFileInfo::exists(QDir(directory).filePath("osd.traineddata")))
+        {
+            m_isOrientationUnavailable = true;
+            return 0;
+        }
+
+        m_orientationApi = std::make_unique<tesseract::TessBaseAPI>();
+        if (m_orientationApi->Init(QFile::encodeName(directory).constData(), "osd", tesseract::OEM_DEFAULT) != 0)
+        {
+            m_orientationApi.reset();
+            m_isOrientationUnavailable = true;
+            return 0;
+        }
+        m_orientationApi->SetPageSegMode(tesseract::PSM_OSD_ONLY);
+    }
+
+    const QImage grayImage = image.convertToFormat(QImage::Format_Grayscale8);
+    m_orientationApi->SetImage(grayImage.constBits(), grayImage.width(), grayImage.height(), 1, int(grayImage.bytesPerLine()));
+    m_orientationApi->SetSourceResolution(qBound(70, dpi, 2400));
+
+    int degrees = 0;
+    float orientationConfidence = 0.0f;
+    const char* scriptName = nullptr;
+    float scriptConfidence = 0.0f;
+    const bool isDetected = m_orientationApi->DetectOrientationScript(&degrees, &orientationConfidence, &scriptName, &scriptConfidence);
+    m_orientationApi->Clear();
+
+    // A page with little text gives no reliable answer - the caller checks the result anyway
+    if (!isDetected || orientationConfidence < 1.0f)
+    {
+        return 0;
+    }
+
+    switch (degrees)
+    {
+        case 90:
+        case 180:
+        case 270:
+            return degrees;
+        default:
+            return 0;
+    }
+}
+
+double OcrEngine::getMeanConfidence(const OcrPageText& text)
+{
+    double sum = 0.0;
+    double weight = 0.0;
+    for (const OcrLine& line : text.lines)
+    {
+        for (const OcrWord& word : line.words)
+        {
+            sum += double(word.confidence) * word.text.size();
+            weight += word.text.size();
+        }
+    }
+    return weight > 0.0 ? sum / weight : 0.0;
+}
+
 bool OcrEngine::addTextLayer(pdf::PDFDocumentBuilder* builder,
                              pdf::PDFObjectReference page,
                              const QImage& image,

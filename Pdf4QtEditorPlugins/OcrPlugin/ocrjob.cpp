@@ -201,7 +201,12 @@ void OcrJob::run()
         QString errorMessage;
         auto isCancelled = [this]() { return m_cancelled.load(); };
         auto progress = [this, baseProgress](int percent) { m_progress = baseProgress + 10 + percent * 90 / 100; };
-        OcrPageText text = engine.recognize(image, m_settings.dpi, isCancelled, progress, &errorMessage);
+        // PDF Fire: a page turned sideways or upside down (a landscape table scanned upright)
+        // is recognized turned upright. Both results are compared, so a wrong guess of the
+        // orientation detection never makes the text worse; upright pages are recognized once.
+        const int rotation = engine.detectOrientation(image, m_settings.dpi);
+        auto rotatedProgress = [this, baseProgress, rotation](int percent) { m_progress = baseProgress + 10 + percent * (rotation ? 45 : 90) / 100; };
+        OcrPageText text = engine.recognize(image, m_settings.dpi, isCancelled, rotation ? std::function<void(int)>(rotatedProgress) : std::function<void(int)>(progress), &errorMessage);
 
         if (m_cancelled)
         {
@@ -212,6 +217,29 @@ void OcrJob::run()
         {
             m_errorMessage = tr("Page %1: %2").arg(pageIndex + 1).arg(errorMessage);
             return;
+        }
+
+        if (rotation != 0)
+        {
+            QTransform rotate;
+            rotate.rotate(-rotation);
+            const QTransform imageToRotated = QImage::trueMatrix(rotate, image.width(), image.height());
+            const QImage rotatedImage = image.transformed(rotate);
+
+            auto secondProgress = [this, baseProgress](int percent) { m_progress = baseProgress + 55 + percent * 45 / 100; };
+            QString rotatedErrorMessage;
+            OcrPageText rotatedText = engine.recognize(rotatedImage, m_settings.dpi, isCancelled, secondProgress, &rotatedErrorMessage);
+
+            if (m_cancelled)
+            {
+                return;
+            }
+
+            if (rotatedErrorMessage.isEmpty() && OcrEngine::getMeanConfidence(rotatedText) > OcrEngine::getMeanConfidence(text))
+            {
+                text = std::move(rotatedText);
+                imageToPage = imageToRotated.inverted() * imageToPage;
+            }
         }
 
         if (text.isEmpty())

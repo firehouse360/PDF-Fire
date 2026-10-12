@@ -80,6 +80,15 @@ public:
                           const std::function<void(int)>& progress,
                           QString* errorMessage);
 
+    /// PDF Fire: detects the orientation of the text (Tesseract's orientation detection,
+    /// osd.traineddata). Returns the angle (0, 90, 180 or 270), by which the image must be
+    /// rotated counter-clockwise, so the text is upright; 0, if it is upright or unknown.
+    /// A landscape table scanned upright is recognized as nonsense without it.
+    int detectOrientation(const QImage& image, int dpi);
+
+    /// PDF Fire: average confidence (0-100) of the words, weighted by their length
+    static double getMeanConfidence(const OcrPageText& text);
+
     /// Recognizes the text of the image of the whole page (as it is displayed - the media box,
     /// rotated by /Rotate) and adds the invisible text layer to the page. This is the function
     /// to be called after a page has been scanned.
@@ -101,6 +110,8 @@ public:
 
 private:
     std::unique_ptr<tesseract::TessBaseAPI> m_api;
+    std::unique_ptr<tesseract::TessBaseAPI> m_orientationApi; ///< PDF Fire: created by the first detectOrientation
+    bool m_isOrientationUnavailable = false;
 };
 
 }   // namespace pdfplugin
