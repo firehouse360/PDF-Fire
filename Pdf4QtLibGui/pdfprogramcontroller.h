@@ -304,6 +304,7 @@ public:
     Q_DECLARE_FLAGS(Features, Feature)
 
     virtual void openDocument(const QString& fileName) override;
+    virtual void reloadDocument(const QString& fileName) override;
     void setDocument(pdf::PDFModifiedDocument document, std::vector<pdf::PDFSignatureVerificationResult> signatureVerificationResult, bool isCurrentSaved);
     void closeDocument();
 
@@ -589,6 +590,7 @@ private:
     pdf::PDFPluginInfos m_plugins;
     std::vector<std::pair<pdf::PDFPluginInfo, pdf::PDFPlugin*>> m_loadedPlugins;
     bool m_isFullscreenMode;
+    bool m_isReloadRequested = false;   ///< PDF Fire: openDocument reads the file again, although it is open
     PDFFullscreenWidget* m_fullscreenWidget;
 };
 

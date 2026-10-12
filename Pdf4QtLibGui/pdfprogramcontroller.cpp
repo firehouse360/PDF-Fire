@@ -2407,19 +2407,30 @@ void PDFProgramController::openDocument(const QString& fileName)
     // PDF Fire: a document, which is open in a tab, is shown; another one is opened
     // in a new tab (the shown document stays open in its tab)
     const QString absoluteFilePath = QFileInfo(fileName).absoluteFilePath();
-    if (m_pdfDocument && m_fileInfo.absoluteFilePath == absoluteFilePath)
-    {
-        return;
-    }
+    const bool isReload = m_isReloadRequested;
+    m_isReloadRequested = false;
     for (int i = 0; i < int(m_tabs.size()); ++i)
     {
         if (i != m_currentTab && m_tabs[i].fileInfo.absoluteFilePath == absoluteFilePath && m_tabs[i].document)
         {
             switchToDocumentTab(i);
-            return;
+            if (!isReload)
+            {
+                return;
+            }
+            break;
         }
     }
-    prepareNewDocumentTab();
+    const bool isOpenHere = m_pdfDocument && m_fileInfo.absoluteFilePath == absoluteFilePath;
+    if (isOpenHere && !isReload)
+    {
+        return;
+    }
+    // A reloaded document stays in its tab; another one gets a new tab
+    if (!isOpenHere)
+    {
+        prepareNewDocumentTab();
+    }
 
     // First close old document
     closeDocument();
@@ -2713,6 +2724,14 @@ void PDFProgramController::setDocument(pdf::PDFModifiedDocument document, std::v
     }
 
     updateActionsAvailability();
+}
+
+void PDFProgramController::reloadDocument(const QString& fileName)
+{
+    // PDF Fire: the file was just written by a plugin (a signed copy saved over the open
+    // document) - it is read again, in its own tab, instead of showing the old content
+    m_isReloadRequested = true;
+    openDocument(fileName);
 }
 
 void PDFProgramController::closeDocument()

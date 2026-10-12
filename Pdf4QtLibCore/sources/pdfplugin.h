@@ -74,6 +74,10 @@ public:
 
     /// PDF Fire: opens the document in the application (asks to save the current one first)
     virtual void openDocument(const QString& fileName) = 0;
+
+    /// PDF Fire: opens the document again from the file, also when it is already open
+    /// (a plugin has just written it, e.g. a signed copy saved over the open file)
+    virtual void reloadDocument(const QString& fileName) { openDocument(fileName); }
     virtual VoiceSettings getVoiceSettings() const = 0;
 };
 

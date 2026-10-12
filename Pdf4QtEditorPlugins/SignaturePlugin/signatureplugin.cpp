@@ -1272,7 +1272,8 @@ void SignaturePlugin::signDigitally(const SignTarget& initialTarget)
                                           QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes) == QMessageBox::Yes)
                 {
                     const QString signedFileName = fileName;
-                    QTimer::singleShot(0, this, [this, signedFileName]() { m_dataExchangeInterface->openDocument(signedFileName); });
+                    // reloadDocument: the signed copy may have been saved over the open file
+                    QTimer::singleShot(0, this, [this, signedFileName]() { m_dataExchangeInterface->reloadDocument(signedFileName); });
                 }
             }
             else
