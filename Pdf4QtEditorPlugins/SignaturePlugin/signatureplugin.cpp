@@ -838,7 +838,7 @@ void SignaturePlugin::signDigitally(const SignTarget& initialTarget)
             {
                 QPainter painter(&preview);
                 SignDialog::drawNameAppearance(&painter, QRectF(QPointF(0, 0), QSizeF(preview.size())), dialog.getAppearanceName(), dialog.getAppearanceFont(),
-                                               dialog.getPreviewDetails(QDateTime::currentDateTime()), SignDialog::getPreviewQrText());
+                                               dialog.getPreviewDetails(QDateTime::currentDateTime()), dialog.getPreviewQrText());
             }
 
             QEventLoop loop;
@@ -1015,7 +1015,21 @@ void SignaturePlugin::signDigitally(const SignTarget& initialTarget)
         // code (on the signature, with a QR code, and in the signing record). The code is made
         // here, before signing, so it is part of what is signed; it works offline too (the
         // registration waits until the computer is online).
-        const bool isRegisteredOnline = !isDocumentTimestamp && pdf::PDFFireFirehouse360::isConnected();
+        // Only a certificate issued by the connected department's authority - a personal or
+        // self-made certificate signs as before, without a verify code (Mike, 2026-10-11)
+        bool isRegisteredOnline = false;
+        if (!isDocumentTimestamp && certificate && pdf::PDFFireFirehouse360::isConnected())
+        {
+            if (pdf::PDFFireFirehouse360::getDepartmentAuthority().isEmpty())
+            {
+                QApplication::setOverrideCursor(Qt::WaitCursor);
+                QByteArray authority;
+                QByteArray revocationList;
+                pdf::PDFFireFirehouse360::updateDepartmentAuthority(&authority, &revocationList);
+                QApplication::restoreOverrideCursor();
+            }
+            isRegisteredOnline = SignDialog::isDepartmentCertificate(*certificate, dialog.getPassword());
+        }
         const QString verifyCode = isRegisteredOnline ? pdf::PDFFireFirehouse360::newVerifyCode() : QString();
         signingRecord.verifyCode = verifyCode;
         const QString verifyQrText = isRegisteredOnline ? pdf::PDFFireFirehouse360::getVerifyUrl(verifyCode).toUpper() : QString();

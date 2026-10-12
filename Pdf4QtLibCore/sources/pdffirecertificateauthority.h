@@ -204,6 +204,14 @@ public:
     /// Certificates (DER) of the trusted authorities
     static std::vector<QByteArray> getTrustedAuthorityCertificates();
 
+    /// PDF Fire: was the certificate (DER or PEM) issued by the authority? Checked by the
+    /// signature of the certificate, not only by the names.
+    static bool isIssuedBy(const QByteArray& certificate, const QByteArray& authority);
+
+    /// PDF Fire: name of the trusted department authority, which issued the certificate,
+    /// or an empty string (a personal or self-made certificate, or an unknown authority)
+    static QString getIssuingDepartment(const QByteArray& certificate);
+
     /// Revocation lists (DER), which are next to the certificates of the trusted authorities
     static std::vector<QByteArray> getTrustedAuthorityRevocationLists();
 
@@ -218,6 +226,9 @@ public:
     /// Returns the certificate (DER) of the owner of the PKCS#12 file, when it is
     /// readable without the password (a certificate issued by an authority)
     static QByteArray readPublicCertificate(const QByteArray& pkcs12);
+
+    /// PDF Fire: the same with the password (a .pfx, whose certificates are encrypted too)
+    static QByteArray readPublicCertificate(const QByteArray& pkcs12, const QString& password);
 
     /// Returns the certificate (DER) of the authority, which is stored in the
     /// PKCS#12 file of a member (empty, when there is none)

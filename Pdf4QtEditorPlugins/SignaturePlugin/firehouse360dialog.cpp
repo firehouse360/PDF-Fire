@@ -295,59 +295,20 @@ void Firehouse360Dialog::onDisconnect()
 
 void Firehouse360Dialog::syncTrust(bool interactive)
 {
-    pdf::PDFFireFirehouse360::Response status;
-    {
-        WaitCursor waitCursor;
-        status = pdf::PDFFireFirehouse360::fetchStatus();
-    }
-    if (!status.isOk())
-    {
-        if (interactive)
-        {
-            showError(status.error);
-        }
-        return;
-    }
-
-    const QJsonObject authority = status.json.value(QStringLiteral("authority")).toObject();
-    if (authority.isEmpty())
-    {
-        if (interactive)
-        {
-            QMessageBox::information(this, tr("Department Authority"),
-                                     tr("Your department has not uploaded its signing authority to Firehouse 360 yet. An administrator does it in "
-                                        "Secure Share ▸ Settings ▸ PDF Fire signing."));
-        }
-        return;
-    }
-
+    // Downloaded and checked (SHA-256 against the status); the certificate is kept, so
+    // only signatures with the department's certificates get a verify code
     QByteArray certificate;
     QByteArray revocationList;
+    pdf::PDFFireFirehouse360::Response response;
     {
         WaitCursor waitCursor;
-        const pdf::PDFFireFirehouse360::Response certificateResponse = pdf::PDFFireFirehouse360::download(authority.value(QStringLiteral("certificate_url")).toString(), &certificate);
-        if (!certificateResponse.isOk())
-        {
-            if (interactive)
-            {
-                showError(certificateResponse.error);
-            }
-            return;
-        }
-        const QString revocationUrl = authority.value(QStringLiteral("revocation_url")).toString();
-        if (!revocationUrl.isEmpty())
-        {
-            pdf::PDFFireFirehouse360::download(revocationUrl, &revocationList);
-        }
+        response = pdf::PDFFireFirehouse360::updateDepartmentAuthority(&certificate, &revocationList);
     }
-
-    // The downloaded certificate must be the one the server describes
-    const QString sha256 = QString::fromLatin1(QCryptographicHash::hash(certificate, QCryptographicHash::Sha256).toHex());
-    if (sha256.compare(authority.value(QStringLiteral("sha256")).toString(), Qt::CaseInsensitive) != 0)
+    if (!response.isOk() || certificate.isEmpty())
     {
         if (interactive)
         {
-            showError(tr("The downloaded authority certificate does not match the one Firehouse 360 describes. Nothing was changed."));
+            QMessageBox::information(this, tr("Department Authority"), response.error);
         }
         return;
     }

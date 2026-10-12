@@ -22,6 +22,7 @@
 
 #include "pdfcertificatelisthelper.h"
 #include "pdfwidgetutils.h"
+#include "pdffirecertificateauthority.h"
 
 #include <QComboBox>
 #include <QTableView>
@@ -102,9 +103,17 @@ void PDFCertificateListHelper::fillComboBox(QComboBox* comboBox, const PDFCertif
         else if (!commonName.isEmpty())
         {
             // PDF Fire: a certificate issued by a department authority shows the
-            // name of the member before the password is typed
-            model->setItem(i, 0, new QStandardItem(commonName));
-            model->setItem(i, 1, new QStandardItem(tr("%1, password protected").arg(entry.pkcs12fileName)));
+            // name of the member before the password is typed - with "Dept:" in front,
+            // so it is not mistaken for a personal certificate with the same name
+            QByteArray certificateData = entry.info.getCertificateData();
+            if (certificateData.isEmpty())
+            {
+                certificateData = PDFFireCertificateAuthority::readPublicCertificate(entry.pkcs12);
+            }
+            const QString department = PDFFireCertificateAuthority::getIssuingDepartment(certificateData);
+            model->setItem(i, 0, new QStandardItem(department.isEmpty() ? commonName : tr("Dept: %1").arg(commonName)));
+            model->setItem(i, 1, new QStandardItem(department.isEmpty() ? tr("%1, password protected").arg(entry.pkcs12fileName)
+                                                                        : tr("%1 - %2, password protected").arg(department, entry.pkcs12fileName)));
             model->setItem(i, 2, new QStandardItem(entry.info.getNotValidBefore().toLocalTime().toString()));
             model->setItem(i, 3, new QStandardItem(entry.info.getNotValidAfter().toLocalTime().toString()));
         }

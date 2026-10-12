@@ -112,6 +112,10 @@ exit 0
 - Fixed: after signing, "Open the signed document now?" showed the old page when the signed copy
   was saved over a file that was already open - the new signature (and its Firehouse 360 QR code)
   only appeared after closing and reopening. The open document is now read again at once.
+- Firehouse 360: only signatures with a certificate issued by your department's authority get the
+  verify code and QR code - a personal or self-made certificate signs as before.
+- Certificates issued by a department are listed as "Dept: <name>", so they are not mistaken for a
+  personal certificate with the same name.
 
 * Sun Oct 11 2026 PDF Fire <pdffire.constant740@passmail.net> - 0.1.11-1
 - New: connect PDF Fire to your department's Firehouse 360 (Sign > Firehouse 360, off unless you

@@ -21,8 +21,10 @@
 // SOFTWARE.
 
 #include "pdffirefirehouse360.h"
+#include "pdffirecertificateauthority.h"
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QEventLoop>
 #include <QFile>
@@ -568,6 +570,57 @@ PDFFireFirehouse360::Response PDFFireFirehouse360::request(const QByteArray& met
     return response;
 }
 
+QByteArray PDFFireFirehouse360::getDepartmentAuthority()
+{
+    return QByteArray::fromBase64(QSettings().value(settingsKey("AuthorityCertificate")).toByteArray());
+}
+
+PDFFireFirehouse360::Response PDFFireFirehouse360::updateDepartmentAuthority(QByteArray* certificate, QByteArray* revocationList)
+{
+    Response response = fetchStatus();
+    if (!response.isOk())
+    {
+        return response;
+    }
+
+    const QJsonObject authority = response.json.value(QStringLiteral("authority")).toObject();
+    if (authority.isEmpty())
+    {
+        QSettings().remove(settingsKey("AuthorityCertificate"));
+        response.error = QCoreApplication::translate("PDFFireFirehouse360", "Your department has not uploaded its signing authority to Firehouse 360 yet "
+                                                                            "(Secure Share ▸ Settings ▸ PDF Fire signing).");
+        return response;
+    }
+
+    Response download = PDFFireFirehouse360::download(authority.value(QStringLiteral("certificate_url")).toString(), certificate);
+    if (!download.isOk())
+    {
+        return download;
+    }
+    const QString sha256 = QString::fromLatin1(QCryptographicHash::hash(*certificate, QCryptographicHash::Sha256).toHex());
+    if (sha256.compare(authority.value(QStringLiteral("sha256")).toString(), Qt::CaseInsensitive) != 0)
+    {
+        certificate->clear();
+        response.error = QCoreApplication::translate("PDFFireFirehouse360", "The downloaded authority certificate does not match the one Firehouse 360 describes.");
+        return response;
+    }
+
+    revocationList->clear();
+    const QString revocationUrl = authority.value(QStringLiteral("revocation_url")).toString();
+    if (!revocationUrl.isEmpty())
+    {
+        PDFFireFirehouse360::download(revocationUrl, revocationList);
+    }
+
+    QSettings().setValue(settingsKey("AuthorityCertificate"), certificate->toBase64());
+    return response;
+}
+
+bool PDFFireFirehouse360::isDepartmentCertificate(const QByteArray& certificate)
+{
+    return PDFFireCertificateAuthority::isIssuedBy(certificate, getDepartmentAuthority());
+}
+
 QString PDFFireFirehouse360::getTokenFileName()
 {
     return QDir(dataDirectory()).filePath(QStringLiteral("token"));
@@ -690,6 +743,17 @@ void PDFFireFirehouse360::storeStatus(const QJsonObject& status)
     settings.setValue(settingsKey("Department"), department.value(QStringLiteral("name")).toString());
     settings.setValue(settingsKey("DepartmentSlug"), department.value(QStringLiteral("slug")).toString());
     settings.setValue(settingsKey("Member"), status.value(QStringLiteral("member")).toObject().value(QStringLiteral("name")).toString());
+
+    // The kept authority certificate is dropped, when the department has none any more
+    // or replaced it (it is downloaded again by updateDepartmentAuthority)
+    const QJsonObject authority = status.value(QStringLiteral("authority")).toObject();
+    const QByteArray kept = QByteArray::fromBase64(settings.value(settingsKey("AuthorityCertificate")).toByteArray());
+    if (authority.isEmpty() ||
+        (!kept.isEmpty() && QString::fromLatin1(QCryptographicHash::hash(kept, QCryptographicHash::Sha256).toHex())
+                                .compare(authority.value(QStringLiteral("sha256")).toString(), Qt::CaseInsensitive) != 0))
+    {
+        settings.remove(settingsKey("AuthorityCertificate"));
+    }
 }
 
 }   // namespace pdf

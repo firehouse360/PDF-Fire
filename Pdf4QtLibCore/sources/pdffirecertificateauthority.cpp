@@ -999,6 +999,34 @@ bool PDFFireCertificateAuthority::removeTrustedAuthority(const QString& fileName
     return true;
 }
 
+bool PDFFireCertificateAuthority::isIssuedBy(const QByteArray& certificateData, const QByteArray& authorityData)
+{
+    if (certificateData.isEmpty() || authorityData.isEmpty())
+    {
+        return false;
+    }
+    ssl_ptr<X509> certificate(readCertificate(certificateData), &X509_free);
+    ssl_ptr<X509> authority(readCertificate(authorityData), &X509_free);
+    if (!certificate || !authority || X509_cmp(certificate.get(), authority.get()) == 0)
+    {
+        return false;   // an authority does not "issue" itself here
+    }
+    EVP_PKEY* authorityKey = X509_get0_pubkey(authority.get());
+    return X509_check_issued(authority.get(), certificate.get()) == X509_V_OK && authorityKey && X509_verify(certificate.get(), authorityKey) == 1;
+}
+
+QString PDFFireCertificateAuthority::getIssuingDepartment(const QByteArray& certificateData)
+{
+    for (const QByteArray& authority : getTrustedAuthorityCertificates())
+    {
+        if (isIssuedBy(certificateData, authority))
+        {
+            return getCertificateName(authority);
+        }
+    }
+    return QString();
+}
+
 std::vector<QByteArray> PDFFireCertificateAuthority::getTrustedAuthorityCertificates()
 {
     std::vector<QByteArray> result;
@@ -1059,6 +1087,12 @@ std::optional<PDFFireSigningPolicy> PDFFireCertificateAuthority::readSigningPoli
 QByteArray PDFFireCertificateAuthority::readPublicCertificate(const QByteArray& pkcs12)
 {
     ssl_ptr<X509> certificate(readOwnerCertificate(pkcs12, QString()), &X509_free);
+    return certificate ? toDer(certificate.get()) : QByteArray();
+}
+
+QByteArray PDFFireCertificateAuthority::readPublicCertificate(const QByteArray& pkcs12, const QString& password)
+{
+    ssl_ptr<X509> certificate(readOwnerCertificate(pkcs12, password), &X509_free);
     return certificate ? toDer(certificate.get()) : QByteArray();
 }
 

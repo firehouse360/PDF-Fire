@@ -118,8 +118,12 @@ public:
     /// details (if any) at the right side of it - in two columns, when there are many
     static void drawNameAppearance(QPainter* painter, const QRectF& rect, const QString& name, const QFont& font, const QStringList& details, const QString& qrText = QString());
 
-    /// PDF Fire: placeholder QR text for previews (empty when not connected to Firehouse 360)
-    static QString getPreviewQrText();
+    /// PDF Fire: placeholder QR text for previews (empty unless connected to Firehouse 360
+    /// and the chosen certificate was issued by the department's authority)
+    QString getPreviewQrText() const;
+
+    /// PDF Fire: was the certificate issued by the connected department's authority?
+    static bool isDepartmentCertificate(const pdf::PDFCertificateEntry& entry, const QString& password = QString());
 
     /// PDF Fire: QR code of the text, centred in the rectangle
     static void drawQrCode(QPainter* painter, const QRectF& rect, const QString& text);
@@ -134,6 +138,8 @@ public:
     QStringList getPreviewDetails(const QDateTime& dateTime) const;
 
 private:
+    /// PDF Fire: the signature gets a Firehouse 360 verify code (department certificate, connected)
+    bool isVerifyCodeShown() const;
     /// Enables only the settings, which are used by the selected signature type
     void updateUi();
 

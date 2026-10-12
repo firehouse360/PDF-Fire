@@ -26,6 +26,7 @@
 // PDFFIRE_FH360_TEST_CMS (a signature by a member of that department).
 
 #include "pdffirefirehouse360.h"
+#include "pdffirecertificateauthority.h"
 
 #include <QtTest>
 #include <QFile>
@@ -33,6 +34,7 @@
 #include <QSet>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QTemporaryDir>
 
 class Firehouse360Test : public QObject
 {
@@ -46,6 +48,7 @@ private slots:
     void certificateEncryption();
     void certificateTampering();
     void queuePersistence();
+    void departmentCertificates();
     void serverEndToEnd();
 };
 
@@ -165,6 +168,44 @@ void Firehouse360Test::queuePersistence()
     invalid.verifyCode = QStringLiteral("nonsense");
     pdf::PDFFireFirehouse360::enqueue(invalid);   // dropped when read back
     QCOMPARE(pdf::PDFFireFirehouse360::getPendingCount(), before + 1);
+}
+
+void Firehouse360Test::departmentCertificates()
+{
+    // Two real department authorities, made the way PDF Fire makes them
+    QTemporaryDir directoryA;
+    QTemporaryDir directoryB;
+    QVERIFY(directoryA.isValid() && directoryB.isValid());
+    pdf::PDFFireCertificateAuthority authorityA;
+    pdf::PDFFireCertificateAuthority authorityB;
+    QString errorMessage;
+    pdf::PDFFireCertificateAuthority::AuthorityInfo infoA;
+    infoA.name = QStringLiteral("Name VFD Signing Authority");
+    infoA.organization = QStringLiteral("Name VFD");
+    pdf::PDFFireCertificateAuthority::AuthorityInfo infoB = infoA;   // the same names on purpose - only the key counts
+    QVERIFY2(authorityA.create(directoryA.filePath(QStringLiteral("a")), infoA, QStringLiteral("authority passphrase A"), &errorMessage), qPrintable(errorMessage));
+    QVERIFY2(authorityB.create(directoryB.filePath(QStringLiteral("b")), infoB, QStringLiteral("authority passphrase B"), &errorMessage), qPrintable(errorMessage));
+
+    pdf::PDFFireCertificateAuthority::MemberInfo member;
+    member.name = QStringLiteral("Jane Doe");
+    QByteArray pkcs12;
+    pdf::PDFFireCertificateAuthority::IssuedCertificate issued;
+    QVERIFY2(authorityA.issue(member, QStringLiteral("member password"), &pkcs12, &issued, &errorMessage), qPrintable(errorMessage));
+    const QByteArray memberCertificate = pdf::PDFFireCertificateAuthority::readPublicCertificate(pkcs12);
+    QVERIFY(!memberCertificate.isEmpty());
+
+    QVERIFY(pdf::PDFFireCertificateAuthority::isIssuedBy(memberCertificate, authorityA.getCertificate()));
+    QVERIFY(!pdf::PDFFireCertificateAuthority::isIssuedBy(memberCertificate, authorityB.getCertificate()));   // same name, other key
+    QVERIFY(!pdf::PDFFireCertificateAuthority::isIssuedBy(authorityA.getCertificate(), authorityA.getCertificate()));
+    QVERIFY(!pdf::PDFFireCertificateAuthority::isIssuedBy(QByteArray("junk"), authorityA.getCertificate()));
+
+    // The Firehouse 360 rule: only the connected department's certificates get a verify code
+    QVERIFY(!pdf::PDFFireFirehouse360::isDepartmentCertificate(memberCertificate));   // no authority known yet
+    QSettings().setValue(QStringLiteral("Firehouse360/AuthorityCertificate"), authorityA.getCertificate().toBase64());
+    QVERIFY(pdf::PDFFireFirehouse360::isDepartmentCertificate(memberCertificate));
+    QSettings().setValue(QStringLiteral("Firehouse360/AuthorityCertificate"), authorityB.getCertificate().toBase64());
+    QVERIFY(!pdf::PDFFireFirehouse360::isDepartmentCertificate(memberCertificate));
+    QSettings().remove(QStringLiteral("Firehouse360/AuthorityCertificate"));
 }
 
 void Firehouse360Test::serverEndToEnd()

@@ -450,17 +450,34 @@ QStringList SignDialog::getAppearanceDetails(const QString& name, const QDateTim
     return details;
 }
 
-QString SignDialog::getPreviewQrText()
+bool SignDialog::isDepartmentCertificate(const pdf::PDFCertificateEntry& entry, const QString& password)
 {
-    // PDF Fire: when connected to Firehouse 360 the signature gets a verify code - the
-    // preview shows where it goes (the real code is made when signing)
-    return pdf::PDFFireFirehouse360::isConnected() ? pdf::PDFFireFirehouse360::getVerifyUrl(QStringLiteral("PF-0000-0000-0000")).toUpper() : QString();
+    QByteArray certificate = entry.info.getCertificateData();
+    if (certificate.isEmpty())
+    {
+        // A .pfx with encrypted certificates is readable with its password only
+        certificate = password.isEmpty() ? pdf::PDFFireCertificateAuthority::readPublicCertificate(entry.pkcs12)
+                                         : pdf::PDFFireCertificateAuthority::readPublicCertificate(entry.pkcs12, password);
+    }
+    return pdf::PDFFireFirehouse360::isDepartmentCertificate(certificate);
+}
+
+bool SignDialog::isVerifyCodeShown() const
+{
+    const pdf::PDFCertificateEntry* certificate = getCertificate();
+    return certificate && getSignatureType() != TimestampOnly && pdf::PDFFireFirehouse360::isConnected() && isDepartmentCertificate(*certificate);
+}
+
+QString SignDialog::getPreviewQrText() const
+{
+    // PDF Fire: a department certificate, while connected to Firehouse 360, gets a verify
+    // code - the preview shows where it goes (the real code is made when signing)
+    return isVerifyCodeShown() ? pdf::PDFFireFirehouse360::getVerifyUrl(QStringLiteral("PF-0000-0000-0000")).toUpper() : QString();
 }
 
 QStringList SignDialog::getPreviewDetails(const QDateTime& dateTime) const
 {
-    const QString verifyLine = pdf::PDFFireFirehouse360::isConnected() ? tr("Verify: %1").arg(pdf::PDFFireFirehouse360::getVerifyDisplayUrl(QStringLiteral("PF-…")))
-                                                                       : QString();
+    const QString verifyLine = isVerifyCodeShown() ? tr("Verify: %1").arg(pdf::PDFFireFirehouse360::getVerifyDisplayUrl(QStringLiteral("PF-…"))) : QString();
     if (!isAppearanceDetailsShown())
     {
         return verifyLine.isEmpty() ? QStringList() : QStringList{ verifyLine };

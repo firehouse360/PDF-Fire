@@ -143,6 +143,18 @@ public:
     /// Downloads a public file (the department's authority.cer / authority.crl)
     static Response download(const QString& url, QByteArray* data);
 
+    /// The connected department's authority certificate (DER), as last downloaded
+    /// (empty = not known yet, or the department has none)
+    static QByteArray getDepartmentAuthority();
+
+    /// Downloads the department's authority certificate and revocation list (SHA-256
+    /// checked against the status) and keeps the certificate. Nothing is trusted here.
+    static Response updateDepartmentAuthority(QByteArray* certificate, QByteArray* revocationList);
+
+    /// Only a certificate issued by the connected department's authority gets the
+    /// verify code - a personal or self-made certificate signs as before (Mike, 2026-10-11)
+    static bool isDepartmentCertificate(const QByteArray& certificate);
+
 private:
     static Response request(const QByteArray& method, const QString& path, const QJsonObject* body, int timeoutMilliseconds);
     static QString getToken();
