@@ -141,6 +141,13 @@ void PDFViewerSettings::readSettings(QSettings& settings, const pdf::PDFCMSSetti
     settings.beginGroup("Author");
     m_settings.m_authorNameMode = static_cast<pdf::PDFAuthorSettings::AuthorNameMode>(settings.value("authorNameMode", int(defaultSettings.m_authorNameMode)).toInt());
     m_settings.m_customAuthorName = settings.value("customAuthorName", defaultSettings.m_customAuthorName).toString();
+    // PDF Fire: the default changed from "Anonymous" to the computer's user name. The upstream code saved the
+    // default on every exit, so a stored "Anonymous" without the PDF Fire marker is the old default, not a choice.
+    // A stored "System user name" or "Custom name" is always kept, and so is "Anonymous" saved by PDF Fire.
+    if (!settings.contains("pdfFireAuthorDefault") && m_settings.m_authorNameMode == pdf::PDFAuthorSettings::AuthorNameMode::Anonymous)
+    {
+        m_settings.m_authorNameMode = defaultSettings.m_authorNameMode;
+    }
     settings.endGroup();
 
     settings.beginGroup("ColorScheme");
@@ -253,6 +260,7 @@ void PDFViewerSettings::writeSettings(QSettings& settings)
     settings.beginGroup("Author");
     settings.setValue("authorNameMode", int(m_settings.m_authorNameMode));
     settings.setValue("customAuthorName", m_settings.m_customAuthorName);
+    settings.setValue("pdfFireAuthorDefault", 2);
     settings.endGroup();
 
     settings.beginGroup("ColorScheme");
@@ -384,7 +392,7 @@ PDFViewerSettings::Settings::Settings() :
     m_signatureIgnoreCertificateValidityTime(false),
     m_signatureUseSystemStore(true),
     m_autoGenerateBookmarks(true),
-    m_authorNameMode(pdf::PDFAuthorSettings::AuthorNameMode::Anonymous),
+    m_authorNameMode(pdf::PDFAuthorSettings::AuthorNameMode::SystemUserName), // PDF Fire: the computer's user name by default
     m_colorScheme(AutoScheme),
     m_sidebarButtonIconSize(SidebarButtonIconSizeSmall), // PDF Fire: a slim icon rail
     m_showSidebarOnDocumentOpen(true),

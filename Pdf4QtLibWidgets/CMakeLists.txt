@@ -32,6 +32,8 @@ add_library(Pdf4QtLibWidgets SHARED
     sources/pdffireaddtexttool.h
     sources/pdffireinlinetexteditor.cpp
     sources/pdffireinlinetexteditor.h
+    sources/pdffirecommentcard.cpp
+    sources/pdffirecommentcard.h
     sources/pdfwidgetutils.cpp
     sources/pdfwidgettool.h
     sources/pdfwidgetutils.h

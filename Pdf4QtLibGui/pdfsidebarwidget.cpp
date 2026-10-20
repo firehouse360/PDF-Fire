@@ -40,6 +40,7 @@
 #include "pdfwidgetutils.h"
 #include "pdfbookmarkui.h"
 #include "pdfwidgetannotation.h"
+#include "pdffirecommentspanel.h"
 
 #include <QMenu>
 #include <QAction>
@@ -210,6 +211,13 @@ PDFSidebarWidget::PDFSidebarWidget(pdf::PDFDrawWidgetProxy* proxy,
     ui->notesTreeView->setSelectionMode(QAbstractItemView::ExtendedSelection);
     connect(ui->notesTreeView->selectionModel(), &QItemSelectionModel::selectionChanged, this, &PDFSidebarWidget::onNotesSelectionChanged);
     connect(ui->notesTreeView, &QTreeView::customContextMenuRequested, this, &PDFSidebarWidget::onNotesTreeViewContextMenuRequested);
+
+    // PDF Fire: the threaded comments panel replaces the flat tree of the notes (the tree is kept, hidden,
+    // because the selection of the annotations is synchronized through it)
+    m_commentsPanel = new PDFFireCommentsPanel(m_proxy, ui->notesPage);
+    ui->notesPageLayout->addWidget(m_commentsPanel);
+    ui->widget->hide();
+    ui->notesTreeView->hide();
 
     m_pageInfo[Invalid] = { nullptr, ui->emptyPage };
     m_pageInfo[OptionalContent] = { ui->optionalContentButton, ui->optionalContentPage };
@@ -1124,6 +1132,8 @@ void PDFSidebarWidget::updateNotes()
     ui->notesTreeView->setUpdatesEnabled(updatesEnabled);
     ui->notesTreeView->expandAll();
     m_notesSelectionChangeInProgress = false;
+
+    m_commentsPanel->setDocument(m_document);
 
     // The annotation manager is created later, than the sidebar, so the connection is made here
     if (pdf::PDFWidgetAnnotationManager* annotationManager = m_proxy->getAnnotationManager())

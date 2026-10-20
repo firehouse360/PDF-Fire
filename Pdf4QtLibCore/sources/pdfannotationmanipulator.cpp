@@ -1788,7 +1788,22 @@ bool PDFAnnotationManipulator::updateMeasurement(PDFDocumentBuilder* builder, PD
 
 PDFObjectReference PDFAnnotationManipulator::addReply(PDFDocumentBuilder* builder, PDFObjectReference annotation, const QString& author, const QString& contents)
 {
-    if (!builder || contents.trimmed().isEmpty())
+    if (contents.trimmed().isEmpty())
+    {
+        return PDFObjectReference();
+    }
+
+    return createReply(builder, annotation, author, contents, QString(), QString());
+}
+
+PDFObjectReference PDFAnnotationManipulator::createReply(PDFDocumentBuilder* builder,
+                                                         PDFObjectReference annotation,
+                                                         const QString& author,
+                                                         const QString& contents,
+                                                         const QString& state,
+                                                         const QString& stateModel)
+{
+    if (!builder)
     {
         return PDFObjectReference();
     }
@@ -1804,21 +1819,257 @@ PDFObjectReference PDFAnnotationManipulator::addReply(PDFDocumentBuilder* builde
     // Jakub Melka: the reply has the place of its parent (it is not displayed, but a viewer,
     // which does not understand the replies, displays it as a note at the parent)
     const QRectF rectangle = parsedAnnotation->getRectangle().normalized();
-    const PDFObjectReference reply = builder->createAnnotationText(page, QRectF(rectangle.left(), rectangle.bottom() - 20.0, 20.0, 20.0), TextAnnotationIcon::Comment,
-                                                                   author, parsedAnnotation->asMarkupAnnotation()->getSubject(), contents, false);
+    const QRectF replyRectangle(rectangle.left(), rectangle.bottom() - 20.0, 20.0, 20.0);
+
+    // PDF Fire: a reply has no popup window of its own (it is a part of the thread of its parent) and an
+    // empty appearance stream, so viewers, which do not hide replies, do not draw a second icon (as other
+    // PDF editors write replies). The thread is displayed in the comments panel and the popup of the parent.
+    PDFDictionaryBuilder emptyFormDictionary;
+    emptyFormDictionary.addEntry(PDFInplaceOrMemoryString("Type"), PDFObject::createName("XObject"));
+    emptyFormDictionary.addEntry(PDFInplaceOrMemoryString("Subtype"), PDFObject::createName("Form"));
+    emptyFormDictionary.addEntry(PDFInplaceOrMemoryString("BBox"), createNumberArray({ 0.0, 0.0, 0.0, 0.0 }));
+    const PDFObjectReference emptyForm = builder->addObject(PDFObject::createStream(PDFStream(std::move(emptyFormDictionary), QByteArray())));
+
+    const QString subject = !state.isEmpty() ? QStringLiteral("Status") : parsedAnnotation->asMarkupAnnotation()->getSubject();
 
     PDFObjectFactory factory;
     factory.beginDictionary();
+    factory.beginDictionaryItem("Type");
+    factory << WrapName("Annot");
+    factory.endDictionaryItem();
+    factory.beginDictionaryItem("Subtype");
+    factory << WrapName("Text");
+    factory.endDictionaryItem();
+    factory.beginDictionaryItem("Rect");
+    factory << replyRectangle;
+    factory.endDictionaryItem();
+    factory.beginDictionaryItem("Name");
+    factory << TextAnnotationIcon::Comment;
+    factory.endDictionaryItem();
+    factory.beginDictionaryItem("F");
+    factory << PDFInteger(PDFAnnotation::Print | PDFAnnotation::NoZoom | PDFAnnotation::NoRotate);
+    factory.endDictionaryItem();
+    factory.beginDictionaryItem("P");
+    factory << page;
+    factory.endDictionaryItem();
+    factory.beginDictionaryItem("M");
+    factory << WrapCurrentDateTime();
+    factory.endDictionaryItem();
+    factory.beginDictionaryItem("CreationDate");
+    factory << WrapCurrentDateTime();
+    factory.endDictionaryItem();
+    factory.beginDictionaryItem("T");
+    factory << author;
+    factory.endDictionaryItem();
+    factory.beginDictionaryItem("Contents");
+    factory << contents;
+    factory.endDictionaryItem();
+    factory.beginDictionaryItem("Subj");
+    factory << subject;
+    factory.endDictionaryItem();
+    factory.beginDictionaryItem("NM");
+    factory << createUniqueName();
+    factory.endDictionaryItem();
+    factory.beginDictionaryItem("Open");
+    factory << false;
+    factory.endDictionaryItem();
+    if (!parsedAnnotation->getColor().empty())
+    {
+        factory.beginDictionaryItem("C");
+        factory << createNumberArray(parsedAnnotation->getColor());
+        factory.endDictionaryItem();
+    }
     factory.beginDictionaryItem("IRT");
     factory << annotation;
     factory.endDictionaryItem();
     factory.beginDictionaryItem("RT");
     factory << WrapName("R");
     factory.endDictionaryItem();
+    if (!state.isEmpty())
+    {
+        factory.beginDictionaryItem("State");
+        factory << state;
+        factory.endDictionaryItem();
+        factory.beginDictionaryItem("StateModel");
+        factory << stateModel;
+        factory.endDictionaryItem();
+    }
+    factory.beginDictionaryItem("AP");
+    factory.beginDictionary();
+    factory.beginDictionaryItem("N");
+    factory << emptyForm;
+    factory.endDictionaryItem();
     factory.endDictionary();
-    builder->mergeTo(reply, factory.takeObject());
+    factory.endDictionaryItem();
+    factory.endDictionary();
+
+    const PDFObjectReference reply = builder->addObject(factory.takeObject());
+
+    factory.beginDictionary();
+    factory.beginDictionaryItem("Annots");
+    factory.beginArray();
+    factory << reply;
+    factory.endArray();
+    factory.endDictionaryItem();
+    factory.endDictionary();
+    builder->appendTo(page, factory.takeObject());
 
     return reply;
+}
+
+QColor PDFAnnotationManipulator::getDefaultStickyNoteColor()
+{
+    // PDF Fire: the yellow of the sticky notes of other PDF editors
+    return QColor::fromRgbF(1.0f, 0.82f, 0.0f);
+}
+
+PDFObjectReference PDFAnnotationManipulator::createStickyNote(PDFDocumentBuilder* builder,
+                                                              PDFObjectReference page,
+                                                              const QPointF& topLeft,
+                                                              TextAnnotationIcon icon,
+                                                              const QString& author,
+                                                              const QString& contents,
+                                                              const QColor& color)
+{
+    if (!builder || !page.isValid())
+    {
+        return PDFObjectReference();
+    }
+
+    const QColor noteColor = color.isValid() ? color : getDefaultStickyNoteColor();
+
+    // The icon hangs down from the clicked point (page coordinates have the y axis upwards)
+    constexpr PDFReal iconSize = 20.0;
+    const QRectF rectangle(topLeft.x(), topLeft.y() - iconSize, iconSize, iconSize);
+    const PDFObjectReference note = builder->createAnnotationText(page, rectangle, icon, author, getStickyNoteSubject(), contents, false);
+
+    PDFObjectFactory factory;
+    factory.beginDictionary();
+    factory.beginDictionaryItem("C");
+    factory << createNumberArray({ noteColor.redF(), noteColor.greenF(), noteColor.blueF() });
+    factory.endDictionaryItem();
+    factory.beginDictionaryItem("NM");
+    factory << createUniqueName();
+    factory.endDictionaryItem();
+    factory.beginDictionaryItem("F");
+    factory << PDFInteger(PDFAnnotation::Print | PDFAnnotation::NoZoom | PDFAnnotation::NoRotate);
+    factory.endDictionaryItem();
+    factory.beginDictionaryItem("Rect");
+    factory << rectangle;
+    factory.endDictionaryItem();
+    factory.endDictionary();
+    builder->mergeTo(note, factory.takeObject());
+
+    // The appearance stream was created before the colour was set
+    builder->updateAnnotationAppearanceStreams(note);
+
+    // The appearance stream generation can change the rectangle to the bounding box of the drawing,
+    // the note keeps exactly its 20 x 20 pt icon box.
+    PDFObjectFactory rectangleFactory;
+    rectangleFactory.beginDictionary();
+    rectangleFactory.beginDictionaryItem("Rect");
+    rectangleFactory << rectangle;
+    rectangleFactory.endDictionaryItem();
+    rectangleFactory.endDictionary();
+    builder->mergeTo(note, rectangleFactory.takeObject());
+
+    return note;
+}
+
+bool PDFAnnotationManipulator::setContents(PDFDocumentBuilder* builder, PDFObjectReference annotation, const QString& contents)
+{
+    if (!builder)
+    {
+        return false;
+    }
+
+    const PDFObjectStorage* storage = builder->getStorage();
+    const PDFAnnotationPtr parsedAnnotation = PDFAnnotation::parse(storage, annotation);
+    if (!parsedAnnotation || !parsedAnnotation->asMarkupAnnotation())
+    {
+        return false;
+    }
+
+    if (parsedAnnotation->getContents() == contents)
+    {
+        return false;
+    }
+
+    PDFObjectFactory factory;
+    factory.beginDictionary();
+    factory.beginDictionaryItem("Contents");
+    factory << contents;
+    factory.endDictionaryItem();
+    factory.beginDictionaryItem("M");
+    factory << WrapCurrentDateTime();
+    factory.endDictionaryItem();
+    factory.beginDictionaryItem("RC");
+    factory << PDFObject();
+    factory.endDictionaryItem();
+    factory.endDictionary();
+    builder->mergeTo(annotation, factory.takeObject());
+
+    if (parsedAnnotation->getType() == AnnotationType::FreeText)
+    {
+        builder->updateAnnotationAppearanceStreams(annotation);
+    }
+
+    return true;
+}
+
+bool PDFAnnotationManipulator::isStatusReply(const PDFAnnotation* annotation)
+{
+    const PDFTextAnnotation* textAnnotation = dynamic_cast<const PDFTextAnnotation*>(annotation);
+    return textAnnotation && textAnnotation->isReplyTo() && !textAnnotation->getState().isEmpty();
+}
+
+QString PDFAnnotationManipulator::getReviewState(const std::vector<const PDFAnnotation*>& replies)
+{
+    QString state;
+    QDateTime stateTime;
+
+    for (const PDFAnnotation* reply : replies)
+    {
+        const PDFTextAnnotation* textAnnotation = dynamic_cast<const PDFTextAnnotation*>(reply);
+        if (!isStatusReply(textAnnotation))
+        {
+            continue;
+        }
+
+        // The state model is Marked or Review; Review is the default for the review states
+        const QString stateModel = textAnnotation->getStateModel();
+        if (stateModel.compare("Marked", Qt::CaseInsensitive) == 0 || textAnnotation->getState() == "Marked" || textAnnotation->getState() == "Unmarked")
+        {
+            continue;
+        }
+
+        const QDateTime time = textAnnotation->getLastModifiedDateTime().isValid() ? textAnnotation->getLastModifiedDateTime() : textAnnotation->getCreationDate();
+        if (state.isNull() || !stateTime.isValid() || !time.isValid() || time >= stateTime)
+        {
+            state = textAnnotation->getState();
+            stateTime = time;
+        }
+    }
+
+    if (state.compare("None", Qt::CaseInsensitive) == 0)
+    {
+        return QString();
+    }
+
+    return state;
+}
+
+PDFObjectReference PDFAnnotationManipulator::setReviewState(PDFDocumentBuilder* builder, PDFObjectReference annotation, const QString& state, const QString& author)
+{
+    static const QStringList states = { "Accepted", "Rejected", "Cancelled", "Completed", "None" };
+    if (!states.contains(state))
+    {
+        return PDFObjectReference();
+    }
+
+    // The text as other PDF editors write it, so it reads well in a viewer, which shows status replies as replies
+    const QString contents = QString("%1 set by %2").arg(state, author);
+    return createReply(builder, annotation, author, contents, state, QStringLiteral("Review"));
 }
 
 bool PDFAnnotationManipulator::setFileAttachment(PDFDocumentBuilder* builder, PDFObjectReference annotation, const QString& fileName, const QByteArray& data)

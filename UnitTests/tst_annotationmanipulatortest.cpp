@@ -104,6 +104,10 @@ private slots:
     void erasedInk();
     void inkPoints();
     void addedReply();
+    void stickyNoteKeys();
+    void stickyNoteRoundTrip();
+    void reviewState();
+    void setContents();
     void replacedFileAttachment();
     void measurementAngle();
     void measurementPointCount();
@@ -3384,6 +3388,189 @@ void AnnotationManipulatorTest::addedReply()
     QCOMPARE(entry(modified, nestedReply, "IRT"), PDFObject::createReference(reply));
     QCOMPARE(entry(modified, reply, "RT"), PDFObject::createName("R"));
     QCOMPARE(PDFAnnotationManipulator::findAnnotationPage(storage, reply), page);
+
+    // PDF Fire: a reply has no popup window of its own, an empty appearance (other viewers do not
+    // draw a second icon), a unique name and the colour of its parent
+    QVERIFY(entry(modified, reply, "Popup").isNull());
+    QVERIFY(entry(modified, nestedReply, "Popup").isNull());
+    const PDFObjectReference replyAppearance = normalAppearance(modified, reply);
+    QVERIFY(replyAppearance.isValid());
+    const PDFObject& replyAppearanceObject = modified.getObjectByReference(replyAppearance);
+    QVERIFY(replyAppearanceObject.isStream());
+    QVERIFY(replyAppearanceObject.getStream()->getContent()->isEmpty());
+    QCOMPARE(numbers(modified, replyAppearance, "BBox"), std::vector<PDFReal>({ 0.0, 0.0, 0.0, 0.0 }));
+    QVERIFY(entry(modified, reply, "NM").isString());
+    QVERIFY(entry(modified, reply, "NM") != entry(modified, nestedReply, "NM"));
+    QCOMPARE(numbers(modified, reply, "C"), numbers(modified, square, "C"));
+    QVERIFY(!PDFAnnotationManipulator::isStatusReply(parsedReply.data()));
+
+    // Only the annotation and its replies are on the page (no popup windows of the replies)
+    const std::vector<PDFObjectReference> annots = pageAnnotations(modified, 0);
+    QVERIFY(std::find(annots.cbegin(), annots.cend(), reply) != annots.cend());
+    QVERIFY(std::find(annots.cbegin(), annots.cend(), nestedReply) != annots.cend());
+    for (const PDFObjectReference& annotation : annots)
+    {
+        const PDFAnnotationPtr parsed = PDFAnnotation::parse(storage, annotation);
+        QVERIFY(parsed);
+        QVERIFY(parsed->getType() != AnnotationType::Popup);
+    }
+
+    // The writer writes the replies and the empty appearance
+    QVERIFY(!write(modified).isEmpty());
+}
+
+void AnnotationManipulatorTest::stickyNoteKeys()
+{
+    PDFDocumentBuilder builder;
+    const PDFObjectReference page = builder.appendPage(QRectF(0, 0, 400, 400));
+    const PDFObjectReference note = PDFAnnotationManipulator::createStickyNote(&builder, page, QPointF(100, 300), TextAnnotationIcon::Comment, "Mike Davis", "Check the hydrant list.", QColor());
+    const PDFObjectReference blueNote = PDFAnnotationManipulator::createStickyNote(&builder, page, QPointF(200, 300), TextAnnotationIcon::Note, "Mike Davis", "Second", QColor(0, 0, 255));
+    QVERIFY(note.isValid());
+    QVERIFY(blueNote.isValid());
+    QVERIFY(!PDFAnnotationManipulator::createStickyNote(nullptr, page, QPointF(), TextAnnotationIcon::Comment, "A", "B", QColor()).isValid());
+    const PDFDocument document = builder.build();
+
+    // 20 x 20 pt icon hanging down from the clicked point, not a zero size rectangle
+    QCOMPARE(rectangle(document, note), QRectF(100, 280, 20, 20));
+    QCOMPARE(entry(document, note, "Subtype"), PDFObject::createName("Text"));
+    QCOMPARE(entry(document, note, "Name"), PDFObject::createName("Comment"));
+    QCOMPARE(entry(document, note, "Subj"), PDFObject::createString(QByteArray("Sticky Note")));
+    QCOMPARE(entry(document, note, "T"), PDFObject::createString(QByteArray("Mike Davis")));
+    QVERIFY(fuzzyCompare(numbers(document, note, "C"), { 1.0, 0.82, 0.0 }));
+    QVERIFY(fuzzyCompare(numbers(document, blueNote, "C"), { 0.0, 0.0, 1.0 }));
+    QVERIFY(entry(document, note, "NM").isString());
+    QVERIFY(entry(document, note, "NM") != entry(document, blueNote, "NM"));
+    QCOMPARE(number(document, note, "F"), PDFReal(PDFAnnotation::Print | PDFAnnotation::NoZoom | PDFAnnotation::NoRotate));
+    QVERIFY(entry(document, note, "M").isString());
+    QVERIFY(entry(document, note, "CreationDate").isString());
+    QVERIFY(entry(document, note, "Popup").isReference());
+
+    // A real appearance stream, so other viewers show the same coloured icon
+    const PDFObjectReference appearance = normalAppearance(document, note);
+    QVERIFY(appearance.isValid());
+    const PDFObject& appearanceObject = document.getObjectByReference(appearance);
+    QVERIFY(appearanceObject.isStream());
+    QVERIFY(!appearanceObject.getStream()->getContent()->isEmpty());
+    QVERIFY(normalAppearance(document, note) != normalAppearance(document, blueNote));
+
+    const PDFAnnotationPtr parsed = PDFAnnotation::parse(&document.getStorage(), note);
+    QVERIFY(parsed);
+    QCOMPARE(parsed->getContents(), QString("Check the hydrant list."));
+    QCOMPARE(parsed->asMarkupAnnotation()->getSubject(), PDFAnnotationManipulator::getStickyNoteSubject());
+}
+
+void AnnotationManipulatorTest::stickyNoteRoundTrip()
+{
+    PDFDocumentBuilder builder;
+    const PDFObjectReference page = builder.appendPage(QRectF(0, 0, 400, 400));
+    const PDFObjectReference note = PDFAnnotationManipulator::createStickyNote(&builder, page, QPointF(100, 300), TextAnnotationIcon::Comment, "Author", "Note", QColor(255, 0, 0));
+    QVERIFY(PDFAnnotationManipulator::addReply(&builder, note, "Reviewer", "Reply").isValid());
+    QVERIFY(PDFAnnotationManipulator::setReviewState(&builder, note, "Accepted", "Reviewer").isValid());
+    const PDFDocument document = builder.build();
+
+    // Written and read again: the note, the reply and the status are there
+    const QByteArray data = write(document);
+    PDFDocumentReader reader(nullptr, [](bool* ok) { *ok = false; return QString(); }, true, false);
+    const PDFDocument readDocument = reader.readFromBuffer(data);
+    QCOMPARE(reader.getReadingResult(), PDFDocumentReader::Result::OK);
+
+    const std::vector<PDFObjectReference> annots = pageAnnotations(readDocument, 0);
+    int notes = 0;
+    int replies = 0;
+    std::vector<const PDFAnnotation*> statusReplies;
+    std::vector<PDFAnnotationPtr> parsedAnnotations;
+    for (const PDFObjectReference& annotation : annots)
+    {
+        PDFAnnotationPtr parsed = PDFAnnotation::parse(&readDocument.getStorage(), annotation);
+        QVERIFY(parsed);
+        parsedAnnotations.push_back(parsed);
+        if (parsed->getType() != AnnotationType::Text)
+        {
+            continue;
+        }
+
+        if (!parsed->isReplyTo())
+        {
+            ++notes;
+            QCOMPARE(parsed->getContents(), QString("Note"));
+            QVERIFY(fuzzyCompare(parsed->getColor(), { 1.0, 0.0, 0.0 }));
+        }
+        else if (PDFAnnotationManipulator::isStatusReply(parsed.data()))
+        {
+            statusReplies.push_back(parsed.data());
+        }
+        else
+        {
+            ++replies;
+            QCOMPARE(parsed->getContents(), QString("Reply"));
+        }
+    }
+
+    QCOMPARE(notes, 1);
+    QCOMPARE(replies, 1);
+    QCOMPARE(statusReplies.size(), size_t(1));
+    QCOMPARE(PDFAnnotationManipulator::getReviewState(statusReplies), QString("Accepted"));
+}
+
+void AnnotationManipulatorTest::reviewState()
+{
+    PDFDocumentBuilder builder;
+    const PDFObjectReference page = builder.appendPage(QRectF(0, 0, 400, 400));
+    const PDFObjectReference note = PDFAnnotationManipulator::createStickyNote(&builder, page, QPointF(100, 300), TextAnnotationIcon::Comment, "Author", "Note", QColor());
+    const PDFDocument document = builder.build();
+
+    PDFDocumentBuilder modifyBuilder(&document);
+    const PDFObjectReference accepted = PDFAnnotationManipulator::setReviewState(&modifyBuilder, note, "Accepted", "Reviewer");
+    QVERIFY(accepted.isValid());
+    QVERIFY(!PDFAnnotationManipulator::setReviewState(&modifyBuilder, note, "Approved", "Reviewer").isValid());
+    const PDFDocument modified = modifyBuilder.build();
+
+    QCOMPARE(entry(modified, accepted, "State"), PDFObject::createString(QByteArray("Accepted")));
+    QCOMPARE(entry(modified, accepted, "StateModel"), PDFObject::createString(QByteArray("Review")));
+    QCOMPARE(entry(modified, accepted, "Subj"), PDFObject::createString(QByteArray("Status")));
+    QCOMPARE(entry(modified, accepted, "IRT"), PDFObject::createReference(note));
+    QCOMPARE(entry(modified, accepted, "Contents"), PDFObject::createString(QByteArray("Accepted set by Reviewer")));
+    QVERIFY(entry(modified, accepted, "Popup").isNull());
+
+    const PDFAnnotationPtr parsedAccepted = PDFAnnotation::parse(&modified.getStorage(), accepted);
+    QVERIFY(PDFAnnotationManipulator::isStatusReply(parsedAccepted.data()));
+    QCOMPARE(PDFAnnotationManipulator::getReviewState({ parsedAccepted.data() }), QString("Accepted"));
+
+    // The latest status wins, None clears the status
+    PDFDocumentBuilder secondBuilder(&modified);
+    const PDFObjectReference rejected = PDFAnnotationManipulator::setReviewState(&secondBuilder, note, "Rejected", "Author");
+    const PDFObjectReference none = PDFAnnotationManipulator::setReviewState(&secondBuilder, note, "None", "Author");
+    const PDFDocument second = secondBuilder.build();
+    const PDFAnnotationPtr parsedRejected = PDFAnnotation::parse(&second.getStorage(), rejected);
+    const PDFAnnotationPtr parsedNone = PDFAnnotation::parse(&second.getStorage(), none);
+    QCOMPARE(PDFAnnotationManipulator::getReviewState({ parsedAccepted.data(), parsedRejected.data() }), QString("Rejected"));
+    QCOMPARE(PDFAnnotationManipulator::getReviewState({ parsedAccepted.data(), parsedRejected.data(), parsedNone.data() }), QString());
+    QCOMPARE(PDFAnnotationManipulator::getReviewState({}), QString());
+
+    // The status replies are a part of the thread (so they are deleted with the note)
+    QCOMPARE(PDFAnnotationManipulator::getReplies(&second.getStorage(), page, note).size(), size_t(3));
+}
+
+void AnnotationManipulatorTest::setContents()
+{
+    PDFDocumentBuilder builder;
+    const PDFObjectReference page = builder.appendPage(QRectF(0, 0, 400, 400));
+    const PDFObjectReference note = PDFAnnotationManipulator::createStickyNote(&builder, page, QPointF(100, 300), TextAnnotationIcon::Comment, "Author", "Old text", QColor());
+    const PDFObjectReference link = builder.createAnnotationLink(page, QRectF(300, 300, 50, 20), QString("https://example.com"), LinkHighlightMode::Invert);
+    setEntry(builder, note, "RC", PDFObject::createString(QByteArray("<body>Old text</body>")));
+    setEntry(builder, note, "M", PDFObject::createString(QByteArray("D:20200101000000Z")));
+    const PDFDocument document = builder.build();
+
+    PDFDocumentBuilder modifyBuilder(&document);
+    QVERIFY(PDFAnnotationManipulator::setContents(&modifyBuilder, note, "New text\nsecond line"));
+    QVERIFY(!PDFAnnotationManipulator::setContents(&modifyBuilder, note, "New text\nsecond line"));
+    QVERIFY(!PDFAnnotationManipulator::setContents(&modifyBuilder, link, "Text"));
+    QVERIFY(!PDFAnnotationManipulator::setContents(nullptr, note, "Text"));
+    const PDFDocument modified = modifyBuilder.build();
+
+    QCOMPARE(PDFAnnotation::parse(&modified.getStorage(), note)->getContents(), QString("New text\nsecond line"));
+    QVERIFY(entry(modified, note, "RC").isNull());
+    QVERIFY(entry(modified, note, "M") != PDFObject::createString(QByteArray("D:20200101000000Z")));
 }
 
 void AnnotationManipulatorTest::replacedFileAttachment()

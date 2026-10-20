@@ -64,6 +64,7 @@ namespace pdfviewer
 class PDFTextToSpeech;
 class PDFViewerSettings;
 class PDFBookmarkItemModel;
+class PDFFireCommentsPanel;
 
 class PDF4QTLIBGUILIBSHARED_EXPORT PDFSidebarWidget : public QWidget
 {
@@ -268,6 +269,7 @@ private:
     PDFBookmarkItemModel* m_bookmarkItemModel;
     QStandardItemModel* m_notesTreeModel;
     QSortFilterProxyModel* m_notesSortProxyTreeModel;
+    PDFFireCommentsPanel* m_commentsPanel = nullptr; ///< PDF Fire: threaded comments (replaces the tree of the notes)
     const pdf::PDFDocument* m_document;
     pdf::PDFOptionalContentActivity* m_optionalContentActivity;
     pdf::PDFAttachmentsTreeItemModel* m_attachmentsTreeModel;

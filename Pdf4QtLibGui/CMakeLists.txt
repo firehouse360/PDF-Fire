@@ -57,6 +57,8 @@ add_library(Pdf4QtLibGui SHARED
     pdffireribbon.h
     pdffiretheme.cpp
     pdffiretheme.h
+    pdffirecommentspanel.cpp
+    pdffirecommentspanel.h
     pdffireemaildialog.cpp
     pdffireemaildialog.h
     pdffireprintdialog.cpp

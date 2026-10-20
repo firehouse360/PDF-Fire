@@ -33,6 +33,7 @@
 #include <QPolygonF>
 #include <QTransform>
 #include <QByteArray>
+#include <QColor>
 
 #include <limits>
 #include <vector>
@@ -243,6 +244,52 @@ public:
     /// \returns Reference of the reply, or invalid reference, if the reply cannot be added
     static PDFObjectReference addReply(PDFDocumentBuilder* builder, PDFObjectReference annotation, const QString& author, const QString& contents);
 
+    /// PDF Fire: default colour of a new sticky note (yellow, #FFD100)
+    static QColor getDefaultStickyNoteColor();
+
+    /// PDF Fire: subject of a sticky note, as other PDF editors write it
+    static QString getStickyNoteSubject() { return QStringLiteral("Sticky Note"); }
+
+    /// PDF Fire: creates a sticky note (a text annotation) like other PDF editors do: a 20 x 20 pt icon
+    /// with its top left corner at the given point, the colour (/C), a unique name (/NM), the subject
+    /// "Sticky Note", the flags Print, NoZoom and NoRotate, a closed popup window and an appearance
+    /// stream, so other viewers display the same icon.
+    /// \param builder Document builder
+    /// \param page Page, where the note is placed
+    /// \param topLeft Top left corner of the icon (page coordinates)
+    /// \param icon Icon of the note
+    /// \param author Author (/T)
+    /// \param contents Text of the note
+    /// \param color Colour of the note (invalid colour = the default colour)
+    static PDFObjectReference createStickyNote(PDFDocumentBuilder* builder,
+                                               PDFObjectReference page,
+                                               const QPointF& topLeft,
+                                               TextAnnotationIcon icon,
+                                               const QString& author,
+                                               const QString& contents,
+                                               const QColor& color);
+
+    /// PDF Fire: sets the text of a comment (/Contents). The modification date (/M) is updated
+    /// and the rich text (/RC) is removed, because it would show the old text in other viewers.
+    /// Free text annotations get a new appearance stream.
+    /// \returns true, if the text was changed
+    static bool setContents(PDFDocumentBuilder* builder, PDFObjectReference annotation, const QString& contents);
+
+    /// PDF Fire: sets the review status of a comment. As the PDF specification defines it, the status
+    /// is a reply with the entries /State and /StateModel /Review; the latest status reply wins.
+    /// \param state Accepted, Rejected, Cancelled, Completed or None
+    /// \param author Author of the status change
+    static PDFObjectReference setReviewState(PDFDocumentBuilder* builder, PDFObjectReference annotation, const QString& state, const QString& author);
+
+    /// PDF Fire: returns true, if the annotation is a status reply (a reply with /State)
+    static bool isStatusReply(const PDFAnnotation* annotation);
+
+    /// PDF Fire: returns the review status given by the status replies of a comment - the latest
+    /// one (the last in the list, or the newest by its modification date) wins. An empty string is
+    /// returned, if no status is set (or the status was set to None).
+    /// \param replies Direct replies of the comment
+    static QString getReviewState(const std::vector<const PDFAnnotation*>& replies);
+
     /// Replaces the file, which is attached by a file attachment annotation. The file
     /// is embedded into the document. The old embedded file is not referenced any more.
     /// \param builder Document builder
@@ -405,6 +452,15 @@ private:
 
     /// Creates an object with a unique annotation name (entry NM)
     static PDFObject createUniqueName();
+
+    /// PDF Fire: creates a reply (or a status reply) to a markup annotation. The reply has no popup window
+    /// and an empty appearance stream, so viewers, which do not hide replies, do not draw a second icon.
+    static PDFObjectReference createReply(PDFDocumentBuilder* builder,
+                                          PDFObjectReference annotation,
+                                          const QString& author,
+                                          const QString& contents,
+                                          const QString& state,
+                                          const QString& stateModel);
 
     /// Returns the bounding rectangle of the points (it can have zero width
     /// or height). At least one point is required.
