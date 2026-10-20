@@ -25,6 +25,7 @@ add_library(SignaturePlugin SHARED
     signdialog.cpp
     departmentauthoritydialog.cpp
     firehouse360dialog.cpp
+    signaturepaddialog.cpp
     qrcodegen/qrcodegen.cpp
     signdialog.ui
     icons.qrc

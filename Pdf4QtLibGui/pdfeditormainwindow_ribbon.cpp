@@ -453,17 +453,132 @@ void PDFEditorMainWindow::setupRibbon()
     connect(movePagesDownAction, &QAction::triggered, this, [movePages]() { movePages(true); });
     connect(extractPagesAction, &QAction::triggered, this, [this]() { m_programController->extractPages(getTargetPages()); });
 
+    // PDF Fire: organizing the pages - in the ribbon and in the context menu of the thumbnails,
+    // where the pages are also dragged to another place (Ctrl + drag copies them)
+    QAction* organizePagesAction = createAction("actionOrganizePages", tr("Organize Pages"), ":/resources/pages-organize.svg", tr("Show the page thumbnails, at the current page: drag pages to another place (hold Ctrl to copy them), drop PDF files or pictures between them, right-click for more"));
+    QAction* duplicatePagesAction = createAction("actionDuplicatePages", tr("Duplicate"), ":/resources/pages-duplicate.svg", tr("Insert copies of the pages right after them (Ctrl+D in the thumbnails)"));
+    QAction* reversePagesAction = createAction("actionReversePages", tr("Reverse"), ":/resources/pages-reverse.svg", tr("Reverse the order of the pages selected in the thumbnails, or of all pages"));
+    QAction* copyPagesAction = createAction("actionCopyPages", tr("Copy Pages"), ":/resources/pages-copy.svg", tr("Copy the pages, then paste them at another place - also into another document (Ctrl+C in the thumbnails)"));
+    QAction* cutPagesAction = createAction("actionCutPages", tr("Cut Pages"), ":/resources/pages-cut.svg", tr("Cut the pages, then paste them at another place, where they move (Ctrl+X in the thumbnails)"));
+    QAction* pastePagesAction = createAction("actionPastePages", tr("Paste Pages"), ":/resources/pages-paste.svg", tr("Paste the copied or cut pages after the current page, or after the pages selected in the thumbnails (Ctrl+V in the thumbnails)"));
+    QAction* replacePagesAction = createAction("actionReplacePages", tr("Replace"), ":/resources/pages-replace.svg", tr("Replace pages by pages of another PDF file"));
+    QAction* splitDocumentAction = createAction("actionSplitDocument", tr("Split"), ":/resources/pages-split.svg", tr("Split the document into several PDF files - every few pages, or at the top-level bookmarks. The document itself is not changed."));
+    QAction* insertImagesAction = createAction("actionInsertImages", tr("Pictures"), ":/resources/pages-images.svg", tr("Insert pictures (PNG, JPEG, TIFF...) as pages after the current page, each fitted into a page"));
+    QAction* createPdfFromImagesAction = createAction("actionCreatePdfFromImages", tr("Create PDF from Pictures..."), ":/resources/pages-images.svg", tr("Make a new PDF from pictures, one picture per page"));
+    ui->menuFile->insertAction(ui->actionOpen, createPdfFromImagesAction);
+    connect(createPdfFromImagesAction, &QAction::triggered, m_programController, &PDFProgramController::createDocumentFromImages);
+
+    // The selection after an operation: the pages, which were worked on, at their new place
+    auto selectPageRange = [this](pdf::PDFInteger first, pdf::PDFInteger count)
+    {
+        std::vector<pdf::PDFInteger> pages;
+        for (pdf::PDFInteger i = 0; i < count; ++i)
+        {
+            pages.push_back(first + i);
+        }
+        m_sidebarWidget->selectThumbnailPages(pages);
+    };
+
+    connect(organizePagesAction, &QAction::triggered, this, [this]()
+    {
+        // The thumbnails open at the current page
+        const pdf::PDFInteger currentPage = m_programController->getCurrentPageIndex();
+        m_sidebarDockWidget->show();
+        m_sidebarWidget->setCollapsed(false);
+        m_sidebarWidget->selectPage(PDFSidebarWidget::Thumbnails);
+        if (currentPage >= 0)
+        {
+            m_sidebarWidget->selectThumbnailPages({ currentPage });
+        }
+    });
+    connect(duplicatePagesAction, &QAction::triggered, this, [this, selectPageRange]()
+    {
+        const std::vector<pdf::PDFInteger> pages = getTargetPages();
+        if (m_programController->duplicatePages(pages))
+        {
+            selectPageRange(pages.back() + 1, pdf::PDFInteger(pages.size()));
+        }
+    });
+    connect(reversePagesAction, &QAction::triggered, this, [this]()
+    {
+        // Several selected pages - only they; otherwise the whole document
+        std::vector<pdf::PDFInteger> pages = m_sidebarWidget->isCollapsed() ? std::vector<pdf::PDFInteger>() : m_sidebarWidget->getSelectedThumbnailPages();
+        if (pages.size() < 2)
+        {
+            pages.clear();
+        }
+        if (m_programController->reversePages(pages) && !pages.empty())
+        {
+            m_sidebarWidget->selectThumbnailPages(pages);
+        }
+    });
+    connect(copyPagesAction, &QAction::triggered, this, [this]() { m_programController->copyPagesToClipboard(getTargetPages(), false); });
+    connect(cutPagesAction, &QAction::triggered, this, [this]() { if (m_programController->canModifyPages()) { m_programController->copyPagesToClipboard(getTargetPages(), true); } });
+    connect(pastePagesAction, &QAction::triggered, this, [this]()
+    {
+        if (!m_programController->canPastePages())
+        {
+            setStatusBarMessage(tr("There are no pages to paste - copy or cut pages first."), 5000);
+            return;
+        }
+        const std::vector<pdf::PDFInteger> pages = getTargetPages();
+        std::vector<pdf::PDFInteger> pastedPages;
+        if (m_programController->pastePages(pages.empty() ? 0 : pages.back() + 1, &pastedPages))
+        {
+            m_sidebarWidget->selectThumbnailPages(pastedPages);
+        }
+    });
+    connect(replacePagesAction, &QAction::triggered, this, [this]()
+    {
+        const std::vector<pdf::PDFInteger> pages = getTargetPages();
+        if (m_programController->replacePages(pages))
+        {
+            m_sidebarWidget->selectThumbnailPages(pages);
+        }
+    });
+    connect(splitDocumentAction, &QAction::triggered, m_programController, &PDFProgramController::splitDocument);
+    connect(insertImagesAction, &QAction::triggered, this, [this]() { const auto pages = getTargetPages(); if (!pages.empty()) { m_programController->insertImagesFromFile(pages.back() + 1); } });
+
+    // Thumbnails dragged to another place, files dropped between them
+    connect(m_sidebarWidget, &PDFSidebarWidget::thumbnailPagesDropped, this, [this, selectPageRange](std::vector<pdf::PDFInteger> pages, pdf::PDFInteger position, bool copy)
+    {
+        if (copy)
+        {
+            if (m_programController->copyPagesTo(pages, position))
+            {
+                selectPageRange(position, pdf::PDFInteger(pages.size()));
+            }
+            return;
+        }
+
+        const pdf::PDFInteger movedBefore = std::count_if(pages.cbegin(), pages.cend(), [position](pdf::PDFInteger page) { return page < position; });
+        if (m_programController->movePagesTo(pages, position))
+        {
+            selectPageRange(position - movedBefore, pdf::PDFInteger(pages.size()));
+        }
+    });
+    connect(m_sidebarWidget, &PDFSidebarWidget::thumbnailFilesDropped, this, [this](QStringList fileNames, pdf::PDFInteger position)
+    {
+        m_programController->insertFiles(fileNames, position);
+    });
+
     m_pageActions = { insertBlankPageAction, insertPagesFromFileAction, deletePagesAction, rotatePagesLeftAction, rotatePagesRightAction,
-                      movePagesUpAction, movePagesDownAction, extractPagesAction };
+                      movePagesUpAction, movePagesDownAction, extractPagesAction,
+                      duplicatePagesAction, reversePagesAction, cutPagesAction, pastePagesAction, replacePagesAction, insertImagesAction };
 
     // The same operations are offered by the context menu of the thumbnails, where several pages can be selected
     QAction* thumbnailSeparator1 = new QAction(this);
     thumbnailSeparator1->setSeparator(true);
     QAction* thumbnailSeparator2 = new QAction(this);
     thumbnailSeparator2->setSeparator(true);
-    m_sidebarWidget->setThumbnailActions({ insertBlankPageAction, insertPagesFromFileAction, thumbnailSeparator1,
-                                           rotatePagesLeftAction, rotatePagesRightAction, movePagesUpAction, movePagesDownAction, thumbnailSeparator2,
-                                           extractPagesAction, deletePagesAction });
+    QAction* thumbnailSeparator3 = new QAction(this);
+    thumbnailSeparator3->setSeparator(true);
+    QAction* thumbnailSeparator4 = new QAction(this);
+    thumbnailSeparator4->setSeparator(true);
+    m_sidebarWidget->setThumbnailActions({ insertBlankPageAction, insertPagesFromFileAction, insertImagesAction, thumbnailSeparator1,
+                                           copyPagesAction, cutPagesAction, pastePagesAction, duplicatePagesAction, thumbnailSeparator3,
+                                           rotatePagesLeftAction, rotatePagesRightAction, movePagesUpAction, movePagesDownAction, reversePagesAction, thumbnailSeparator2,
+                                           replacePagesAction, extractPagesAction, splitDocumentAction, thumbnailSeparator4, deletePagesAction });
 
     const QMenu* editorMenu = findPluginMenu("Editor");
     const QMenu* redactMenu = findPluginMenu("Redact");
@@ -654,14 +769,28 @@ void PDFEditorMainWindow::setupRibbon()
     PDFFireRibbonGroup* insertPagesGroup = pagesPage->addGroup(tr("Insert"));
     insertPagesGroup->addLargeAction(insertBlankPageAction);
     insertPagesGroup->addLargeAction(insertPagesFromFileAction);
+    insertPagesGroup->addLargeAction(insertImagesAction);
 
     PDFFireRibbonGroup* organizePagesGroup = pagesPage->addGroup(tr("Organize"));
+    organizePagesGroup->addLargeAction(organizePagesAction);
     organizePagesGroup->addLargeAction(deletePagesAction);
     organizePagesGroup->addSmallAction(rotatePagesLeftAction);
     organizePagesGroup->addSmallAction(rotatePagesRightAction);
-    organizePagesGroup->addSmallAction(extractPagesAction);
+    organizePagesGroup->addSmallAction(reversePagesAction);
     organizePagesGroup->addSmallAction(movePagesUpAction);
     organizePagesGroup->addSmallAction(movePagesDownAction);
+    organizePagesGroup->addSmallAction(duplicatePagesAction);
+
+    // PDF Fire: pages copied, cut and pasted - within the document or into another one
+    PDFFireRibbonGroup* clipboardPagesGroup = pagesPage->addGroup(tr("Copy and Paste"));
+    clipboardPagesGroup->addSmallAction(copyPagesAction);
+    clipboardPagesGroup->addSmallAction(cutPagesAction);
+    clipboardPagesGroup->addSmallAction(pastePagesAction);
+
+    PDFFireRibbonGroup* splitPagesGroup = pagesPage->addGroup(tr("Combine and Split"));
+    splitPagesGroup->addLargeAction(splitDocumentAction);
+    splitPagesGroup->addSmallAction(extractPagesAction);
+    splitPagesGroup->addSmallAction(replacePagesAction);
 
     PDFFireRibbonGroup* pageGroup = pagesPage->addGroup(tr("Page"));
     pageGroup->addLargeAction(ui->actionPageGeometry);
@@ -811,6 +940,27 @@ void PDFEditorMainWindow::setupRibbon()
         action->setIconText(tr("Place on Page"));
         action->setToolTip(tr("Write the drawn signature into the page. It is a picture of a signature, without a certificate."));
         drawnSignatureGroup->addLargeAction(action);
+    }
+
+    // PDF Fire: Fill & Sign - the saved signature and initials, placed with one click
+    PDFFireRibbonGroup* fillAndSignGroup = signPage->addGroup(tr("Fill & Sign"));
+    if (QAction* action = findMenuAction(signatureMenu, "signaturetool_addSavedSignatureAction"))
+    {
+        action->setIconText(tr("Add Signature"));
+        action->setToolTip(tr("Place your saved signature with one click. The first time, draw or type it (Save for later keeps it on this computer, never in a document)."));
+        fillAndSignGroup->addLargeAction(action);
+    }
+    if (QAction* action = findMenuAction(signatureMenu, "signaturetool_addSavedInitialsAction"))
+    {
+        action->setIconText(tr("Add Initials"));
+        action->setToolTip(tr("Place your saved initials with one click. The first time, draw or type them."));
+        fillAndSignGroup->addSmallAction(action);
+    }
+    if (QAction* action = findMenuAction(signatureMenu, "signaturetool_savedSignaturesAction"))
+    {
+        action->setIconText(tr("Saved Signatures"));
+        action->setToolTip(tr("Change or delete the saved signature and initials"));
+        fillAndSignGroup->addSmallAction(action);
     }
 
     PDFFireRibbonGroup* verifySignatureGroup = signPage->addGroup(tr("Verify"));

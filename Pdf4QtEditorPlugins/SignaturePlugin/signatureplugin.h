@@ -111,6 +111,11 @@ private:
     void onTextAngleChanged(pdf::PDFReal angle);
     void onSceneEditSingleElement(pdf::PDFInteger elementId);
 
+    /// PDF Fire: places the saved signature (or initials) with one click; when nothing is
+    /// saved yet, it is drawn or typed first (and saved, when the user wants)
+    void placeSavedSignature(bool initials);
+    void onManageSavedSignatures();
+
     enum Action
     {
         // Activate action
@@ -137,6 +142,11 @@ private:
         DepartmentAuthority,    ///< PDF Fire
         Certify,                ///< PDF Fire
         Firehouse360,           ///< PDF Fire
+
+        // PDF Fire: Fill & Sign - the saved signature and initials
+        AddSavedSignature,
+        AddSavedInitials,
+        SavedSignatures,
 
         LastAction
     };

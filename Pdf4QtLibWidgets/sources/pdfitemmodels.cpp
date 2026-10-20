@@ -32,6 +32,8 @@
 #include <QMimeDatabase>
 #include <QFileIconProvider>
 #include <QMimeData>
+#include <QDataStream>
+#include <QCoreApplication>
 
 #include <algorithm>
 
@@ -1215,6 +1217,96 @@ void PDFThumbnailsItemModel::setDocument(const PDFModifiedDocument& document)
 PDFInteger PDFThumbnailsItemModel::getPageIndex(const QModelIndex& index) const
 {
     return index.row();
+}
+
+namespace
+{
+constexpr const char* PDFFIRE_PAGES_MIME_TYPE = "application/x-pdffire-pages";
+}
+
+Qt::ItemFlags PDFThumbnailsItemModel::flags(const QModelIndex& index) const
+{
+    Qt::ItemFlags itemFlags = QAbstractItemModel::flags(index);
+    if (index.isValid())
+    {
+        itemFlags |= Qt::ItemIsDragEnabled;
+    }
+    return itemFlags;
+}
+
+QStringList PDFThumbnailsItemModel::mimeTypes() const
+{
+    return { QString::fromLatin1(PDFFIRE_PAGES_MIME_TYPE) };
+}
+
+QMimeData* PDFThumbnailsItemModel::mimeData(const QModelIndexList& indexes) const
+{
+    if (!m_document || indexes.isEmpty())
+    {
+        return nullptr;
+    }
+
+    // The address of the document tells, that the pages are dropped into the same
+    // document (in this program); it is never used as a pointer
+    QByteArray data;
+    QDataStream stream(&data, QIODevice::WriteOnly);
+    stream << quint64(QCoreApplication::applicationPid()) << quint64(reinterpret_cast<quintptr>(m_document));
+    std::vector<PDFInteger> pages;
+    for (const QModelIndex& index : indexes)
+    {
+        pages.push_back(getPageIndex(index));
+    }
+    std::sort(pages.begin(), pages.end());
+    pages.erase(std::unique(pages.begin(), pages.end()), pages.end());
+    stream << quint32(pages.size());
+    for (const PDFInteger page : pages)
+    {
+        stream << qint64(page);
+    }
+
+    QMimeData* mimeData = new QMimeData();
+    mimeData->setData(QString::fromLatin1(PDFFIRE_PAGES_MIME_TYPE), data);
+    return mimeData;
+}
+
+Qt::DropActions PDFThumbnailsItemModel::supportedDragActions() const
+{
+    return Qt::MoveAction | Qt::CopyAction;
+}
+
+std::vector<PDFInteger> PDFThumbnailsItemModel::getDraggedPages(const QMimeData* mimeData, const PDFDocument* document)
+{
+    std::vector<PDFInteger> pages;
+    if (!mimeData || !document || !mimeData->hasFormat(QString::fromLatin1(PDFFIRE_PAGES_MIME_TYPE)))
+    {
+        return pages;
+    }
+
+    QByteArray data = mimeData->data(QString::fromLatin1(PDFFIRE_PAGES_MIME_TYPE));
+    QDataStream stream(&data, QIODevice::ReadOnly);
+    quint64 processId = 0;
+    quint64 documentId = 0;
+    quint32 count = 0;
+    stream >> processId >> documentId >> count;
+    if (stream.status() != QDataStream::Ok || processId != quint64(QCoreApplication::applicationPid()) ||
+        documentId != quint64(reinterpret_cast<quintptr>(document)) || count > document->getCatalog()->getPageCount())
+    {
+        return pages;
+    }
+
+    const PDFInteger pageCount = PDFInteger(document->getCatalog()->getPageCount());
+    for (quint32 i = 0; i < count; ++i)
+    {
+        qint64 page = -1;
+        stream >> page;
+        if (stream.status() != QDataStream::Ok || page < 0 || page >= pageCount)
+        {
+            return { };
+        }
+        pages.push_back(PDFInteger(page));
+    }
+
+    return pages;
 }
 
 void PDFThumbnailsItemModel::onPageImageChanged(bool all, const std::vector<PDFInteger>& pages)

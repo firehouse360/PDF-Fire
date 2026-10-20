@@ -32,6 +32,7 @@
 
 class QAction;
 class QLabel;
+class QMimeData;
 class QPushButton;
 class QToolButton;
 class QWidget;
@@ -158,6 +159,18 @@ signals:
     /// the column of the buttons stays), or expanded again
     void collapsedChanged(bool collapsed);
 
+    /// PDF Fire: thumbnails were dragged and dropped in front of the page \p position
+    /// (the page count = at the end); \p copy - Ctrl was held, the pages are copied
+    void thumbnailPagesDropped(std::vector<pdf::PDFInteger> pages, pdf::PDFInteger position, bool copy);
+
+    /// PDF Fire: files (PDF documents, pictures) were dropped onto the thumbnails, in
+    /// front of the page \p position
+    void thumbnailFilesDropped(QStringList fileNames, pdf::PDFInteger position);
+
+protected:
+    /// PDF Fire: drag and drop of the thumbnails (the events of their viewport)
+    virtual bool eventFilter(QObject* watched, QEvent* event) override;
+
 private:
     void updateGUI(Page preferredPage);
     void updateButtons();
@@ -178,6 +191,13 @@ private:
     /// selection (or removes it), and the hint under the toolbar says what to do next
     void setThumbnailSelectMode(bool enabled);
     void updateThumbnailsHint();
+
+    /// PDF Fire: the place, where pages dropped at \p point go (in front of the returned
+    /// page; the page count = at the end), and the rectangle of the drop indicator
+    pdf::PDFInteger getThumbnailDropPosition(const QPoint& point, QRect* indicatorRect) const;
+
+    /// PDF Fire: local PDF and picture files of the dragged data
+    static QStringList getDroppedFiles(const QMimeData* mimeData);
     void onSignatureCustomContextMenuRequested(const QPoint& pos);
     void onOutlineTreeViewContextMenuRequested(const QPoint& pos);
     void onNotesTreeViewContextMenuRequested(const QPoint& pos);
@@ -265,6 +285,7 @@ private:
     pdf::PDFThumbnailsItemModel* m_thumbnailsModel;
     QToolButton* m_thumbnailsSelectButton = nullptr;
     QLabel* m_thumbnailsHintLabel = nullptr;
+    QWidget* m_thumbnailsDropIndicator = nullptr;   ///< PDF Fire: where dragged pages go
     pdf::PDFOptionalContentTreeItemModel* m_optionalContentTreeModel;
     PDFBookmarkItemModel* m_bookmarkItemModel;
     QStandardItemModel* m_notesTreeModel;

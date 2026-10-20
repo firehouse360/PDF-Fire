@@ -319,6 +319,17 @@ public:
 
     PDFInteger getPageIndex(const QModelIndex& index) const;
 
+    /// PDF Fire: the thumbnails can be dragged (to move or copy the pages). The drag
+    /// carries the page indices and the document, see getDraggedPages.
+    virtual Qt::ItemFlags flags(const QModelIndex& index) const override;
+    virtual QStringList mimeTypes() const override;
+    virtual QMimeData* mimeData(const QModelIndexList& indexes) const override;
+    virtual Qt::DropActions supportedDragActions() const override;
+
+    /// PDF Fire: the pages dragged from the thumbnails of the given document (sorted);
+    /// empty, if the data are not pages of that document
+    static std::vector<PDFInteger> getDraggedPages(const QMimeData* mimeData, const PDFDocument* document);
+
 private:
     void onPageImageChanged(bool all, const std::vector<PDFInteger>& pages);
 
