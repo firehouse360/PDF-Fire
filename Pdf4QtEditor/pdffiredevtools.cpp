@@ -48,6 +48,7 @@
 //                                      a real drag would wait for the mouse in its own loop)
 //       dndfiles:<x>,<y>,<file|file>   drag files over x,y (not dropped yet)
 //       dnddrop:<x>,<y>[,ctrl]         drop the dragged data at x,y
+//       ddrag:<x1>,<y1>,<x2>,<y2>      drag with the left mouse button in the opened dialog (its coordinates)
 
 #include <QAction>
 #include <QAbstractButton>
@@ -391,6 +392,29 @@ private:
                     names.insert(action->objectName());
                     qInfo().noquote() << "PDFFIRE-ACTION" << action->objectName() << (action->isEnabled() ? "enabled" : "disabled") << action->text().remove(QChar('&'));
                 }
+            }
+        }
+        else if (command == "ddrag")
+        {
+            // A drag inside the dialog opened by a previous step (e.g. drawing on a pad)
+            QWidget* dialog = QApplication::activeModalWidget();
+            const QPoint from = parsePoint(argument, 0);
+            const QPoint to = parsePoint(argument, 2);
+            QWidget* widget = dialog ? dialog->childAt(from) : nullptr;
+            if (widget)
+            {
+                auto send = [&](QEvent::Type type, QPoint point, Qt::MouseButton button, Qt::MouseButtons buttons)
+                {
+                    const QPointF localPoint = widget->mapFrom(dialog, point);
+                    QMouseEvent event(type, localPoint, dialog->mapToGlobal(point), button, buttons, Qt::NoModifier);
+                    QApplication::sendEvent(widget, &event);
+                };
+                send(QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton);
+                for (int i = 1; i <= 12; ++i)
+                {
+                    send(QEvent::MouseMove, from + (to - from) * i / 12, Qt::NoButton, Qt::LeftButton);
+                }
+                send(QEvent::MouseButtonRelease, to, Qt::LeftButton, Qt::NoButton);
             }
         }
         else if (command == "dnd" || command == "dndfiles")

@@ -28,6 +28,8 @@
 #include "pdfdocumentbuilder.h"
 #include "pdfcertificatemanagerdialog.h"
 #include "signdialog.h"
+#include "signaturepaddialog.h"
+#include "pdffiresavedsignature.h"
 #include "departmentauthoritydialog.h"
 #include "pdfdocumentsigner.h"
 #include "pdffireformfields.h"
@@ -41,6 +43,7 @@
 #include "pdffirefirehouse360.h"
 #include "firehouse360dialog.h"
 #include <QButtonGroup>
+#include <QDir>
 #include <QSettings>
 #include <cmath>
 #include <QWheelEvent>
@@ -369,6 +372,21 @@ void SignaturePlugin::setWidget(pdf::PDFWidget* widget)
     m_actions[Firehouse360] = firehouse360Action;
     connect(firehouse360Action, &QAction::triggered, this, &SignaturePlugin::onOpenFirehouse360);
 
+    // PDF Fire: Fill & Sign - a signature and initials drawn or typed once, saved for later
+    // (outside of the document) and placed again with one click
+    QAction* addSavedSignatureAction = new QAction(QIcon(":/pdfplugins/signatureplugin/sign-electronically.svg"), tr("Add &Signature"), this);
+    addSavedSignatureAction->setObjectName("signaturetool_addSavedSignatureAction");
+    m_actions[AddSavedSignature] = addSavedSignatureAction;
+    connect(addSavedSignatureAction, &QAction::triggered, this, [this]() { placeSavedSignature(false); });
+    QAction* addSavedInitialsAction = new QAction(QIcon(":/pdfplugins/signatureplugin/create-text.svg"), tr("Add &Initials"), this);
+    addSavedInitialsAction->setObjectName("signaturetool_addSavedInitialsAction");
+    m_actions[AddSavedInitials] = addSavedInitialsAction;
+    connect(addSavedInitialsAction, &QAction::triggered, this, [this]() { placeSavedSignature(true); });
+    QAction* savedSignaturesAction = new QAction(QIcon(":/pdfplugins/signatureplugin/certificates.svg"), tr("Sa&ved Signatures..."), this);
+    savedSignaturesAction->setObjectName("signaturetool_savedSignaturesAction");
+    m_actions[SavedSignatures] = savedSignaturesAction;
+    connect(savedSignaturesAction, &QAction::triggered, this, &SignaturePlugin::onManageSavedSignatures);
+
     // Signatures made while offline are sent a little after the start - quietly, and
     // only when the connection is switched on
     if (pdf::PDFFireFirehouse360::isConnected() && pdf::PDFFireFirehouse360::getPendingCount() > 0)
@@ -484,6 +502,9 @@ std::vector<QAction*> SignaturePlugin::getActions() const
     result.push_back(m_actions[DepartmentAuthority]);
     result.push_back(m_actions[Certify]);
     result.push_back(m_actions[Firehouse360]);
+    result.push_back(m_actions[AddSavedSignature]);
+    result.push_back(m_actions[AddSavedInitials]);
+    result.push_back(m_actions[SavedSignatures]);
 
     return result;
 }
@@ -1513,7 +1534,8 @@ void SignaturePlugin::updateActions()
             if (action == m_actions[Activate] ||
                 action == m_actions[Certificates] ||
                 action == m_actions[DepartmentAuthority] ||
-                action == m_actions[Firehouse360])
+                action == m_actions[Firehouse360] ||
+                action == m_actions[SavedSignatures])
             {
                 continue;
             }
@@ -1523,6 +1545,8 @@ void SignaturePlugin::updateActions()
 
         m_actions[SignDigitally]->setEnabled(m_document && m_widget && !m_widget->isAnySceneActive(&m_scene));
         m_actions[Certify]->setEnabled(m_document && m_widget && !m_widget->isAnySceneActive(&m_scene));
+        m_actions[AddSavedSignature]->setEnabled(m_document && m_widget && !m_widget->isAnySceneActive(&m_scene));
+        m_actions[AddSavedInitials]->setEnabled(m_document && m_widget && !m_widget->isAnySceneActive(&m_scene));
         applyPermissions();
         return;
     }
@@ -1547,6 +1571,8 @@ void SignaturePlugin::updateActions()
     QAction* signDigitallyAction = m_actions[SignDigitally];
     signDigitallyAction->setEnabled(m_document);
     m_actions[Certify]->setEnabled(m_document);
+    m_actions[AddSavedSignature]->setEnabled(m_document);
+    m_actions[AddSavedInitials]->setEnabled(m_document);
     applyPermissions();
 }
 
@@ -1557,7 +1583,7 @@ void SignaturePlugin::applyPermissions()
     if (m_document && !pdf::PDFFirePermissions::canModifyContent(m_document))
     {
         const QString reason = pdf::PDFFirePermissions::getRestrictionReason(m_document);
-        for (Action actionId : { Activate, SignElectronically })
+        for (Action actionId : { Activate, SignElectronically, AddSavedSignature, AddSavedInitials })
         {
             m_actions[actionId]->setEnabled(false);
             m_actions[actionId]->setStatusTip(reason);
@@ -1628,6 +1654,128 @@ void SignaturePlugin::updateDockWidget()
 void SignaturePlugin::onSceneEditSingleElement(pdf::PDFInteger elementId)
 {
     onSceneEditElement({ elementId });
+}
+
+
+void SignaturePlugin::placeSavedSignature(bool initials)
+{
+    if (!m_document || !m_widget)
+    {
+        return;
+    }
+
+    if (!pdf::PDFFirePermissions::canModifyContent(m_document))
+    {
+        QMessageBox::information(m_widget, tr("Sign"), pdf::PDFFirePermissions::getRestrictionReason(m_document));
+        return;
+    }
+
+    const pdf::PDFFireSavedSignatureStore::Role role = initials ? pdf::PDFFireSavedSignatureStore::Role::Initials : pdf::PDFFireSavedSignatureStore::Role::Signature;
+    SignDialog::getHandwritingFontFamilies();   // the fonts of typed signatures
+
+    // Nothing saved yet - the signature is drawn or typed first
+    pdf::PDFFireSavedSignature signature = pdf::PDFFireSavedSignatureStore::load(role);
+    if (signature.isEmpty())
+    {
+        SignaturePadDialog dialog(m_dataExchangeInterface->getMainWindow(), role, signature);
+        if (dialog.exec() != QDialog::Accepted)
+        {
+            return;
+        }
+
+        signature = dialog.getSignature();
+        if (signature.isEmpty())
+        {
+            return;
+        }
+        if (dialog.isSaveRequested() && !pdf::PDFFireSavedSignatureStore::save(role, signature))
+        {
+            QMessageBox::warning(m_dataExchangeInterface->getMainWindow(), tr("Sign"), tr("The signature cannot be saved for later (%1). It is placed this time.").arg(QDir::toNativeSeparators(pdf::PDFFireSavedSignatureStore::getFileName())));
+        }
+    }
+
+    // The size: the last used one (the longer side), the proportions of the signature
+    const qreal aspectRatio = signature.getAspectRatio();
+    const QString scaleKey = initials ? QStringLiteral("SignaturePlugin/InitialsScale") : QStringLiteral("SignaturePlugin/SavedSignatureScale");
+    const qreal defaultHeight = initials ? 32.0 : 45.0;
+    QSizeF size(defaultHeight * aspectRatio, defaultHeight);
+    const qreal maximalWidth = initials ? 120.0 : 220.0;
+    if (size.width() > maximalWidth)
+    {
+        size = QSizeF(maximalWidth, maximalWidth / aspectRatio);
+    }
+    const QSizeF defaultSize = size;
+    size *= qBound(0.2, QSettings().value(scaleKey, 1.0).toDouble(), 4.0);
+    if (size.width() < 40.0)
+    {
+        size *= 40.0 / size.width();
+    }
+
+    const QImage preview = signature.toImage(QSize(int(size.width() * 3), int(size.height() * 3)), signature.getColor());
+
+    QEventLoop loop;
+    bool isPlaced = false;
+    pdf::PDFInteger pageIndex = -1;
+    QRectF rect;
+    if (!m_placementTool)
+    {
+        m_placementTool = new SignaturePlacementTool(m_widget->getDrawWidgetProxy(), this);
+        m_widget->getToolManager()->addTool(m_placementTool);
+    }
+    SignaturePlacementTool* tool = static_cast<SignaturePlacementTool*>(m_placementTool);
+    tool->setup(preview, size,
+                [&](pdf::PDFInteger placedPageIndex, QRectF placedRect)
+                {
+                    pageIndex = placedPageIndex;
+                    rect = placedRect;
+                    isPlaced = true;
+                    loop.quit();
+                },
+                [&loop]() { loop.quit(); });
+    m_widget->getToolManager()->setActiveTool(tool);
+
+    m_widget->getDrawWidget()->getWidget()->setFocus(Qt::OtherFocusReason);
+    if (QMainWindow* mainWindow = m_dataExchangeInterface->getMainWindow())
+    {
+        mainWindow->statusBar()->showMessage(initials ? tr("Click where the initials go. The keys + and - (or Ctrl + mouse wheel) make them larger or smaller, Esc cancels.")
+                                                      : tr("Click where the signature goes. The keys + and - (or Ctrl + mouse wheel) make it larger or smaller, Esc cancels."), 60000);
+    }
+    loop.exec();
+    if (QMainWindow* mainWindow = m_dataExchangeInterface->getMainWindow())
+    {
+        mainWindow->statusBar()->clearMessage();
+    }
+    if (tool->isActive())
+    {
+        m_widget->getToolManager()->setActiveTool(nullptr);
+    }
+    tool->setup(QImage(), size, nullptr, nullptr);
+
+    if (!isPlaced || !m_document)
+    {
+        return;
+    }
+
+    // The longer side is the width of the signature (also on a rotated page)
+    QSettings().setValue(scaleKey, qMax(rect.width(), rect.height()) / qMax(defaultSize.width(), 1.0));
+
+    pdf::PDFDocument document;
+    const pdf::PDFOperationResult result = pdf::PDFFireSavedSignature::placeOnPage(m_document, pageIndex, rect, signature, &document);
+    if (!result)
+    {
+        QMessageBox::critical(m_dataExchangeInterface->getMainWindow(), tr("Sign"), result.getErrorMessage());
+        return;
+    }
+
+    // A change of the page content - Undo takes it back
+    pdf::PDFDocumentPointer pointer(new pdf::PDFDocument(std::move(document)));
+    Q_EMIT m_widget->getToolManager()->documentModified(pdf::PDFModifiedDocument(pointer, nullptr, pdf::PDFModifiedDocument::PageContents));
+}
+
+void SignaturePlugin::onManageSavedSignatures()
+{
+    SavedSignaturesDialog dialog(m_dataExchangeInterface->getMainWindow());
+    dialog.exec();
 }
 
 }

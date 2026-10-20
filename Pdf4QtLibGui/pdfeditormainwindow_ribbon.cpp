@@ -872,6 +872,27 @@ void PDFEditorMainWindow::setupRibbon()
         drawnSignatureGroup->addLargeAction(action);
     }
 
+    // PDF Fire: Fill & Sign - the saved signature and initials, placed with one click
+    PDFFireRibbonGroup* fillAndSignGroup = signPage->addGroup(tr("Fill & Sign"));
+    if (QAction* action = findMenuAction(signatureMenu, "signaturetool_addSavedSignatureAction"))
+    {
+        action->setIconText(tr("Add Signature"));
+        action->setToolTip(tr("Place your saved signature with one click. The first time, draw or type it (Save for later keeps it on this computer, never in a document)."));
+        fillAndSignGroup->addLargeAction(action);
+    }
+    if (QAction* action = findMenuAction(signatureMenu, "signaturetool_addSavedInitialsAction"))
+    {
+        action->setIconText(tr("Add Initials"));
+        action->setToolTip(tr("Place your saved initials with one click. The first time, draw or type them."));
+        fillAndSignGroup->addSmallAction(action);
+    }
+    if (QAction* action = findMenuAction(signatureMenu, "signaturetool_savedSignaturesAction"))
+    {
+        action->setIconText(tr("Saved Signatures"));
+        action->setToolTip(tr("Change or delete the saved signature and initials"));
+        fillAndSignGroup->addSmallAction(action);
+    }
+
     PDFFireRibbonGroup* verifySignatureGroup = signPage->addGroup(tr("Verify"));
     QAction* showSignaturesAction = createAction("actionShowSignatures", tr("Signatures"), ":/resources/sidebar-signature.svg", tr("Show the signatures of the document, and whether they are valid"));
     connect(showSignaturesAction, &QAction::triggered, this, [this]()
