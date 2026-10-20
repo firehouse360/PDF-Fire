@@ -37,6 +37,7 @@
 
 #include <QApplication>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QMainWindow>
 #include <QMessageBox>
 
@@ -183,7 +184,8 @@ void PDFProgramController::insertPagesFromFile(pdf::PDFInteger position)
         }
 
         pdf::PDFDocument mergedDocument;
-        const pdf::PDFOperationResult result = pdf::PDFPageOperations::insertDocument(&document, &insertedDocument, currentPosition, &mergedDocument);
+        // PDF Fire: the bookmarks of the file are kept, under a bookmark with its name
+        const pdf::PDFOperationResult result = pdf::PDFPageOperations::insertDocument(&document, &insertedDocument, currentPosition, &mergedDocument, QFileInfo(fileName).completeBaseName());
         if (!result)
         {
             QMessageBox::critical(m_mainWindow, QApplication::applicationDisplayName(), tr("File '%1' cannot be inserted. %2").arg(fileName, result.getErrorMessage()));

@@ -77,12 +77,15 @@ public:
     /// \param[out] result Resulting document
     static PDFOperationResult movePages(const PDFDocument* document, std::vector<PDFInteger> pages, bool towardsEnd, PDFDocument* result);
 
-    /// Inserts all pages of another document
+    /// Inserts all pages of another document. The bookmarks of the inserted document
+    /// are kept: they are put under a new bookmark (the title), which opens the first
+    /// inserted page, at the place of the pages among the bookmarks of the document.
     /// \param document Document
     /// \param insertedDocument Document, whose pages are inserted
     /// \param position Index, which the first inserted page gets
     /// \param[out] result Resulting document
-    static PDFOperationResult insertDocument(const PDFDocument* document, const PDFDocument* insertedDocument, PDFInteger position, PDFDocument* result);
+    /// \param title Title of the bookmark of the inserted document (empty - its title, or a default one)
+    static PDFOperationResult insertDocument(const PDFDocument* document, const PDFDocument* insertedDocument, PDFInteger position, PDFDocument* result, QString title = QString());
 
 private:
     /// Sorts the indices, removes the duplicates, and checks them against the page count
