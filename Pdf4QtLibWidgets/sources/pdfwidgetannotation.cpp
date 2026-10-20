@@ -35,9 +35,12 @@
 #include "pdfrenderer.h"
 #include "pdfcompiler.h"
 #include "pdftextlayout.h"
+#include "pdffirecommentcard.h"
+#include "pdfutils.h"
 
 #include <algorithm>
 #include <cmath>
+#include <set>
 #include <QImage>
 #include <QMenu>
 #include <QPainter>
@@ -838,6 +841,162 @@ bool PDFWidgetAnnotationManager::addAnnotationReply(PDFObjectReference annotatio
 
     Q_EMIT documentModified(PDFModifiedDocument(modifier.getDocument(), nullptr, modifier.getFlags()));
     return true;
+}
+
+bool PDFWidgetAnnotationManager::canModifyComment(PDFObjectReference annotation) const
+{
+    const PDFInteger pageIndex = findAnnotationPage(annotation);
+    const PageAnnotation* pageAnnotation = pageIndex != -1 ? findPageAnnotation(pageIndex, annotation) : nullptr;
+    return pageAnnotation && canModifyAnnotation(*pageAnnotation);
+}
+
+bool PDFWidgetAnnotationManager::setAnnotationContents(PDFObjectReference annotation, const QString& contents)
+{
+    if (!m_document || !canModifyComment(annotation))
+    {
+        return false;
+    }
+
+    PDFDocumentModifier modifier(m_document);
+    modifier.markAnnotationsChanged();
+
+    if (!PDFAnnotationManipulator::setContents(modifier.getBuilder(), annotation, contents) || !modifier.finalize())
+    {
+        return false;
+    }
+
+    Q_EMIT documentModified(PDFModifiedDocument(modifier.getDocument(), nullptr, modifier.getFlags()));
+    return true;
+}
+
+bool PDFWidgetAnnotationManager::setAnnotationReviewState(PDFObjectReference annotation, const QString& state)
+{
+    if (!m_document || !isModificationAllowed())
+    {
+        return false;
+    }
+
+    PDFDocumentModifier modifier(m_document);
+    modifier.markAnnotationsChanged();
+
+    if (!PDFAnnotationManipulator::setReviewState(modifier.getBuilder(), annotation, state, PDFAuthorSettings::getAuthorName()).isValid() || !modifier.finalize())
+    {
+        return false;
+    }
+
+    Q_EMIT documentModified(PDFModifiedDocument(modifier.getDocument(), nullptr, modifier.getFlags()));
+    return true;
+}
+
+bool PDFWidgetAnnotationManager::deleteAnnotation(PDFObjectReference annotation)
+{
+    const PDFInteger pageIndex = findAnnotationPage(annotation);
+    const PageAnnotation* pageAnnotation = pageIndex != -1 ? findPageAnnotation(pageIndex, annotation) : nullptr;
+    if (!m_document || !pageAnnotation || !canModifyAnnotation(*pageAnnotation))
+    {
+        return false;
+    }
+
+    PDFDocumentModifier modifier(m_document);
+    modifier.markAnnotationsChanged();
+    modifier.getBuilder()->removeAnnotation(getPageReference(pageIndex, *pageAnnotation), annotation);
+
+    if (!modifier.finalize())
+    {
+        return false;
+    }
+
+    Q_EMIT documentModified(PDFModifiedDocument(modifier.getDocument(), nullptr, modifier.getFlags()));
+    return true;
+}
+
+void PDFWidgetAnnotationManager::showCommentCard(PDFObjectReference annotation, CommentCardMode mode)
+{
+    const PDFInteger pageIndex = findAnnotationPage(annotation);
+    const PageAnnotation* pageAnnotation = pageIndex != -1 ? findPageAnnotation(pageIndex, annotation) : nullptr;
+    const PDFMarkupAnnotation* markupAnnotation = pageAnnotation ? pageAnnotation->annotation->asMarkupAnnotation() : nullptr;
+    if (!markupAnnotation)
+    {
+        return;
+    }
+
+    if (mode == CommentCardMode::EditText ? !canModifyAnnotation(*pageAnnotation) : !isModificationAllowed())
+    {
+        return;
+    }
+
+    if (m_commentCard)
+    {
+        m_commentCard->disconnect(this);
+        static_cast<PDFFireCommentCard*>(m_commentCard.data())->cancel();
+    }
+
+    // A reply has no place of its own on the page, the card is shown at the comment of the thread
+    QRectF annotationRectangle = markupAnnotation->getRectangle();
+    if (markupAnnotation->isReplyTo())
+    {
+        PDFObjectReference parent = markupAnnotation->getInReplyTo();
+        std::set<PDFObjectReference> visited;
+        while (parent.isValid() && visited.insert(parent).second)
+        {
+            const PageAnnotation* parentAnnotation = findPageAnnotation(pageIndex, parent);
+            if (!parentAnnotation)
+            {
+                break;
+            }
+
+            annotationRectangle = parentAnnotation->annotation->getRectangle();
+            const PDFMarkupAnnotation* parentMarkup = parentAnnotation->annotation->asMarkupAnnotation();
+            parent = (parentMarkup && parentMarkup->isReplyTo()) ? parentMarkup->getInReplyTo() : PDFObjectReference();
+        }
+    }
+    PDFWidget* pdfWidget = m_proxy->getWidget();
+    QWidget* host = pdfWidget->getDrawWidget()->getWidget();
+
+    PDFWidgetSnapshot snapshot = m_proxy->getSnapshot();
+    if (!snapshot.getPageSnapshot(pageIndex))
+    {
+        m_proxy->goToPage(pageIndex);
+        snapshot = m_proxy->getSnapshot();
+    }
+
+    QPoint anchor = host->rect().center();
+    if (const PDFWidgetSnapshot::SnapshotItem* snapshotItem = snapshot.getPageSnapshot(pageIndex))
+    {
+        // The top right corner of the comment (sticky notes are drawn in their constant size)
+        const QRectF rectangle = annotationRectangle.normalized();
+        const QPointF topLeft = snapshotItem->pageToDeviceMatrix.map(QPointF(rectangle.left(), rectangle.bottom()));
+        const QPointF topRight = snapshotItem->pageToDeviceMatrix.map(QPointF(rectangle.right(), rectangle.bottom()));
+        // (the icon of a sticky note has a constant size on the screen, about 28 pixels)
+        anchor = (markupAnnotation->getType() == AnnotationType::Text) ? (topLeft + QPointF(28.0, 0.0)).toPoint() : topRight.toPoint();
+    }
+
+    const bool isEdit = mode == CommentCardMode::EditText;
+    const QString author = isEdit ? (markupAnnotation->getWindowTitle().isEmpty() ? PDFAuthorSettings::getAuthorName() : markupAnnotation->getWindowTitle())
+                                  : PDFAuthorSettings::getAuthorName();
+    const QString label = isEdit ? (markupAnnotation->isReplyTo() ? tr("Edit reply") : (markupAnnotation->getType() == AnnotationType::Text ? tr("Sticky note") : tr("Edit comment")))
+                                 : tr("Reply");
+    const QString text = isEdit ? markupAnnotation->getContents() : QString();
+    const QString placeholder = isEdit ? tr("Add a comment") : tr("Add a reply");
+
+    PDFFireCommentCard* card = new PDFFireCommentCard(author, label, text, placeholder, host);
+    if (isEdit)
+    {
+        card->setPostButtonText(tr("Save"));
+    }
+    m_commentCard = card;
+    connect(card, &PDFFireCommentCard::posted, this, [this, annotation, isEdit](QString postedText)
+    {
+        if (isEdit)
+        {
+            setAnnotationContents(annotation, postedText);
+        }
+        else
+        {
+            addAnnotationReply(annotation, postedText);
+        }
+    });
+    card->showAt(host, anchor);
 }
 
 bool PDFWidgetAnnotationManager::setAnnotationFileAttachment(PDFObjectReference annotation, const QString& fileName, const QByteArray& data)
@@ -2341,6 +2500,8 @@ void PDFWidgetAnnotationManager::showUnselectableAnnotationMenu(const PageAnnota
 
     QMenu menu(tr("Annotation"), m_proxy->getWidget());
 
+    addCommentActions(&menu, annotation);
+
     if (annotation.annotation->asMarkupAnnotation() && !annotation.annotation->isReplyTo())
     {
         QAction* showPopupAction = menu.addAction(tr("Show Popup Window"));
@@ -2356,6 +2517,46 @@ void PDFWidgetAnnotationManager::showUnselectableAnnotationMenu(const PageAnnota
     connect(deleteAction, &QAction::triggered, this, &PDFWidgetAnnotationManager::onDeleteAnnotation);
 
     menu.exec(globalPosition);
+}
+
+void PDFWidgetAnnotationManager::addCommentActions(QMenu* menu, const PageAnnotation& annotation)
+{
+    const PDFMarkupAnnotation* markupAnnotation = annotation.annotation ? annotation.annotation->asMarkupAnnotation() : nullptr;
+    if (!markupAnnotation)
+    {
+        return;
+    }
+
+    const PDFObjectReference reference = annotation.annotation->getSelfReference();
+
+    QAction* editTextAction = menu->addAction(tr("Edit Text..."));
+    editTextAction->setEnabled(canModifyAnnotation(annotation));
+    connect(editTextAction, &QAction::triggered, this, [this, reference]() { showCommentCard(reference, CommentCardMode::EditText); });
+
+    QAction* replyAction = menu->addAction(tr("Reply..."));
+    replyAction->setEnabled(isModificationAllowed());
+    connect(replyAction, &QAction::triggered, this, [this, reference]() { showCommentCard(reference, CommentCardMode::Reply); });
+
+    QMenu* statusMenu = menu->addMenu(tr("Set Status"));
+    statusMenu->setEnabled(isModificationAllowed());
+    const std::array<std::pair<QString, QString>, 5> states = { std::make_pair(tr("None"), QString("None")),
+                                                                std::make_pair(tr("Accepted"), QString("Accepted")),
+                                                                std::make_pair(tr("Rejected"), QString("Rejected")),
+                                                                std::make_pair(tr("Cancelled"), QString("Cancelled")),
+                                                                std::make_pair(tr("Completed"), QString("Completed")) };
+    for (const auto& [text, state] : states)
+    {
+        const QString currentState = state;
+        QAction* stateAction = statusMenu->addAction(text);
+        connect(stateAction, &QAction::triggered, this, [this, reference, currentState]() { setAnnotationReviewState(reference, currentState); });
+    }
+
+    QAction* copyTextAction = menu->addAction(tr("Copy Text"));
+    copyTextAction->setEnabled(!markupAnnotation->getContents().isEmpty());
+    const QString contents = markupAnnotation->getContents();
+    connect(copyTextAction, &QAction::triggered, this, [contents]() { QApplication::clipboard()->setText(contents); });
+
+    menu->addSeparator();
 }
 
 void PDFWidgetAnnotationManager::showSelectionMenu(QPoint globalPosition, std::optional<QPoint> widgetPosition, const PointMenuContext& pointContext)
@@ -2405,6 +2606,8 @@ void PDFWidgetAnnotationManager::showSelectionMenu(QPoint globalPosition, std::o
     {
         m_editableAnnotation = m_selection.front().annotation;
         m_editableAnnotationPage = getPageReference(m_selection.front().pageIndex, *singleAnnotation);
+
+        addCommentActions(&menu, *singleAnnotation);
 
         if (singleAnnotation->annotation->asMarkupAnnotation())
         {
@@ -2764,6 +2967,16 @@ void PDFWidgetAnnotationManager::mouseDoubleClickEvent(QWidget* widget, QMouseEv
             if (!markupAnnotation)
             {
                 continue;
+            }
+
+            // PDF Fire: a double click on a sticky note edits its text in the comment card (the
+            // thread is shown in the comments panel); in a document, which cannot be modified,
+            // the popup window with the thread is shown.
+            if (markupAnnotation->getType() == AnnotationType::Text && canModifyAnnotation(pageAnnotation))
+            {
+                event->accept();
+                showCommentCard(pageAnnotation.annotation->getSelfReference(), CommentCardMode::EditText);
+                return;
             }
 
             QDialog* dialog = createDialogForMarkupAnnotations(pdfWidget, pageAnnotation, pageAnnotations);
@@ -3339,6 +3552,10 @@ void PDFWidgetAnnotationManager::updateFromMouseEvent(QMouseEvent* event)
                     const PDFMarkupAnnotation* markupAnnotation = pageAnnotation.annotation->asMarkupAnnotation();
                     if (markupAnnotation)
                     {
+                        // PDF Fire: a small card - the author in bold, the kind of the comment and its
+                        // date, a preview of the text, then the number of replies and the status. The
+                        // texts come from the document, so they are escaped (no HTML from a document
+                        // in the tooltip).
                         QString title = markupAnnotation->getWindowTitle();
                         if (title.isEmpty())
                         {
@@ -3349,13 +3566,59 @@ void PDFWidgetAnnotationManager::updateFromMouseEvent(QMouseEvent* event)
                             title = PDFTranslationContext::tr("Info");
                         }
 
-                        const size_t repliesCount = pageAnnotations.getReplies(pageAnnotation).size();
-                        if (repliesCount > 0)
+                        QString text = markupAnnotation->getContents().trimmed();
+                        constexpr int maximalPreviewLength = 280;
+                        if (text.size() > maximalPreviewLength)
                         {
-                            title = PDFTranslationContext::tr("%1 (%2 replies)").arg(title).arg(repliesCount);
+                            text = text.left(maximalPreviewLength).trimmed() + QChar(0x2026);
                         }
 
-                        m_tooltip = QString("<p><b>%1</b></p><p>%2</p>").arg(title, markupAnnotation->getContents());
+                        size_t repliesCount = 0;
+                        std::vector<const PDFAnnotation*> replies;
+                        for (const PageAnnotation* reply : pageAnnotations.getReplies(pageAnnotation))
+                        {
+                            replies.push_back(reply->annotation.data());
+                            if (!PDFAnnotationManipulator::isStatusReply(reply->annotation.data()))
+                            {
+                                ++repliesCount;
+                            }
+                        }
+                        const QString state = PDFAnnotationManipulator::getReviewState(replies);
+
+                        const QColor mutedColor = QApplication::palette().color(QPalette::PlaceholderText);
+                        QDateTime dateTime = markupAnnotation->getLastModifiedDateTime().isValid() ? markupAnnotation->getLastModifiedDateTime() : markupAnnotation->getCreationDate();
+                        QString subtitle = markupAnnotation->getSubject();
+                        if (dateTime.isValid())
+                        {
+                            const QString date = dateTime.toLocalTime().toString("yyyy-MM-dd HH:mm");
+                            subtitle = subtitle.isEmpty() ? date : QString("%1 · %2").arg(subtitle, date);
+                        }
+
+                        QStringList footer;
+                        if (repliesCount > 0)
+                        {
+                            footer << PDFTranslationContext::tr("%n replies", nullptr, int(repliesCount));
+                        }
+                        if (!state.isEmpty())
+                        {
+                            footer << PDFTranslationContext::tr("Status: %1").arg(state);
+                        }
+
+                        QString html = QString("<div style='max-width: 320px;'><b>%1</b>").arg(title.toHtmlEscaped());
+                        if (!subtitle.isEmpty())
+                        {
+                            html += QString("<br/><span style='color: %1; font-size: small;'>%2</span>").arg(mutedColor.name(), subtitle.toHtmlEscaped());
+                        }
+                        if (!text.isEmpty())
+                        {
+                            html += QString("<p style='margin-top: 4px; margin-bottom: 0px;'>%1</p>").arg(text.toHtmlEscaped().replace('\n', "<br/>"));
+                        }
+                        if (!footer.isEmpty())
+                        {
+                            html += QString("<p style='margin-top: 4px; margin-bottom: 0px; color: %1; font-size: small;'>%2</p>").arg(mutedColor.name(), footer.join(QString(" · ")).toHtmlEscaped());
+                        }
+                        html += "</div>";
+                        m_tooltip = html;
                     }
                 }
 

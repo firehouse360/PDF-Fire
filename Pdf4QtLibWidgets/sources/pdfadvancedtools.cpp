@@ -21,6 +21,8 @@
 // SOFTWARE.
 
 #include "pdfadvancedtools.h"
+#include "pdffirecommentcard.h"
+#include "pdfannotationmanipulator.h"
 #include "pdffirepermissions.h"
 #include "pdfdocumentbuilder.h"
 #include "pdfdrawwidget.h"
@@ -111,6 +113,7 @@ PDFCreateStickyNoteTool::PDFCreateStickyNoteTool(PDFDrawWidgetProxy* proxy, PDFT
     m_toolManager(toolManager),
     m_actionGroup(actionGroup),
     m_pickTool(nullptr),
+    m_styleManager(nullptr),
     m_icon(pdf::TextAnnotationIcon::Comment)
 {
     m_pickTool = new PDFPickTool(proxy, PDFPickTool::Mode::Points, this);
@@ -119,7 +122,47 @@ PDFCreateStickyNoteTool::PDFCreateStickyNoteTool(PDFDrawWidgetProxy* proxy, PDFT
     connect(m_pickTool, &PDFPickTool::pointPicked, this, &PDFCreateStickyNoteTool::onPointPicked);
     connect(m_actionGroup, &QActionGroup::triggered, this, &PDFCreateStickyNoteTool::onActionTriggered);
 
+    // PDF Fire: the colour of the notes is chosen in the style panel and remembered
+    PDFAnnotationStyle defaultStyle;
+    defaultStyle.strokeColor = PDFAnnotationManipulator::getDefaultStickyNoteColor();
+    defaultStyle.fillColor = QColor();
+    m_styleManager = new PDFAnnotationStyleManager(this, PDFAnnotationStyleWidget::StrokeColor, defaultStyle, PDFAnnotationStyleSettings::STYLE_STICKY_NOTE);
+
     updateActions();
+}
+
+QColor PDFCreateStickyNoteTool::getStickyNoteColor()
+{
+    PDFAnnotationStyle defaultStyle;
+    defaultStyle.strokeColor = PDFAnnotationManipulator::getDefaultStickyNoteColor();
+    const QColor color = PDFAnnotationStyleSettings::getStyle(PDFAnnotationStyleSettings::STYLE_STICKY_NOTE, defaultStyle).strokeColor;
+    return color.isValid() ? color : PDFAnnotationManipulator::getDefaultStickyNoteColor();
+}
+
+void PDFCreateStickyNoteTool::setActiveImpl(bool active)
+{
+    BaseClass::setActiveImpl(active);
+
+    if (active)
+    {
+        m_styleManager->showStyleWindow(getProxy()->getWidget());
+    }
+    else
+    {
+        m_styleManager->closeStyleWindow();
+        closeCard();
+    }
+}
+
+void PDFCreateStickyNoteTool::closeCard()
+{
+    if (m_card)
+    {
+        PDFFireCommentCard* card = m_card;
+        m_card = nullptr;
+        card->disconnect(this);
+        card->cancel();
+    }
 }
 
 void PDFCreateStickyNoteTool::updateActions()
@@ -150,29 +193,49 @@ void PDFCreateStickyNoteTool::onActionTriggered(QAction* action)
 
 void PDFCreateStickyNoteTool::onPointPicked(PDFInteger pageIndex, QPointF pagePoint)
 {
-    bool ok = false;
-    QString text = QInputDialog::getText(getProxy()->getWidget(), tr("Sticky note"), tr("Enter text to be displayed in the sticky note"), QLineEdit::Normal, QString(), &ok);
+    // PDF Fire: the text is written in a labelled card next to the clicked point (author, "Sticky note",
+    // several lines, Post / Cancel, Ctrl+Enter posts, Esc cancels) instead of a one-line dialog. The note
+    // is created only when the text is posted - cancelling leaves nothing on the page.
+    closeCard();
+    m_pickTool->resetTool();
 
-    if (ok && !text.isEmpty())
+    QWidget* host = getProxy()->getWidget()->getDrawWidget()->getWidget();
+    QPoint anchor = host->rect().center();
+    const PDFWidgetSnapshot snapshot = getProxy()->getSnapshot();
+    if (const PDFWidgetSnapshot::SnapshotItem* snapshotItem = snapshot.getPageSnapshot(pageIndex))
     {
-        PDFDocumentModifier modifier(getDocument());
-
-        QString author = PDFAuthorSettings::getAuthorName();
-        PDFObjectReference page = getDocument()->getCatalog()->getPage(pageIndex)->getPageReference();
-        modifier.getBuilder()->createAnnotationText(page, QRectF(pagePoint, QSizeF(0, 0)), m_icon, author, QString(), text, false);
-        modifier.markAnnotationsChanged();
-
-        if (modifier.finalize())
-        {
-            Q_EMIT m_toolManager->documentModified(PDFModifiedDocument(modifier.getDocument(), nullptr, modifier.getFlags()));
-        }
-
-        setActive(false);
+        anchor = snapshotItem->pageToDeviceMatrix.map(pagePoint).toPoint();
     }
-    else
+
+    PDFFireCommentCard* card = new PDFFireCommentCard(PDFAuthorSettings::getAuthorName(), tr("Sticky note"), QString(), tr("Add a comment"), host);
+    m_card = card;
+    connect(card, &PDFFireCommentCard::posted, this, [this, pageIndex, pagePoint](QString text) { m_card = nullptr; createStickyNote(pageIndex, pagePoint, text); });
+    connect(card, &PDFFireCommentCard::cancelled, this, [this]() { m_card = nullptr; m_pickTool->resetTool(); });
+    card->showAt(host, anchor);
+}
+
+void PDFCreateStickyNoteTool::createStickyNote(PDFInteger pageIndex, QPointF pagePoint, const QString& text)
+{
+    const PDFDocument* document = getDocument();
+    if (!document || text.trimmed().isEmpty() || pageIndex < 0 || size_t(pageIndex) >= document->getCatalog()->getPageCount())
     {
-        m_pickTool->resetTool();
+        return;
     }
+
+    PDFDocumentModifier modifier(document);
+
+    QString author = PDFAuthorSettings::getAuthorName();
+    PDFObjectReference page = document->getCatalog()->getPage(pageIndex)->getPageReference();
+    m_styleManager->reloadStyle();
+    PDFAnnotationManipulator::createStickyNote(modifier.getBuilder(), page, pagePoint, m_icon, author, text, m_styleManager->getStyle().strokeColor);
+    modifier.markAnnotationsChanged();
+
+    if (modifier.finalize())
+    {
+        Q_EMIT m_toolManager->documentModified(PDFModifiedDocument(modifier.getDocument(), nullptr, modifier.getFlags()));
+    }
+
+    setActive(false);
 }
 
 PDFCreateHyperlinkTool::PDFCreateHyperlinkTool(PDFDrawWidgetProxy* proxy, PDFToolManager* toolManager, QAction* action, QObject* parent) :

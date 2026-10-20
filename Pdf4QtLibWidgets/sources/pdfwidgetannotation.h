@@ -30,6 +30,7 @@
 #include "pdfannotationmanipulator.h"
 
 #include <QPixmap>
+#include <QPointer>
 #include <QUuid>
 
 #include <map>
@@ -38,6 +39,7 @@
 #include <functional>
 
 class QMimeData;
+class QMenu;
 
 namespace pdf
 {
@@ -345,6 +347,34 @@ public:
     /// reply is displayed in the popup window of the annotation, where the user can write it.
     /// \returns true, if the reply has been added
     bool addAnnotationReply(PDFObjectReference annotation, const QString& contents);
+
+    /// PDF Fire: sets the text of a comment (the modification date is updated)
+    /// \returns true, if the comment has been modified
+    bool setAnnotationContents(PDFObjectReference annotation, const QString& contents);
+
+    /// PDF Fire: sets the review status of a comment (Accepted, Rejected, Cancelled, Completed, None).
+    /// The status is a reply with /State (see PDFAnnotationManipulator::setReviewState).
+    /// \returns true, if the status has been set
+    bool setAnnotationReviewState(PDFObjectReference annotation, const QString& state);
+
+    /// PDF Fire: deletes an annotation with its popup window and its replies
+    /// \returns true, if the annotation has been deleted
+    bool deleteAnnotation(PDFObjectReference annotation);
+
+    /// PDF Fire: returns true, if the comment can be modified (the document can be modified
+    /// and the annotation is not locked)
+    bool canModifyComment(PDFObjectReference annotation) const;
+
+    /// PDF Fire: what the comment card does with the posted text
+    enum class CommentCardMode
+    {
+        EditText,   ///< The text of the comment is replaced
+        Reply       ///< A reply to the comment is added
+    };
+
+    /// PDF Fire: shows the labelled card (author, label, text, Post / Cancel) next to the comment on
+    /// the page, in which the text of the comment is edited, or a reply is written.
+    void showCommentCard(PDFObjectReference annotation, CommentCardMode mode);
 
     /// Replaces the file attached by a file attachment annotation
     /// \returns true, if the annotation has been modified
@@ -769,6 +799,9 @@ private:
     /// Shows the context menu for an annotation, which cannot be selected
     void showUnselectableAnnotationMenu(const PageAnnotation& annotation, PDFObjectReference pageReference, QPoint globalPosition);
 
+    /// PDF Fire: adds the comment actions (Edit Text, Reply, Set Status) for a markup annotation to the menu
+    void addCommentActions(QMenu* menu, const PageAnnotation& annotation);
+
     /// Shows the context menu for the current selection
     /// \param globalPosition Position of the menu
     /// \param widgetPosition Position of the mouse in the widget (for pasting)
@@ -813,6 +846,7 @@ private:
     QString m_tooltip;
     std::optional<QCursor> m_cursor;
     QPoint m_editableAnnotationGlobalPosition; ///< Position, where action on annotation was executed
+    QPointer<QWidget> m_commentCard; ///< PDF Fire: the card, in which a comment is edited or replied to
     PDFObjectReference m_editableAnnotation;    ///< Annotation to be edited or deleted
     PDFObjectReference m_editableAnnotationPage;    ///< Page of annotation above
     bool m_suppressLinkActivationOnRelease = false;

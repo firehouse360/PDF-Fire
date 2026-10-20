@@ -28,10 +28,13 @@
 #include "pdfannotation.h"
 #include "pdfannotationstyle.h"
 
+#include <QPointer>
+
 class QActionGroup;
 
 namespace pdf
 {
+class PDFFireCommentCard;
 
 /// Tool that creates 'sticky note' annotations. Multiple types of sticky
 /// notes are available, user can select a type of sticky note. When
@@ -46,17 +49,25 @@ private:
 public:
     explicit PDFCreateStickyNoteTool(PDFDrawWidgetProxy* proxy, PDFToolManager* toolManager, QActionGroup* actionGroup, QObject* parent);
 
+    /// PDF Fire: colour of new sticky notes, chosen by the user (yellow by default)
+    static QColor getStickyNoteColor();
+
 protected:
     virtual void updateActions() override;
+    virtual void setActiveImpl(bool active) override;
 
 private:
     void onActionTriggered(QAction* action);
     void onPointPicked(PDFInteger pageIndex, QPointF pagePoint);
+    void createStickyNote(PDFInteger pageIndex, QPointF pagePoint, const QString& text);
+    void closeCard();
 
     PDFToolManager* m_toolManager;
     QActionGroup* m_actionGroup;
     PDFPickTool* m_pickTool;
+    PDFAnnotationStyleManager* m_styleManager;
     TextAnnotationIcon m_icon;
+    QPointer<PDFFireCommentCard> m_card; ///< PDF Fire: the card, in which the text of the new note is written
 };
 
 class PDF4QTLIBWIDGETSSHARED_EXPORT PDFCreateAnnotationTool : public PDFWidgetTool
