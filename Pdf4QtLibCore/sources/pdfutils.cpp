@@ -47,6 +47,12 @@
 #endif
 #endif
 
+// PDF Fire: the full name of the account (GECOS) is used as the default author of comments
+#if defined(Q_OS_UNIX)
+#include <pwd.h>
+#include <unistd.h>
+#endif
+
 #ifdef PDF4QT_COMPILER_CLANG
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wregister"
@@ -587,10 +593,35 @@ QString PDFSysUtils::getUserName()
     }
 #endif
 
-    QString userName = qgetenv("USER");
+#if defined(Q_OS_UNIX)
+    // PDF Fire: prefer the full name of the account ("Mike Davis") over the login name ("mike").
+    // The GECOS field is "Full Name,Room,Work phone,Home phone,Other".
+    if (const passwd* entry = getpwuid(getuid()))
+    {
+        if (entry->pw_gecos)
+        {
+            const QString fullName = QString::fromLocal8Bit(entry->pw_gecos).section(',', 0, 0).trimmed();
+            if (!fullName.isEmpty())
+            {
+                return fullName;
+            }
+        }
+
+        if (entry->pw_name && *entry->pw_name)
+        {
+            return QString::fromLocal8Bit(entry->pw_name);
+        }
+    }
+#endif
+
+    QString userName = qEnvironmentVariable("USER");
     if (userName.isEmpty())
     {
-        userName = qgetenv("USERNAME");
+        userName = qEnvironmentVariable("USERNAME");
+    }
+    if (userName.isEmpty())
+    {
+        userName = qEnvironmentVariable("LOGNAME");
     }
     return userName;
 }
@@ -598,7 +629,9 @@ QString PDFSysUtils::getUserName()
 struct PDFAuthorSettingsHolder
 {
     QMutex mutex;
-    PDFAuthorSettings::AuthorNameMode mode = PDFAuthorSettings::AuthorNameMode::Anonymous;
+    // PDF Fire: new comments carry the name of the computer's user by default (like other
+    // PDF editors); "Anonymous" is still available in the settings.
+    PDFAuthorSettings::AuthorNameMode mode = PDFAuthorSettings::AuthorNameMode::SystemUserName;
     QString customAuthorName;
 };
 

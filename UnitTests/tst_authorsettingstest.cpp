@@ -29,18 +29,29 @@ class AuthorSettingsTest : public QObject
     Q_OBJECT
 
 private slots:
-    void test_default_is_anonymous();
+    void test_default_is_system_user_name();
+    void test_anonymous();
     void test_system_user_name();
     void test_custom_name();
     void test_empty_custom_name_is_anonymous();
 };
 
-void AuthorSettingsTest::test_default_is_anonymous()
+void AuthorSettingsTest::test_default_is_system_user_name()
 {
-    // Author name must not disclose the system user name, unless the user
-    // explicitly allows it (see issue #412)
-    QCOMPARE(pdf::PDFAuthorSettings::getAuthorNameMode(), pdf::PDFAuthorSettings::AuthorNameMode::Anonymous);
+    // PDF Fire: new comments carry the computer's user name by default (Mike, 2026-10-19);
+    // upstream defaulted to "Anonymous" (issue #412), which is still a setting.
+    QCOMPARE(pdf::PDFAuthorSettings::getAuthorNameMode(), pdf::PDFAuthorSettings::AuthorNameMode::SystemUserName);
+
+    const QString systemUserName = pdf::PDFSysUtils::getUserName();
+    QVERIFY(!systemUserName.isEmpty());
+    QCOMPARE(pdf::PDFAuthorSettings::getAuthorName(), systemUserName);
+}
+
+void AuthorSettingsTest::test_anonymous()
+{
+    pdf::PDFAuthorSettings::setAuthorName(pdf::PDFAuthorSettings::AuthorNameMode::Anonymous, QString("Reviewer"));
     QCOMPARE(pdf::PDFAuthorSettings::getAuthorName(), pdf::PDFAuthorSettings::getAnonymousAuthorName());
+    pdf::PDFAuthorSettings::setAuthorName(pdf::PDFAuthorSettings::AuthorNameMode::SystemUserName, QString());
 }
 
 void AuthorSettingsTest::test_system_user_name()
@@ -51,7 +62,7 @@ void AuthorSettingsTest::test_system_user_name()
     const QString expectedAuthorName = systemUserName.isEmpty() ? pdf::PDFAuthorSettings::getAnonymousAuthorName() : systemUserName;
     QCOMPARE(pdf::PDFAuthorSettings::getAuthorName(), expectedAuthorName);
 
-    pdf::PDFAuthorSettings::setAuthorName(pdf::PDFAuthorSettings::AuthorNameMode::Anonymous, QString());
+    pdf::PDFAuthorSettings::setAuthorName(pdf::PDFAuthorSettings::AuthorNameMode::SystemUserName, QString());
 }
 
 void AuthorSettingsTest::test_custom_name()
@@ -60,7 +71,7 @@ void AuthorSettingsTest::test_custom_name()
     QCOMPARE(pdf::PDFAuthorSettings::getCustomAuthorName(), QString("  Reviewer  "));
     QCOMPARE(pdf::PDFAuthorSettings::getAuthorName(), QString("Reviewer"));
 
-    pdf::PDFAuthorSettings::setAuthorName(pdf::PDFAuthorSettings::AuthorNameMode::Anonymous, QString());
+    pdf::PDFAuthorSettings::setAuthorName(pdf::PDFAuthorSettings::AuthorNameMode::SystemUserName, QString());
 }
 
 void AuthorSettingsTest::test_empty_custom_name_is_anonymous()
@@ -68,7 +79,7 @@ void AuthorSettingsTest::test_empty_custom_name_is_anonymous()
     pdf::PDFAuthorSettings::setAuthorName(pdf::PDFAuthorSettings::AuthorNameMode::CustomName, "   ");
     QCOMPARE(pdf::PDFAuthorSettings::getAuthorName(), pdf::PDFAuthorSettings::getAnonymousAuthorName());
 
-    pdf::PDFAuthorSettings::setAuthorName(pdf::PDFAuthorSettings::AuthorNameMode::Anonymous, QString());
+    pdf::PDFAuthorSettings::setAuthorName(pdf::PDFAuthorSettings::AuthorNameMode::SystemUserName, QString());
 }
 
 QTEST_MAIN(AuthorSettingsTest)

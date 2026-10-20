@@ -214,7 +214,7 @@ PDFViewerSettingsDialog::PDFViewerSettingsDialog(const PDFViewerSettings::Settin
 
     // Author identity
     ui->authorNameModeComboBox->addItem(tr("Anonymous (do not disclose the user name)"), static_cast<int>(pdf::PDFAuthorSettings::AuthorNameMode::Anonymous));
-    ui->authorNameModeComboBox->addItem(tr("System user name"), static_cast<int>(pdf::PDFAuthorSettings::AuthorNameMode::SystemUserName));
+    ui->authorNameModeComboBox->addItem(tr("Name of the computer's user (%1)").arg(pdf::PDFSysUtils::getUserName()), static_cast<int>(pdf::PDFAuthorSettings::AuthorNameMode::SystemUserName));
     ui->authorNameModeComboBox->addItem(tr("Custom name"), static_cast<int>(pdf::PDFAuthorSettings::AuthorNameMode::CustomName));
 
     // UI Color Schemes
