@@ -2570,7 +2570,7 @@ void ContentEditorTest::test_inline_edit_missing_glyph_uses_fallback_font()
                 static const QRegularExpression pathExpression(QStringLiteral("\\s[lc]\\s"));
                 const bool hasOutline = (glyph.glyph && !glyph.glyph->isEmpty()) ||
                                         (glyph.characterContentStream && QString::fromLatin1(*glyph.characterContentStream).contains(pathExpression));
-                QVERIFY(hasOutline);
+                QVERIFY2(hasOutline, glyph.characterContentStream ? glyph.characterContentStream->constData() : "no glyph content stream");
                 ++glyphCount;
             }
         }

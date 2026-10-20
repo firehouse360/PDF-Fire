@@ -67,7 +67,13 @@ void SavedSignatureTest::initTestCase()
     // The saved signatures go to a temporary folder, never to the user's data
     QVERIFY(m_directory.isValid());
     qputenv("XDG_DATA_HOME", m_directory.filePath("data").toUtf8());
-    QVERIFY(PDFFireSavedSignatureStore::getFileName().startsWith(m_directory.path()));
+    if (!PDFFireSavedSignatureStore::getFileName().startsWith(m_directory.path()))
+    {
+        // Windows and macOS ignore XDG_DATA_HOME - Qt's test mode keeps the user's data out of reach
+        QStandardPaths::setTestModeEnabled(true);
+        QFile::remove(PDFFireSavedSignatureStore::getFileName());
+    }
+    QVERIFY(PDFFireSavedSignatureStore::getFileName().startsWith(m_directory.path()) || QStandardPaths::isTestModeEnabled());
 }
 
 PDFFireSavedSignature SavedSignatureTest::createSignature()

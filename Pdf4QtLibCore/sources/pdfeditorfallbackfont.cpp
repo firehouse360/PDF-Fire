@@ -235,6 +235,13 @@ PDFEditorFallbackFontManager::GlyphRecord PDFEditorFallbackFontManager::createGl
         const quint32 glyphIndex = glyphIndices.front();
         QPainterPath glyphPath = rawFont.pathForGlyph(glyphIndex);
 
+        // PDF Fire: an empty outline of a visible character (a bitmap font, or a font
+        // engine without outlines) would write a blank letter - try the next font
+        if (glyphPath.isEmpty() && !QChar::isSpace(codePoint))
+        {
+            return false;
+        }
+
         // Qt glyph paths have the y-axis pointing down, PDF glyph space
         // has the y-axis pointing up.
         glyphPath = QTransform(1, 0, 0, -1, 0, 0).map(glyphPath);
