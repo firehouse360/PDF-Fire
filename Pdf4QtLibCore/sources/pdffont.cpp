@@ -42,6 +42,7 @@
 #include <QPainterPath>
 #include <QDataStream>
 
+#include <algorithm>
 #include <limits>
 #include <map>
 
@@ -3148,21 +3149,63 @@ QByteArray PDFSimpleFont::encodeCharacter(char32_t codePoint) const
     // (FT_Get_Char_Index) as in the forward pass.
     for (int i = 0; i < 256; ++i)
     {
-        if (getUnicode(i) == character && m_glyphIndices[i] != GID())
+        if (getUnicode(i) == character && m_glyphIndices[i] != GID() && hasGlyphForCode(i))
         {
             return QByteArray(1, static_cast<char>(i));
         }
     }
 
+    // PDF Fire: a code without a glyph is not used - in a subset font it draws nothing
+    // (or the .notdef box), the character is written with a fallback font instead
     for (int i = 0; i < 256; ++i)
     {
-        if (getUnicode(i) == character)
+        if (getUnicode(i) == character && hasGlyphForCode(i))
         {
             return QByteArray(1, static_cast<char>(i));
         }
     }
 
     return QByteArray();
+}
+
+bool PDFSimpleFont::isSubsetFont() const
+{
+    auto isSubsetName = [](const QByteArray& name)
+    {
+        if (name.size() < 8 || name[6] != '+')
+        {
+            return false;
+        }
+        return std::all_of(name.cbegin(), name.cbegin() + 6, [](char c) { return c >= 'A' && c <= 'Z'; });
+    };
+
+    return isSubsetName(m_baseFont) || isSubsetName(m_fontDescriptor.fontName);
+}
+
+// Ported from PdfCraft crates/fonts/src/pdf.rs (Metrics::has_glyph, simple fonts)
+// (MIT OR Apache-2.0), Copyright (c) 2026 ArtCraft Team and the PdfCraft contributors.
+bool PDFSimpleFont::hasGlyphForCode(int code) const
+{
+    // A code within the widths has a glyph, if its width is not zero (a subset writes
+    // zero widths for the glyphs it left out; a space can be really zero wide). A code
+    // outside of the widths has no glyph in a subset.
+    //
+    // Unlike PdfCraft, a font without widths is always trusted: the widths are dropped
+    // here also when they are written as real numbers (the font loader reads integers),
+    // and a subset with all its codes refused would write every character with a
+    // fallback font.
+    if (m_widths.empty())
+    {
+        return true;
+    }
+
+    const PDFInteger index = code - m_firstChar;
+    if (code >= m_firstChar && code <= m_lastChar && index >= 0 && size_t(index) < m_widths.size())
+    {
+        return m_widths[index] > 0 || code == 32;
+    }
+
+    return !isSubsetFont();
 }
 
 void PDFSimpleFont::dumpFontToTreeItem(ITreeFactory* treeFactory) const
@@ -4278,6 +4321,15 @@ void PDFType0Font::buildEncodeMap() const
         }
 
         if (!m_cmap.containsCode(code, byteCount) && byteCount != maxKeyLength)
+        {
+            return;
+        }
+
+        // PDF Fire: CID 0 is .notdef (an unmapped code lands there too), whatever the
+        // ToUnicode says - typing with it draws boxes. (PdfCraft has the same rule,
+        // crates/fonts/src/pdf.rs Metrics::has_glyph, MIT OR Apache-2.0.)
+        const std::vector<PDFFontCMap::MappedCode> mappedCodes = m_cmap.interpretWithCode(serializeCode(code, byteCount));
+        if (mappedCodes.size() == 1 && mappedCodes.front().cid == 0)
         {
             return;
         }

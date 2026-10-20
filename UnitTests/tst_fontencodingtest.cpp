@@ -46,6 +46,7 @@ private slots:
     void test_type0_cjk_collection_coverage_data();
     void test_type0_cjk_collection_coverage();
     void test_simple_font_encode();
+    void test_glyph_present_rule();
     void test_standard_font_zapf_dingbats();
     void test_type3_font_encode();
     void test_fallback_font_generator();
@@ -437,6 +438,64 @@ void FontEncodingTest::test_simple_font_encode()
     pdf::PDFEncodedText encodedText = font.encodeText(QString(QChar(0x00C1)) + QChar('B'));
     QVERIFY(encodedText.isValid);
     QCOMPARE(encodedText.encodedText, QByteArray("\x41\x42"));
+}
+
+void FontEncodingTest::test_glyph_present_rule()
+{
+    // PDF Fire: a code is used to write a character only if the font has a glyph for it
+    // (the rule of PdfCraft's Metrics::has_glyph). A subset font lacks the glyphs it
+    // doesn't use - its widths are zero, and its code must not be used for typing.
+    pdf::encoding::EncodingTable encoding = {};
+    pdf::encoding::EncodingTable toUnicode = {};
+    for (int i = 32; i < 127; ++i)
+    {
+        encoding[i] = QChar(i);
+        toUnicode[i] = QChar(i);
+    }
+
+    std::vector<pdf::PDFInteger> widths(127 - 32, 500);
+    widths['C' - 32] = 0;
+    widths[0] = 0;  // the space: a zero width space is still a space
+
+    auto createFont = [&](const QByteArray& fontName, pdf::PDFInteger firstChar, pdf::PDFInteger lastChar, std::vector<pdf::PDFInteger> fontWidths)
+    {
+        pdf::FontDescriptor descriptor;
+        descriptor.fontName = fontName;
+        return std::make_unique<pdf::PDFTrueTypeFont>(pdf::CIDSystemInfo(), "F1", descriptor, fontName, fontName, firstChar, lastChar,
+                                                      std::move(fontWidths), pdf::PDFEncoding::Encoding::Custom, encoding, toUnicode, true,
+                                                      pdf::StandardFontType::Invalid, pdf::GlyphIndices(), pdf::GlyphNames());
+    };
+
+    auto subset = createFont("ABCDEF+Calibri", 32, 126, widths);
+    QVERIFY(subset->isSubsetFont());
+    QCOMPARE(subset->encodeCharacter(U'A'), QByteArray("A"));
+    QVERIFY(subset->encodeCharacter(U'C').isEmpty());
+    QCOMPARE(subset->encodeCharacter(U' '), QByteArray(" "));
+
+    // A complete font: its widths say the same
+    auto complete = createFont("Calibri", 32, 126, widths);
+    QVERIFY(!complete->isSubsetFont());
+    QVERIFY(complete->encodeCharacter(U'C').isEmpty());
+
+    // No widths (or widths, which could not be read): the font is trusted
+    QCOMPARE(createFont("Calibri", 0, -1, {})->encodeCharacter(U'C'), QByteArray("C"));
+    QCOMPARE(createFont("ABCDEF+Calibri", 0, -1, {})->encodeCharacter(U'C'), QByteArray("C"));
+
+    // Outside of the widths of a subset - no glyph; of a complete font - a glyph
+    auto narrow = createFont("ABCDEF+Calibri", 65, 70, std::vector<pdf::PDFInteger>(6, 500));
+    QVERIFY(narrow->encodeCharacter(U'Z').isEmpty());
+    QCOMPARE(narrow->encodeCharacter(U'B'), QByteArray("B"));
+    QCOMPARE(createFont("Calibri", 65, 70, std::vector<pdf::PDFInteger>(6, 500))->encodeCharacter(U'Z'), QByteArray("Z"));
+
+    // Type 0: CID 0 is .notdef, even if the ToUnicode maps it (Word maps it to a space)
+    pdf::PDFFontCMap identity = pdf::PDFFontCMap::createFromName("Identity-H");
+    pdf::PDFFontCMap type0ToUnicode = pdf::PDFFontCMap::createFromData("1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n"
+                                                                       "2 beginbfchar\n<0000> <0020>\n<0024> <0041>\nendbfchar\n");
+    QVERIFY(identity.isValid());
+    QVERIFY(type0ToUnicode.isValid());
+    pdf::PDFType0Font type0(pdf::CIDSystemInfo(), "F2", pdf::FontDescriptor(), identity, type0ToUnicode, pdf::PDFCIDtoGIDMapper(QByteArray()), 500.0, {});
+    QVERIFY(type0.encodeCharacter(U' ').isEmpty());
+    QCOMPARE(type0.encodeCharacter(U'A'), QByteArray("\x00\x24", 2));
 }
 
 void FontEncodingTest::test_standard_font_zapf_dingbats()

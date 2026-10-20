@@ -193,6 +193,7 @@ private:
     void writeShadingObject(QTextStream& stream, const PDFObject& shadingObject);
 
     QByteArray selectFont(const QByteArray& font);
+    QByteArray selectFontImpl(const QByteArray& font);
 
     /// Returns the key of the font object in the font dictionary. If the font
     /// object is not present in the font dictionary, it is added under the given
@@ -222,6 +223,8 @@ private:
     PDFPageContentProcessorState m_currentState;
     QString m_pendingTextArray; ///< PDF Fire: strings and kerning of the TJ operator being collected
     PDFFontPointer m_textFont;
+    PDFFontPointer m_lastTextFont;      ///< PDF Fire: the last selected font of the document (not a fallback font)
+    QByteArray m_lastTextFontKey;       ///< PDF Fire: its resource key
     QHash<QByteArray, PDFFontPointer> m_fontOverrides;
     QHash<QByteArray, PDFObject> m_fontResourceObjects; ///< Font objects of the fonts of the written text element
     QStringList m_errors;
