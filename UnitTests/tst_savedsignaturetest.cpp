@@ -152,8 +152,11 @@ void SavedSignatureTest::storeSaveLoadRemove()
     QVERIFY(PDFFireSavedSignatureStore::save(Role::Initials, initials));
     QVERIFY(QFile::exists(PDFFireSavedSignatureStore::getFileName()));
 
-    // Only the user can read the file
+    // Only the user can read the file (Windows: Qt does not read the NTFS permissions by
+    // default and reports the file readable by everyone - the per-user AppData folder protects it)
+#ifdef Q_OS_UNIX
     QCOMPARE(QFile::permissions(PDFFireSavedSignatureStore::getFileName()) & (QFile::ReadGroup | QFile::ReadOther), QFile::Permissions());
+#endif
 
     QCOMPARE(PDFFireSavedSignatureStore::load(Role::Signature).getStrokes().size(), size_t(2));
     QCOMPARE(PDFFireSavedSignatureStore::load(Role::Initials).getText(), QString("JQF"));
