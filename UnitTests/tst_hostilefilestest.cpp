@@ -184,7 +184,9 @@ void HostileFilesTest::runLengthTruncated()
     // A literal run, which is longer than the rest of the input, read the heap behind
     // it (2 bytes decoded to 28 kB of heap memory). A repeat run without its byte read
     // one byte past the end and continued from there.
-    const PDFStreamFilter* filter = PDFStreamFilterStorage::getFilter("RunLengthDecode");
+    // The filter classes are exported, the storage is not (Windows links only exported symbols)
+    const PDFRunLengthDecodeFilter runLengthFilter;
+    const PDFStreamFilter* filter = &runLengthFilter;
     QVERIFY(filter);
 
     QCOMPARE(filter->apply(QByteArray("\x7f" "A", 2), PDFObject(), nullptr), QByteArray("A"));
@@ -198,7 +200,9 @@ void HostileFilesTest::runLengthTruncated()
 void HostileFilesTest::runLengthFuzz()
 {
     // Random short inputs - meaningful under AddressSanitizer
-    const PDFStreamFilter* filter = PDFStreamFilterStorage::getFilter("RunLengthDecode");
+    // The filter classes are exported, the storage is not (Windows links only exported symbols)
+    const PDFRunLengthDecodeFilter runLengthFilter;
+    const PDFStreamFilter* filter = &runLengthFilter;
     QRandomGenerator generator(431);
     for (int i = 0; i < 20000; ++i)
     {
@@ -254,7 +258,8 @@ void HostileFilesTest::decompressionBombAscii85()
     QVERIFY_THROWS_EXCEPTION(PDFException, decodeStream(document, 3));
 
     // Ordinary ASCII85 still works
-    const PDFStreamFilter* filter = PDFStreamFilterStorage::getFilter("ASCII85Decode");
+    const PDFAscii85DecodeFilter ascii85Filter;
+    const PDFStreamFilter* filter = &ascii85Filter;
     QCOMPARE(filter->apply(QByteArray("87cURD]i,\"Ebo80~>"), PDFObject(), nullptr), QByteArray("Hello World!"));
     QCOMPARE(filter->apply(QByteArray("zz~>"), PDFObject(), nullptr), QByteArray(8, 0));
 }
