@@ -82,6 +82,7 @@ private slots:
     void parserNestingDepth();
     void pageTreeDepth();
     void cidFontHugeWidthRange();
+    void passwordProtectedSignAndIncrementalSave();
 
 private:
     /// Builds a PDF file from the bodies of objects 1..n (object 1 is the catalog)
@@ -573,6 +574,65 @@ void HostileFilesTest::cidFontHugeWidthRange()
     {
         QCOMPARE(type0Font->getGlyphAdvance(123456), 500.0);
     }
+}
+
+void HostileFilesTest::passwordProtectedSignAndIncrementalSave()
+{
+    // Signing or incrementally saving a document, which needs a password to open,
+    // reads it again without a password callback: the empty std::function was called
+    // and std::bad_function_call terminated the application
+    PDFDocumentBuilder builder;
+    builder.appendPage(QRectF(0, 0, 612, 792));
+    PDFSecurityHandlerFactory::SecuritySettings settings;
+    settings.algorithm = PDFSecurityHandlerFactory::AES_256;
+    settings.userPassword = "open-secret";
+    settings.ownerPassword = "owner-secret";
+    settings.permissions = uint32_t(PDFSecurityHandler::Permission::PrintLowResolution);
+    builder.setSecurityHandler(PDFSecurityHandlerFactory::createSecurityHandler(settings));
+    const PDFDocument source = builder.build();
+
+    QBuffer buffer;
+    QVERIFY(buffer.open(QBuffer::WriteOnly));
+    PDFDocumentWriter writer(nullptr);
+    QVERIFY(writer.write(&buffer, &source));
+    buffer.close();
+    const QByteArray encryptedData = buffer.data();
+
+    PDFDocumentReader reader(nullptr, [](bool* ok) { *ok = true; return QString("open-secret"); }, false, false);
+    const PDFDocument document = reader.readFromBuffer(encryptedData);
+    QCOMPARE(reader.getReadingResult(), PDFDocumentReader::Result::OK);
+
+    // A reader without a callback reports "cancelled"
+    PDFDocumentReader noCallbackReader(nullptr, nullptr, false, false);
+    noCallbackReader.readFromBuffer(encryptedData);
+    QCOMPARE(noCallbackReader.getReadingResult(), PDFDocumentReader::Result::Cancelled);
+
+    // Incremental update gives a message instead of a crash
+    QBuffer incrementalBuffer;
+    QVERIFY(incrementalBuffer.open(QBuffer::WriteOnly));
+    const PDFOperationResult incrementalResult = writer.writeIncrementalUpdate(&incrementalBuffer, encryptedData, &document);
+    QVERIFY(!incrementalResult);
+    QVERIFY(incrementalResult.getErrorMessage().contains("password"));
+
+    // Signing gives its own result and message
+    PDFDocumentSigner::Parameters parameters;
+    parameters.document = &document;
+    parameters.originalDocumentData = encryptedData;
+    parameters.signFunction = [](const QByteArray&, QByteArray& signature)
+    {
+        signature = QByteArray(64, char(0x30));
+        return true;
+    };
+    parameters.createSignatureFieldFunction = [&document](PDFDocumentBuilder& signatureBuilder, PDFObjectReference signatureDictionary)
+    {
+        return signatureBuilder.createSignatureField("Signature", signatureDictionary, document.getCatalog()->getPage(0)->getPageReference());
+    };
+
+    QByteArray signedDocument;
+    const PDFDocumentSigner::Result signResult = PDFDocumentSigner::sign(parameters, signedDocument);
+    QCOMPARE(signResult, PDFDocumentSigner::Result::PasswordRequired);
+    QVERIFY(!PDFDocumentSigner::getResultMessage(signResult).isEmpty());
+    QVERIFY(signedDocument.isEmpty());
 }
 
 QTEST_GUILESS_MAIN(HostileFilesTest)

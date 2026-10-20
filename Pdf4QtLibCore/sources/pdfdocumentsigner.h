@@ -83,7 +83,8 @@ public:
         PlaceholderNotFound,            ///< Space reserved for the signature was not found in the written document
         SignatureTooLarge,              ///< Signature did not fit into the reserved space
         VerificationFailed,             ///< Newly created signature of the written document could not be verified
-        ExistingSignaturesNotPreserved  ///< Document contains signatures, which would be damaged by writing the document
+        ExistingSignaturesNotPreserved, ///< Document contains signatures, which would be damaged by writing the document
+        PasswordRequired                ///< PDF Fire: document needs a password to open, it cannot be read again to verify the signature
     };
 
     struct Parameters
@@ -172,9 +173,11 @@ private:
     /// \param signedDocument Bytes of the signed document
     /// \param signatureField Field holding the signature being verified
     /// \param isDocumentTimestamp Field holds a document timestamp
+    /// \param passwordRequired PDF Fire: set to true, if the document cannot be read without a password
     static bool verifySignedDocument(const QByteArray& signedDocument,
                                      PDFObjectReference signatureField,
-                                     bool isDocumentTimestamp);
+                                     bool isDocumentTimestamp,
+                                     bool* passwordRequired = nullptr);
 
     /// Verifies, that the timestamp token of the given field belongs to the
     /// bytes of the written document covered by it. The certificate chain of

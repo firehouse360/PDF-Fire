@@ -80,6 +80,20 @@ PDFDocumentSigner::Result PDFDocumentSigner::sign(const Parameters& parameters, 
         return Result::ExistingSignaturesNotPreserved;
     }
 
+    // PDF Fire: the document is read again (for the incremental update and to verify the
+    // signature) without anyone to ask for a password - this crashed the application. A
+    // document, which needs a password to open, is refused with a clear message.
+    const PDFSecurityHandler* securityHandler = parameters.document->getStorage().getSecurityHandler();
+    if (securityHandler && securityHandler->getMode() != EncryptionMode::None && !parameters.originalDocumentData.isEmpty())
+    {
+        PDFDocumentReader reader(nullptr, nullptr, false, false);
+        reader.readFromBuffer(parameters.originalDocumentData);
+        if (reader.getReadingResult() == PDFDocumentReader::Result::Cancelled)
+        {
+            return Result::PasswordRequired;
+        }
+    }
+
     // The size of the signature is not stable, so we cannot reserve exactly the
     // size of a trial signature. We start with the trial signature enlarged by
     // the initial reserve and enlarge it further, if the final signature does
@@ -275,9 +289,10 @@ PDFDocumentSigner::Result PDFDocumentSigner::signAttempt(const Parameters& param
     QByteArray writtenDocument = buffer.data();
     buffer.close();
 
-    if (!verifySignedDocument(writtenDocument, signatureField, isDocumentTimestamp))
+    bool passwordRequired = false;
+    if (!verifySignedDocument(writtenDocument, signatureField, isDocumentTimestamp, &passwordRequired))
     {
-        return Result::VerificationFailed;
+        return passwordRequired ? Result::PasswordRequired : Result::VerificationFailed;
     }
 
     signedDocument = qMove(writtenDocument);
@@ -286,13 +301,19 @@ PDFDocumentSigner::Result PDFDocumentSigner::signAttempt(const Parameters& param
 
 bool PDFDocumentSigner::verifySignedDocument(const QByteArray& signedDocument,
                                              PDFObjectReference signatureField,
-                                             bool isDocumentTimestamp)
+                                             bool isDocumentTimestamp,
+                                             bool* passwordRequired)
 {
     PDFDocumentReader reader(nullptr, nullptr, true, false);
     PDFDocument document = reader.readFromBuffer(signedDocument);
 
     if (reader.getReadingResult() != PDFDocumentReader::Result::OK)
     {
+        // PDF Fire: without a password callback, a password-protected document is "cancelled"
+        if (passwordRequired)
+        {
+            *passwordRequired = reader.getReadingResult() == PDFDocumentReader::Result::Cancelled;
+        }
         return false;
     }
 
@@ -387,6 +408,9 @@ QString PDFDocumentSigner::getResultMessage(Result result)
 
         case Result::ExistingSignaturesNotPreserved:
             return tr("The document already contains digital signatures, which cannot be preserved, so the document was not signed.");
+
+        case Result::PasswordRequired:
+            return tr("The document needs a password to open, so the new signature could not be checked and the document was not signed. Remove the open password first (documents with only permission restrictions can be signed).");
 
         default:
             Q_ASSERT(false);
