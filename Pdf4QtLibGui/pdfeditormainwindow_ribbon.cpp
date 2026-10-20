@@ -816,6 +816,13 @@ void PDFEditorMainWindow::setupRibbon()
         {
             automaticGroup->addLargeAction(action);
         }
+
+        // PDF Fire: a finished form is flattened - drawn into the page for good
+        PDFFireRibbonGroup* finishGroup = formsPage->addGroup(tr("Finish"));
+        if (QAction* action = findMenuAction(formsMenu, "formsplugin_Flatten"))
+        {
+            finishGroup->addLargeAction(action);
+        }
     }
 
     // ---- Tools ----------------------------------------------------------------
@@ -830,6 +837,10 @@ void PDFEditorMainWindow::setupRibbon()
     if (QAction* exportOdtAction = findMenuAction(findPluginMenu("Export"), "exportplugin_ExportOdt"))
     {
         documentGroup->addSmallAction(exportOdtAction);
+    }
+    if (QAction* flattenAction = findMenuAction(findPluginMenu("Forms"), "formsplugin_Flatten"))
+    {
+        documentGroup->addSmallAction(flattenAction);   // PDF Fire: flatten form fields and comments
     }
 
     // PDF Fire: scanning and the text recognition together, as "Scan & OCR" of Acrobat

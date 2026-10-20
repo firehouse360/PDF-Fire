@@ -29,12 +29,22 @@
 #include "pdfdrawspacecontroller.h"
 #include "pdfdrawwidget.h"
 #include "pdffireformdesigntool.h"
+#include "pdffireflatten.h"
+#include "pdfwidgetformmanager.h"
 #include "pdfwidgettool.h"
 
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
+#include <QButtonGroup>
 #include <QColorDialog>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QGroupBox>
+#include <QLabel>
+#include <QPushButton>
+#include <QRadioButton>
+#include <QVBoxLayout>
 #include <QMenu>
 #include <QMainWindow>
 #include <QMessageBox>
@@ -55,6 +65,7 @@ FormsPlugin::FormsPlugin() :
     m_actionDelete(nullptr),
     m_actionDetectFields(nullptr),
     m_actionTabOrder(nullptr),
+    m_actionFlatten(nullptr),
     m_modeGroup(nullptr),
     m_tool(nullptr)
 {
@@ -116,6 +127,10 @@ void FormsPlugin::setWidget(pdf::PDFWidget* widget)
                                         tr("Make a fillable form automatically: fields are placed on the blanks of the document (lines like \"Name: ______\", empty boxes). Check the result - delete what is not wanted."));
     m_actionTabOrder = createAction("formsplugin_TabOrder", tr("Tab Order"), "form-taborder.svg",
                                     tr("Order the fields of every page by rows (top to bottom, left to right), so the Tab key goes through them in the reading order"));
+    m_actions.push_back(nullptr);
+    m_actionFlatten = createAction("formsplugin_Flatten", tr("Flatten..."), "form-flatten.svg",
+                                   tr("Flatten form fields and comments: draw them into the page, so the page looks the same, but nothing can be filled in or changed any more"));
+    m_actionFlatten->setIconText(tr("Flatten"));
 
     m_tool = new pdf::PDFFireFormDesignTool(widget->getDrawWidgetProxy(), widget->getToolManager(), this);
     widget->getToolManager()->addTool(m_tool);
@@ -133,6 +148,7 @@ void FormsPlugin::setWidget(pdf::PDFWidget* widget)
     connect(m_actionDetectFields, &QAction::triggered, this, &FormsPlugin::onDetectFields);
     connect(m_actionTabOrder, &QAction::triggered, this, &FormsPlugin::onTabOrder);
     connect(m_actionFillForm, &QAction::triggered, this, &FormsPlugin::onFillForm);
+    connect(m_actionFlatten, &QAction::triggered, this, &FormsPlugin::onFlatten);
 
     updateActions();
 }
@@ -177,6 +193,11 @@ void FormsPlugin::updateActions()
     m_actionDelete->setEnabled(hasSelection);
     m_actionDetectFields->setEnabled(canDesign);
     m_actionTabOrder->setEnabled(canDesign);
+
+    // Flattening changes the content of the pages and removes the annotations
+    const bool canFlatten = hasDocument && pdf::PDFFirePermissions::canModifyContent(m_document) && pdf::PDFFirePermissions::canAnnotate(m_document);
+    m_actionFlatten->setEnabled(canFlatten);
+    m_actionFlatten->setStatusTip(hasDocument && !canFlatten ? reason : QString());
 }
 
 void FormsPlugin::onModeActionToggled(QAction* action, bool checked)
@@ -651,6 +672,166 @@ void FormsPlugin::onTabOrder()
     }
 
     QMessageBox::information(m_widget, tr("Tab Order"), tr("The Tab key now goes through the fields of every page by rows, from the top to the bottom and from the left to the right."));
+}
+
+
+void FormsPlugin::onFlatten()
+{
+    if (!m_document)
+    {
+        return;
+    }
+
+    using Flatten = pdf::PDFFireFlatten;
+
+    const std::vector<pdf::PDFInteger> currentPages = m_widget->getDrawWidget()->getCurrentPages();
+    const pdf::PDFInteger currentPage = currentPages.empty() ? 0 : currentPages.front();
+    const bool isSigned = Flatten::hasSignatures(m_document);
+
+    QDialog dialog(m_widget);
+    dialog.setObjectName("flattenDialog");
+    dialog.setWindowTitle(tr("Flatten Form Fields and Comments"));
+    QVBoxLayout* layout = new QVBoxLayout(&dialog);
+
+    QLabel* introLabel = new QLabel(tr("Flattening draws the form fields and comments into the page. The page looks the same, "
+                                       "but the fields can no longer be filled in and the comments can no longer be edited, moved or deleted. "
+                                       "Use it when a form is finished, so it prints the same everywhere and cannot be changed."), &dialog);
+    introLabel->setWordWrap(true);
+    layout->addWidget(introLabel);
+
+    QGroupBox* whatGroup = new QGroupBox(tr("Flatten"), &dialog);
+    QVBoxLayout* whatLayout = new QVBoxLayout(whatGroup);
+    QRadioButton* bothButton = new QRadioButton(tr("Form fields and comments"), whatGroup);
+    QRadioButton* fieldsButton = new QRadioButton(tr("Form fields only"), whatGroup);
+    QRadioButton* commentsButton = new QRadioButton(tr("Comments only"), whatGroup);
+    bothButton->setObjectName("flattenBothButton");
+    fieldsButton->setObjectName("flattenFieldsButton");
+    commentsButton->setObjectName("flattenCommentsButton");
+    bothButton->setChecked(true);
+    whatLayout->addWidget(bothButton);
+    whatLayout->addWidget(fieldsButton);
+    whatLayout->addWidget(commentsButton);
+    layout->addWidget(whatGroup);
+
+    QGroupBox* pagesGroup = new QGroupBox(tr("Pages"), &dialog);
+    QVBoxLayout* pagesLayout = new QVBoxLayout(pagesGroup);
+    QRadioButton* allPagesButton = new QRadioButton(tr("All pages"), pagesGroup);
+    QRadioButton* currentPageButton = new QRadioButton(tr("Current page (page %1)").arg(currentPage + 1), pagesGroup);
+    allPagesButton->setObjectName("flattenAllPagesButton");
+    currentPageButton->setObjectName("flattenCurrentPageButton");
+    allPagesButton->setChecked(true);
+    pagesLayout->addWidget(allPagesButton);
+    pagesLayout->addWidget(currentPageButton);
+    layout->addWidget(pagesGroup);
+
+    QLabel* countLabel = new QLabel(&dialog);
+    countLabel->setObjectName("flattenCountLabel");
+    countLabel->setWordWrap(true);
+    layout->addWidget(countLabel);
+
+    if (isSigned)
+    {
+        QLabel* signedLabel = new QLabel(tr("This document is digitally signed. The signatures are kept, but flattening changes the document "
+                                            "after it was signed - a validator will report the changes made after signing."), &dialog);
+        signedLabel->setObjectName("flattenSignedLabel");
+        signedLabel->setWordWrap(true);
+        QFont font = signedLabel->font();
+        font.setBold(true);
+        signedLabel->setFont(font);
+        layout->addWidget(signedLabel);
+    }
+
+    QDialogButtonBox* buttonBox = new QDialogButtonBox(QDialogButtonBox::Cancel, &dialog);
+    QPushButton* flattenButton = buttonBox->addButton(tr("Flatten"), QDialogButtonBox::AcceptRole);
+    flattenButton->setObjectName("flattenAcceptButton");
+    connect(buttonBox, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttonBox, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttonBox);
+
+    auto getOptions = [&]()
+    {
+        if (fieldsButton->isChecked())
+        {
+            return Flatten::Options(Flatten::FormFields);
+        }
+        if (commentsButton->isChecked())
+        {
+            return Flatten::Options(Flatten::Comments);
+        }
+        return Flatten::FormFields | Flatten::Comments;
+    };
+    auto getPages = [&]()
+    {
+        return currentPageButton->isChecked() ? std::vector<pdf::PDFInteger>{ currentPage } : std::vector<pdf::PDFInteger>{};
+    };
+    auto updateCount = [&]()
+    {
+        const Flatten::Statistics statistics = Flatten::count(m_document, getPages(), getOptions());
+        const int total = statistics.flattenedFields + statistics.flattenedComments;
+        QStringList parts;
+        if (total == 0)
+        {
+            parts << tr("There is nothing to flatten here.");
+        }
+        else
+        {
+            parts << tr("To be flattened: %1 form field(s) and %2 comment(s).").arg(statistics.flattenedFields).arg(statistics.flattenedComments);
+        }
+        if (statistics.keptSignatures > 0)
+        {
+            parts << tr("%1 signed signature field(s) stay signature fields.").arg(statistics.keptSignatures);
+        }
+        if (statistics.keptRedactionMarks > 0)
+        {
+            parts << tr("%1 redaction mark(s) are not flattened - apply them with Protect > Apply Redactions.").arg(statistics.keptRedactionMarks);
+        }
+        countLabel->setText(parts.join(QChar(' ')));
+        flattenButton->setEnabled(total > 0);
+    };
+
+    for (QRadioButton* button : { bothButton, fieldsButton, commentsButton, allPagesButton, currentPageButton })
+    {
+        connect(button, &QRadioButton::toggled, &dialog, updateCount);
+    }
+    updateCount();
+
+    if (dialog.exec() != QDialog::Accepted)
+    {
+        return;
+    }
+
+    // The editing of the fields ends, its selection would point to a removed field
+    if (m_tool->isActive())
+    {
+        m_widget->getToolManager()->setActiveTool(nullptr);
+    }
+
+    pdf::PDFDocument flattenedDocument;
+    Flatten::Statistics statistics;
+    const pdf::PDFOperationResult result = Flatten::flatten(m_document, getPages(), getOptions(), m_widget->getFormManager(), &flattenedDocument, &statistics);
+    if (!result)
+    {
+        QMessageBox::critical(m_widget, tr("Flatten"), result.getErrorMessage());
+        return;
+    }
+
+    pdf::PDFModifiedDocument::ModificationFlags flags(pdf::PDFModifiedDocument::Reset |
+                                                      pdf::PDFModifiedDocument::PreserveUndoRedo |
+                                                      pdf::PDFModifiedDocument::PreserveView);
+    pdf::PDFDocumentPointer pointer(new pdf::PDFDocument(std::move(flattenedDocument)));
+    Q_EMIT m_widget->getToolManager()->documentModified(pdf::PDFModifiedDocument(std::move(pointer), nullptr, flags));
+
+    QString message = tr("Flattened %1 form field(s) and %2 comment(s). Undo brings them back until the document is closed.")
+                      .arg(statistics.flattenedFields).arg(statistics.flattenedComments);
+    if (statistics.keptWithoutAppearance > 0)
+    {
+        message += QChar(' ') + tr("%1 item(s) were left as they are, because they have no appearance to draw.").arg(statistics.keptWithoutAppearance);
+    }
+
+    if (QMainWindow* mainWindow = m_dataExchangeInterface ? m_dataExchangeInterface->getMainWindow() : nullptr)
+    {
+        mainWindow->statusBar()->showMessage(message, 15000);
+    }
 }
 
 }   // namespace pdfplugin

@@ -16,5 +16,6 @@
         <file>form-copy-pages.svg</file>
         <file>form-delete.svg</file>
         <file>form-taborder.svg</file>
+        <file>form-flatten.svg</file>
     </qresource>
 </RCC>
