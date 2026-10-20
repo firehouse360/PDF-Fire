@@ -83,6 +83,7 @@ private slots:
     void pageTreeDepth();
     void cidFontHugeWidthRange();
     void passwordProtectedSignAndIncrementalSave();
+    void pkcs12HugeIterationCount();
 
 private:
     /// Builds a PDF file from the bodies of objects 1..n (object 1 is the catalog)
@@ -633,6 +634,67 @@ void HostileFilesTest::passwordProtectedSignAndIncrementalSave()
     QCOMPARE(signResult, PDFDocumentSigner::Result::PasswordRequired);
     QVERIFY(!PDFDocumentSigner::getResultMessage(signResult).isEmpty());
     QVERIFY(signedDocument.isEmpty());
+}
+
+void HostileFilesTest::pkcs12HugeIterationCount()
+{
+    // Every .pfx file of the certificate folder is read at startup; a file asking for
+    // INT_MAX iterations hung the application at every start
+    std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(EVP_EC_gen("P-256"), &EVP_PKEY_free);
+    QVERIFY(key);
+    std::unique_ptr<X509, decltype(&X509_free)> certificate(X509_new(), &X509_free);
+    QVERIFY(certificate);
+    X509_set_version(certificate.get(), 2);
+    ASN1_INTEGER_set(X509_get_serialNumber(certificate.get()), 1);
+    X509_gmtime_adj(X509_getm_notBefore(certificate.get()), 0);
+    X509_gmtime_adj(X509_getm_notAfter(certificate.get()), 3600);
+    X509_NAME* name = X509_get_subject_name(certificate.get());
+    X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, reinterpret_cast<const unsigned char*>("Hostile test"), -1, -1, 0);
+    X509_set_issuer_name(certificate.get(), name);
+    X509_set_pubkey(certificate.get(), key.get());
+    QVERIFY(X509_sign(certificate.get(), key.get(), EVP_sha256()) > 0);
+
+    auto toBytes = [](PKCS12* pkcs12)
+    {
+        unsigned char* buffer = nullptr;
+        const int length = i2d_PKCS12(pkcs12, &buffer);
+        QByteArray result(reinterpret_cast<const char*>(buffer), qMax(length, 0));
+        OPENSSL_free(buffer);
+        return result;
+    };
+
+    // An ordinary file (default encryption and iterations) is accepted
+    std::unique_ptr<PKCS12, decltype(&PKCS12_free)> ordinary(PKCS12_create("password", "Hostile test", key.get(), certificate.get(), nullptr, 0, 0, 0, 0, 0), &PKCS12_free);
+    QVERIFY(ordinary);
+    QVERIFY(PDFCertificateManager::isPKCS12IterationCountAcceptable(toBytes(ordinary.get())));
+
+    // MAC with INT_MAX iterations (the count is changed after the file is created,
+    // creating it with the count would take ages)
+    // (a MAC iteration count of 1 is not stored at all, 2 is)
+    std::unique_ptr<PKCS12, decltype(&PKCS12_free)> hostileMac(PKCS12_create("password", "Hostile test", key.get(), certificate.get(), nullptr, -1, -1, 1, 2, 0), &PKCS12_free);
+    QVERIFY(hostileMac);
+    const ASN1_INTEGER* macIterations = nullptr;
+    PKCS12_get0_mac(nullptr, nullptr, nullptr, &macIterations, hostileMac.get());
+    QVERIFY(macIterations);
+    ASN1_INTEGER_set(const_cast<ASN1_INTEGER*>(macIterations), std::numeric_limits<int>::max());
+    const QByteArray hostileMacData = toBytes(hostileMac.get());
+
+    QElapsedTimer timer;
+    timer.start();
+    QVERIFY(!PDFCertificateManager::isPKCS12IterationCountAcceptable(hostileMacData));
+    PDFCertificateEntry entry;
+    entry.pkcs12 = hostileMacData;
+    QVERIFY(!PDFCertificateManager::isCertificateValid(entry, "password"));
+    QVERIFY(timer.elapsed() < 1000);
+
+    // A shrouded key with more iterations than the limit (the certificate and the MAC are cheap)
+    std::unique_ptr<PKCS12, decltype(&PKCS12_free)> hostileKey(PKCS12_create("password", "Hostile test", key.get(), certificate.get(), nullptr, 0, -1,
+                                                                             int(PDFCertificateManager::MAXIMAL_PKCS12_ITERATIONS) + 1, 1, 0), &PKCS12_free);
+    QVERIFY(hostileKey);
+    QVERIFY(!PDFCertificateManager::isPKCS12IterationCountAcceptable(toBytes(hostileKey.get())));
+
+    // Garbage is not a PKCS#12 file - nothing to derive, nothing to refuse here
+    QVERIFY(PDFCertificateManager::isPKCS12IterationCountAcceptable(QByteArray("not a certificate")));
 }
 
 QTEST_GUILESS_MAIN(HostileFilesTest)

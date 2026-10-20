@@ -2031,7 +2031,8 @@ PDFSecurityHandlerPointer PDFSecurityHandlerFactory::createSecurityHandler(const
         openssl_ptr<BIO> pksBuffer(BIO_new(BIO_s_mem()), &BIO_free_all);
         BIO_write(pksBuffer.get(), data.constData(), data.length());
 
-        openssl_ptr<PKCS12> pkcs12(d2i_PKCS12_bio(pksBuffer.get(), nullptr), &PKCS12_free);
+        // PDF Fire: a hostile iteration count is refused (it would hang the application)
+        openssl_ptr<PKCS12> pkcs12(PDFCertificateManager::isPKCS12IterationCountAcceptable(data) ? d2i_PKCS12_bio(pksBuffer.get(), nullptr) : nullptr, &PKCS12_free);
         if (pkcs12)
         {
             QByteArray password = PDFStandardOrPublicSecurityHandler::adjustPassword(settings.userPassword, 0);

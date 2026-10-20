@@ -21,6 +21,7 @@
 // SOFTWARE.
 
 #include "pdffirecertificateauthority.h"
+#include "pdfcertificatemanager.h"
 #include "pdfcertificatestore.h"
 
 #include <QCoreApplication>
@@ -263,6 +264,12 @@ std::optional<PDFFireSigningPolicy> readPolicyExtension(X509* certificate)
 /// stores the certificates of the members so, a certificate is public anyway).
 X509* readOwnerCertificate(const QByteArray& pkcs12Data, const QString& password, bool authority = false)
 {
+    // PDF Fire: refuse a hostile iteration count (it would hang the application)
+    if (!PDFCertificateManager::isPKCS12IterationCountAcceptable(pkcs12Data))
+    {
+        return nullptr;
+    }
+
     ssl_ptr<BIO> bio(BIO_new_mem_buf(pkcs12Data.constData(), int(pkcs12Data.size())), &BIO_free_all);
     ssl_ptr<PKCS12> pkcs12(d2i_PKCS12_bio(bio.get(), nullptr), &PKCS12_free);
     if (!pkcs12)
@@ -487,7 +494,8 @@ bool PDFFireCertificateAuthority::open(const QString& directory, const QString& 
     keyFile.close();
 
     ssl_ptr<BIO> bio(BIO_new_mem_buf(keyFileData.constData(), int(keyFileData.size())), &BIO_free_all);
-    ssl_ptr<PKCS12> pkcs12(d2i_PKCS12_bio(bio.get(), nullptr), &PKCS12_free);
+    // PDF Fire: a hostile iteration count is refused (it would hang the application)
+    ssl_ptr<PKCS12> pkcs12(PDFCertificateManager::isPKCS12IterationCountAcceptable(keyFileData) ? d2i_PKCS12_bio(bio.get(), nullptr) : nullptr, &PKCS12_free);
     std::unique_ptr<KeyData> keyData(new KeyData());
     const QByteArray passphraseUtf8 = passphrase.toUtf8();
     if (!pkcs12 || PKCS12_parse(pkcs12.get(), passphraseUtf8.constData(), &keyData->key, &keyData->certificate, nullptr) != 1 ||

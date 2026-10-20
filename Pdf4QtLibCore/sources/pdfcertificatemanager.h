@@ -67,6 +67,15 @@ public:
     static QString generateCertificateFileName();
     static bool isCertificateValid(const PDFCertificateEntry& certificateEntry, QString password);
 
+    /// PDF Fire: largest iteration count of a key derivation accepted in a PKCS#12 file
+    static constexpr long MAXIMAL_PKCS12_ITERATIONS = 2'000'000;
+
+    /// PDF Fire: returns false, if a PKCS#12 file asks for more than MAXIMAL_PKCS12_ITERATIONS
+    /// iterations of its MAC or of an encryption visible without the password. Each iteration
+    /// is a hash, so a hostile .pfx with INT_MAX iterations hung the application at every
+    /// start (all .pfx files of the certificate folder are read at startup).
+    static bool isPKCS12IterationCountAcceptable(const QByteArray& pkcs12Data);
+
     /// PDF Fire: name of the owner of the certificate (common name), read with
     /// the password (a protected certificate shows no name without it)
     static QString getCertificateOwnerName(const PDFCertificateEntry& certificateEntry, QString password);
