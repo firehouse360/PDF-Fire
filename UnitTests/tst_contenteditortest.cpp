@@ -30,6 +30,8 @@
 #include "pdfrenderer.h"
 #include "pdfpagecontenteditorcontentstreambuilder.h"
 #include "pdfpagecontenteditorprocessor.h"
+#include "pdffireeditedtext.h"
+#include "pdffiretextelementupdater.h"
 #include "pdfstreamfilters.h"
 #include "pdftransparencyrenderer.h"
 #include "pdfutils.h"
@@ -135,6 +137,10 @@ private slots:
     void test_transparency_group_color_space_is_preserved();
     void test_shading_icc_alternate_color_space_from_form_resources_is_preserved();
     void test_clip_path_curves_are_preserved();
+    void test_inline_edit_preview_equals_written_text();
+    void test_inline_edit_missing_glyph_uses_fallback_font();
+    void test_inline_edit_missing_space_is_a_move();
+    void test_inline_edit_joins_line_fragments();
 
 private:
     enum class Variant
@@ -195,6 +201,13 @@ private:
 
     /// Adds a standard Type 1 font object into the document and returns a reference to it
     static pdf::PDFObject addStandardFontObject(pdf::PDFDocumentBuilder* builder, const char* baseFont);
+
+    /// Creates a document with the text \p pageContent written in the font /F1, which
+    /// is a subset (ABCDEF+Helvetica) with widths for the codes from \p firstChar on
+    static pdf::PDFDocument createDocumentWithSubsetFont(QByteArray pageContent, int firstChar, std::vector<pdf::PDFReal> widths);
+
+    /// Returns the plain text of the only text element of the page, as the user edits it
+    static QString getPlainTextOfOnlyTextElement(const pdf::PDFDocument* document);
 
     /// Returns the number of shading elements of the page content
     static size_t getShadingElementCount(const pdf::PDFEditedPageContent& content);
@@ -2407,6 +2420,259 @@ void ContentEditorTest::test_clip_path_curves_are_preserved()
     }
 
     QCOMPARE(renderPage(modifiedDocument.data()), originalImage);
+}
+
+static pdf::PDFObject createIntegerArrayObject(const std::vector<pdf::PDFReal>& numbers)
+{
+    // Widths of a simple font are read as integers
+    pdf::PDFArrayBuilder array;
+    for (pdf::PDFReal number : numbers)
+    {
+        array.appendItem(pdf::PDFObject::createInteger(qRound(number)));
+    }
+    return pdf::PDFObject::createArray(std::move(array));
+}
+
+pdf::PDFDocument ContentEditorTest::createDocumentWithSubsetFont(QByteArray pageContent, int firstChar, std::vector<pdf::PDFReal> widths)
+{
+    return createDocument(pageContent, [firstChar, widths](pdf::PDFDocumentBuilder* builder)
+    {
+        const int lastChar = firstChar + int(widths.size()) - 1;
+        pdf::PDFObject fontObject = createDictionaryObject({ { "Type", pdf::PDFObject::createName("Font") },
+                                                             { "Subtype", pdf::PDFObject::createName("Type1") },
+                                                             { "BaseFont", pdf::PDFObject::createName("ABCDEF+Helvetica") },
+                                                             { "Encoding", pdf::PDFObject::createName("WinAnsiEncoding") },
+                                                             { "FirstChar", pdf::PDFObject::createInteger(firstChar) },
+                                                             { "LastChar", pdf::PDFObject::createInteger(lastChar) },
+                                                             { "Widths", createIntegerArrayObject(widths) } });
+        pdf::PDFDictionaryBuilder resources;
+        resources.addEntry(pdf::PDFInplaceOrMemoryString("Font"),
+                           createDictionaryObject({ { "F1", pdf::PDFObject::createReference(builder->addObject(std::move(fontObject))) } }));
+        return resources;
+    });
+}
+
+QString ContentEditorTest::getPlainTextOfOnlyTextElement(const pdf::PDFDocument* document)
+{
+    pdf::PDFEditedPageContent content = processPageContent(document);
+    if (content.getElementCount() != 1 || !content.getElement(0)->asText())
+    {
+        return QString();
+    }
+    return pdf::PDFEditedTextMarkup(content.getElement(0)->asText()->getItemsAsText()).getPlainText();
+}
+
+void ContentEditorTest::test_inline_edit_preview_equals_written_text()
+{
+    // PDF Fire: while a text is edited in place, the page shows a preview of the edited
+    // element (PDFFireTextElementUpdater, the same function makes the edit). The glyphs
+    // of the preview must be exactly the glyphs of the document, after the edit has been
+    // applied and the page has been written (as on saving) and read again.
+    pdf::PDFDocument document = createDocumentWithText("BT /F1 24 Tf 20 100 Td (Hello) Tj ET");
+    pdf::PDFEditedPageContent content = processPageContent(&document);
+    QCOMPARE(content.getElementCount(), size_t(1));
+
+    pdf::PDFEditedPageContentElementText* element = content.getElement(0)->asText();
+    QVERIFY(element);
+    const QRectF originalBoundingBox = element->getBoundingBox();
+
+    pdf::PDFCMSGeneric cms;
+    QStringList errors;
+    std::unique_ptr<pdf::PDFEditedPageContentElementText> preview(element->clone());
+    QVERIFY(pdf::PDFFireTextElementUpdater::setPlainText(&document, 0, content, preview.get(), "Hello World", &cms, &errors));
+    QVERIFY2(errors.isEmpty(), qPrintable(errors.join("\n")));
+    QVERIFY2(pdf::PDFEditedTextMarkup(preview->getItemsAsText()).getPlainText() == QString("Hello World"), qPrintable(preview->getItemsAsText()));
+
+    // The untouched characters stay, where they were; the line is longer
+    QVERIFY(qAbs(preview->getBoundingBox().left() - originalBoundingBox.left()) < 0.01);
+    QVERIFY(preview->getBoundingBox().width() > originalBoundingBox.width() * 1.5);
+
+    // The edit is applied (it is the preview) and the page is written
+    *element = *preview;
+    QByteArray outputContent;
+    pdf::PDFDocumentPointer writtenDocument = rewritePageContent(&document, content, false, &outputContent);
+    QVERIFY(writtenDocument);
+
+    pdf::PDFEditedPageContent writtenContent = processPageContent(writtenDocument.data());
+    QCOMPARE(writtenContent.getElementCount(), size_t(1));
+    const pdf::PDFEditedPageContentElementText* writtenElement = writtenContent.getElement(0)->asText();
+    QVERIFY(writtenElement);
+    QCOMPARE(pdf::PDFEditedTextMarkup(writtenElement->getItemsAsText()).getPlainText(), QString("Hello World"));
+
+    const QPainterPath previewPath = preview->getTransform().map(preview->getTextPath());
+    const QPainterPath writtenPath = writtenElement->getTransform().map(writtenElement->getTextPath());
+    QVERIFY(!previewPath.isEmpty());
+    QCOMPARE(previewPath.elementCount(), writtenPath.elementCount());
+    for (int i = 0; i < previewPath.elementCount(); ++i)
+    {
+        const QPainterPath::Element a = previewPath.elementAt(i);
+        const QPainterPath::Element b = writtenPath.elementAt(i);
+        QVERIFY2(a.type == b.type && qAbs(a.x - b.x) < 0.001 && qAbs(a.y - b.y) < 0.001,
+                 qPrintable(QString("Glyph outline point %1 differs: %2,%3 vs %4,%5").arg(i).arg(a.x).arg(a.y).arg(b.x).arg(b.y)));
+    }
+
+    // A failed preview does not change the element (the editor keeps the typed text)
+    std::unique_ptr<pdf::PDFEditedPageContentElementText> unchanged(element->clone());
+    QVERIFY(!pdf::PDFFireTextElementUpdater::setPlainText(&document, 5, content, unchanged.get(), "Other", &cms, &errors));
+    QCOMPARE(unchanged->getItemsAsText(), element->getItemsAsText());
+}
+
+void ContentEditorTest::test_inline_edit_missing_glyph_uses_fallback_font()
+{
+    // The subset font has no glyph for 'W' (its width is zero - the subset left it out).
+    // Before PDF Fire 0.1.14 the code of 'W' of the encoding was used anyway, and
+    // the typed letter was drawn as nothing. It must be written with a fallback font.
+    std::vector<pdf::PDFReal> widths(126 - 32 + 1, 556.0);
+    widths['W' - 32] = 0.0;
+    pdf::PDFDocument document = createDocumentWithSubsetFont("BT /F1 24 Tf 20 100 Td (Hello) Tj ET", 32, widths);
+
+    pdf::PDFEditedPageContent content = processPageContent(&document);
+    QCOMPARE(content.getElementCount(), size_t(1));
+    pdf::PDFEditedPageContentElementText* element = content.getElement(0)->asText();
+    QVERIFY(element);
+
+    pdf::PDFCMSGeneric cms;
+    QStringList errors;
+    std::unique_ptr<pdf::PDFEditedPageContentElementText> preview(element->clone());
+    QVERIFY(pdf::PDFFireTextElementUpdater::setPlainText(&document, 0, content, preview.get(), "Hello World", &cms, &errors));
+
+    // The substitute font has the glyph (no "empty glyph" error)
+    QVERIFY2(errors.isEmpty(), qPrintable(errors.join("\n")));
+
+    *element = *preview;
+    QByteArray outputContent;
+    pdf::PDFDocumentPointer writtenDocument = rewritePageContent(&document, content, false, &outputContent);
+    QVERIFY(writtenDocument);
+    QVERIFY2(pdf::PDFEditedTextMarkup(preview->getItemsAsText()).getPlainText() == QString("Hello World"), qPrintable(preview->getItemsAsText()));
+    QCOMPARE(getPlainTextOfOnlyTextElement(writtenDocument.data()), QString("Hello World"));
+
+    // The 'W' is written in a fallback font (a Type 3 font with the glyph of a similar
+    // font), not in the subset font F1, which has no glyph for it
+    QVERIFY2(outputContent.contains("/PDF4QT_Fb1 24 Tf"), outputContent.constData());
+
+    // The fallback font has the outline of the letter (it is not blank)
+    pdf::PDFEditedPageContent writtenContent = processPageContent(writtenDocument.data());
+    const pdf::PDFEditedPageContentElementText* writtenElement = writtenContent.getElement(0)->asText();
+    QVERIFY(writtenElement);
+    int glyphCount = 0;
+    QString writtenCharacters;
+    for (const pdf::PDFEditedPageContentElementText::Item& item : writtenElement->getItems())
+    {
+        for (const pdf::TextSequenceItem& glyph : item.textSequence.items)
+        {
+            if (!glyph.character.isNull())
+            {
+                writtenCharacters += glyph.character;
+            }
+            if (glyph.character == QChar('W'))
+            {
+                // A glyph of a Type 3 font is its content stream (lines and curves of the outline)
+                static const QRegularExpression pathExpression(QStringLiteral("\\s[lc]\\s"));
+                const bool hasOutline = (glyph.glyph && !glyph.glyph->isEmpty()) ||
+                                        (glyph.characterContentStream && QString::fromLatin1(*glyph.characterContentStream).contains(pathExpression));
+                QVERIFY(hasOutline);
+                ++glyphCount;
+            }
+        }
+    }
+    QCOMPARE(glyphCount, 1);
+    QCOMPARE(writtenCharacters, QString("Hello World"));
+
+    // The fallback glyph is written with the width it had in the preview: the text
+    // after it is at the same place
+    const QRectF previewBox = preview->getTransform().mapRect(preview->getTextPath().boundingRect());
+    const QRectF writtenBox = writtenElement->getTransform().mapRect(writtenElement->getTextPath().boundingRect());
+    QVERIFY(qAbs(previewBox.left() - writtenBox.left()) < 0.01 && qAbs(previewBox.right() - writtenBox.right()) < 0.01);
+}
+
+void ContentEditorTest::test_inline_edit_missing_space_is_a_move()
+{
+    // The subset font has no space (its widths start at '!'). A typed space is written
+    // as a move of the text position, as wide as a space, not as a glyph of a fallback font.
+    std::vector<pdf::PDFReal> widths(126 - 33 + 1, 556.0);
+    pdf::PDFDocument document = createDocumentWithSubsetFont("BT /F1 24 Tf 20 100 Td (Hello) Tj ET", 33, widths);
+
+    pdf::PDFEditedPageContent content = processPageContent(&document);
+    QCOMPARE(content.getElementCount(), size_t(1));
+    pdf::PDFEditedPageContentElementText* element = content.getElement(0)->asText();
+    QVERIFY(element);
+
+    pdf::PDFCMSGeneric cms;
+    QStringList errors;
+    QVERIFY(pdf::PDFFireTextElementUpdater::setPlainText(&document, 0, content, element, "Hello World", &cms, &errors));
+    QVERIFY2(errors.isEmpty(), qPrintable(errors.join("\n")));
+
+    QByteArray outputContent;
+    pdf::PDFDocumentPointer writtenDocument = rewritePageContent(&document, content, false, &outputContent);
+    QVERIFY(writtenDocument);
+    QVERIFY2(!outputContent.contains("PDF4QT_Fb"), outputContent.constData());
+
+    // A move of a space (a negative number in the TJ array, at least 0.22 of the font size)
+    static const QRegularExpression moveExpression(QStringLiteral("> (-[0-9.]+) <"));
+    const QRegularExpressionMatch match = moveExpression.match(QString::fromLatin1(outputContent));
+    QVERIFY2(match.hasMatch(), outputContent.constData());
+    QVERIFY(match.captured(1).toDouble() <= -220.0);
+    QCOMPARE(getPlainTextOfOnlyTextElement(writtenDocument.data()), QString("Hello World"));
+}
+
+void ContentEditorTest::test_inline_edit_joins_line_fragments()
+{
+    // PDF Fire: Word writes a new text object, where the font of a line changes (for
+    // example a non-breaking hyphen in another font). The texts of the line are joined
+    // into one text, so the line is edited as one - and the texts after the edited one
+    // follow it. Helvetica: "Hello" is 27.336 wide at 12 pt, "World" 31.332; Courier "-"
+    // is 7.2. "again" starts 3.6 (0.3 em, a word gap) after "World".
+    const QByteArray pageContent = "BT /F1 12 Tf 20 100 Td (Hello) Tj ET "
+                                   "BT /F2 12 Tf 47.336 100 Td (-) Tj ET "
+                                   "BT /F1 12 Tf 54.536 100 Td (World) Tj ET "
+                                   "BT /F1 12 Tf 89.468 100 Td (again) Tj ET "
+                                   "BT /F1 12 Tf 20 150 Td (Other) Tj ET";
+    pdf::PDFDocument document = createDocument(pageContent, [](pdf::PDFDocumentBuilder* builder)
+    {
+        pdf::PDFDictionaryBuilder resources;
+        resources.addEntry(pdf::PDFInplaceOrMemoryString("Font"),
+                           createDictionaryObject({ { "F1", addStandardFontObject(builder, "Helvetica") },
+                                                    { "F2", addStandardFontObject(builder, "Courier") } }));
+        return resources;
+    });
+
+    pdf::PDFEditedPageContent content = processPageContent(&document);
+    QCOMPARE(content.getElementCount(), size_t(5));
+
+    std::vector<const pdf::PDFEditedPageContentElementText*> fragments;
+    for (size_t i = 0; i < 4; ++i)
+    {
+        fragments.push_back(content.getElement(i)->asText());
+        QVERIFY(fragments.back());
+    }
+
+    std::unique_ptr<pdf::PDFEditedPageContentElementText> joined = pdf::PDFFireTextElementUpdater::joinLineFragments(fragments);
+    QVERIFY(joined);
+    QCOMPARE(pdf::PDFEditedTextMarkup(joined->getItemsAsText()).getPlainText(), QString("Hello-World again"));
+
+    // A text on another line is not joined
+    QVERIFY(!pdf::PDFFireTextElementUpdater::joinLineFragments({ fragments[0], content.getElement(4)->asText() }));
+
+    // The joined text is written as one text: the texts after the typed words move
+    // by the width of the typed words ("Big " = 20.676)
+    QRectF originalBox;
+    for (const pdf::PDFEditedPageContentElementText* fragment : fragments)
+    {
+        originalBox = originalBox.united(fragment->getBoundingBox());
+    }
+
+    pdf::PDFCMSGeneric cms;
+    QStringList errors;
+    QVERIFY(pdf::PDFFireTextElementUpdater::setPlainText(&document, 0, content, joined.get(), "Big Hello-World again", &cms, &errors));
+    QVERIFY2(errors.isEmpty(), qPrintable(errors.join("\n")));
+    QCOMPARE(pdf::PDFEditedTextMarkup(joined->getItemsAsText()).getPlainText(), QString("Big Hello-World again"));
+
+    const QRectF joinedBox = joined->getBoundingBox();
+    QVERIFY2(qAbs(joinedBox.left() - originalBox.left()) < 0.01, qPrintable(QString::number(joinedBox.left() - originalBox.left())));
+    QVERIFY2(qAbs(joinedBox.right() - originalBox.right() - 20.676) < 0.5, qPrintable(QString::number(joinedBox.right() - originalBox.right())));
+
+    // The hyphen is still written in its own font
+    QVERIFY2(joined->getItemsAsText().contains("font=\"F2\""), qPrintable(joined->getItemsAsText()));
 }
 
 QTEST_MAIN(ContentEditorTest)

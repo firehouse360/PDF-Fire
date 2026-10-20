@@ -26,6 +26,7 @@
 #include "pdfpagecontentprocessor.h"
 
 #include <map>
+#include <set>
 #include <memory>
 #include <functional>
 
@@ -302,9 +303,17 @@ public:
     /// \param initialState Graphic state at the beginning of the text object
     /// \param items Text items
     /// \param getFontKey Returns the key of the font used by the font command
+    /// \param followingItems PDF Fire: indices of the items, which start a text following
+    ///        the text before them on the same line (a text object of its own, which is
+    ///        joined to the line). Their position is written as a move after the text
+    ///        before them (a kerning), so they follow it, when the text before them changes.
+    /// \param isFollowingResolved PDF Fire: set to false, if the position of some of the
+    ///        following items can't be written as a move (another line, an unknown width)
     static QString createItemsAsText(const PDFPageContentProcessorState& initialState,
                                      const std::vector<Item>& items,
-                                     const std::function<QByteArray(const PDFFont*)>& getFontKey);
+                                     const std::function<QByteArray(const PDFFont*)>& getFontKey,
+                                     const std::set<size_t>* followingItems = nullptr,
+                                     bool* isFollowingResolved = nullptr);
 
     QString getItemsAsText() const;
     void setItemsAsText(const QString& newItemsAsText);
@@ -463,6 +472,7 @@ private:
 
     /// Is the 'sh' operator being processed?
     bool m_isShadingOperatorActive = false;
+    bool m_isTextSequenceProcessed = false;   ///< PDF Fire: a shown text is being drawn (glyphs of a Type 3 font are painted)
 };
 
 }   // namespace pdf
