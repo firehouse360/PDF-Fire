@@ -4,14 +4,14 @@
 # against Fedora's own Qt and libraries, stages `cmake --install` under /opt/pdf-fire, and then
 # runs rpmbuild on this spec in the same container with the stage passed in:
 #
-#   rpmbuild -bb pdf-fire.spec --define "pdffire_stage <dir>" --define "pdffire_version 0.1.13" \
+#   rpmbuild -bb pdf-fire.spec --define "pdffire_stage <dir>" --define "pdffire_version 0.1.14" \
 #            --define "pdffire_engine 1.6.0.0" --define "pdffire_private_libs <regex>"
 #
 # Everything private lives in /opt/pdf-fire (the programs carry RPATH $ORIGIN/../lib), the same
 # layout as the .deb from scripts/make-deb.sh, so nothing collides with a Fedora pdf4qt package.
 # The package is left UNSIGNED on purpose — signing is a separate step.
 
-%{!?pdffire_version: %global pdffire_version 0.1.13}
+%{!?pdffire_version: %global pdffire_version 0.1.14}
 %{!?pdffire_engine: %global pdffire_engine 1.6.0.0}
 %{!?pdffire_stage: %{error:pdffire_stage is not set - build with scripts/make-rpm.sh}}
 
@@ -108,6 +108,23 @@ exit 0
 %{_datadir}/icons/hicolor/*/apps/pdf-fire.*
 
 %changelog
+* Tue Oct 20 2026 PDF Fire <pdffire.constant740@passmail.net> - 0.1.14-1
+- Edit Text: a new button next to Add Text - point at a line or paragraph, click, and type. While you
+  type you see the document's own font in place (no white box); Esc cancels, Enter / Ctrl+Enter or a
+  click outside applies, and a failed edit keeps what you typed.
+- Better text encoding: characters the font lacks use a matching fallback font instead of a blank;
+  Linux fonts (DejaVu, Liberation, Noto, Carlito) are tried first.
+- Comments: notes show the author (your login name, changeable) and a threaded Comments panel.
+- Pages: Organize Pages (drag, duplicate, reverse, extract, split), pictures to PDF, Insert PDF keeps
+  bookmarks, page size.
+- Fill & Sign: saved signature and initials, placed with one click; draw pad with Undo and Clear.
+- New: Flatten, redaction presets, a check for fake (cover-up) redactions, Compare Files, Word Count,
+  movable tabs and middle-click to close a tab.
+- Placing boxes and shapes uses a small crosshair pointer instead of lines across the whole view.
+- Security: hardened against malicious PDF files (decompression limits, xref/predictor/run-length
+  bounds, nesting limits, huge image/function sizes, PKCS#12 iteration cap) and a fixed crash on
+  cropped images (upstream #431).
+
 * Sun Oct 11 2026 PDF Fire <pdffire.constant740@passmail.net> - 0.1.13-1
 - Firehouse 360: the QR code and the "Verify:" line on a signature are links - a click opens the
   verify page (the text of a signature is drawn as outlines, so it can't be selected).
