@@ -513,8 +513,11 @@ PDFAnnotationPtr PDFAnnotation::parse(const PDFObjectStorage* storage, PDFObject
 
         textAnnotation->m_open = loader.readBooleanFromDictionary(dictionary, "Open", false);
         textAnnotation->m_iconName = loader.readNameFromDictionary(dictionary, "Name");
-        textAnnotation->m_state = loader.readTextStringFromDictionary(dictionary, "State", "Unmarked");
-        textAnnotation->m_stateModel = loader.readTextStringFromDictionary(dictionary, "StateModel", "Marked");
+        // PDF Fire: the state is empty, when the entry is missing, so a status reply (a reply with /State)
+        // can be told from an ordinary reply. Without /StateModel, the model follows from the state.
+        textAnnotation->m_state = loader.readTextStringFromDictionary(dictionary, "State", QString());
+        const bool isMarkedState = textAnnotation->m_state.isEmpty() || textAnnotation->m_state == "Marked" || textAnnotation->m_state == "Unmarked";
+        textAnnotation->m_stateModel = loader.readTextStringFromDictionary(dictionary, "StateModel", isMarkedState ? QString("Marked") : QString("Review"));
     }
     else if (subtype == "Link")
     {
@@ -2075,44 +2078,122 @@ std::vector<PDFAppeareanceStreams::Key> PDFTextAnnotation::getDrawKeys(const PDF
 
 void PDFTextAnnotation::draw(AnnotationDrawParameters& parameters) const
 {
-    QColor strokeColor = parameters.colorConvertor.convert(QColor::fromRgbF(0.0, 0.0, 0.0, getStrokeOpacity()), false, true);
-    QColor fillColor = (parameters.key.first == PDFAppeareanceStreams::Appearance::Normal) ? QColor::fromRgbF(1.0, 1.0, 0.0, getFillOpacity()) :
-                                                                                             QColor::fromRgbF(1.0, 0.0, 0.0, getFillOpacity());
-    fillColor = parameters.colorConvertor.convert(fillColor, false, false);
+    // PDF Fire: the note icon of other PDF editors - a speech bubble (Comment) or a page with a folded
+    // corner (the other icons), filled with the colour of the note (/C, yellow #FFD100 by default),
+    // with a dark grey outline. It replaces the yellow circle with an emoji, which ignored the colour.
+    // Ported from PdfCraft crates/annot/src/appearance.rs note_icon (MIT OR Apache-2.0,
+    // Copyright (c) 2026 ArtCraft Team and the PdfCraft contributors).
+    QColor noteColor = getColor().empty() ? QColor::fromRgbF(1.0, 0.82, 0.0) : getDrawColorFromAnnotationColor(getColor(), 1.0);
+    switch (parameters.key.first)
+    {
+        case PDFAppeareanceStreams::Appearance::Rollover:
+            noteColor = noteColor.lighter(115);
+            break;
+
+        case PDFAppeareanceStreams::Appearance::Down:
+            noteColor = noteColor.darker(115);
+            break;
+
+        default:
+            break;
+    }
+    noteColor.setAlphaF(getFillOpacity());
+
+    const QColor strokeColor = parameters.colorConvertor.convert(QColor::fromRgbF(0.25, 0.25, 0.25, getStrokeOpacity()), false, true);
+    const QColor fillColor = parameters.colorConvertor.convert(noteColor, false, false);
 
     // PDF Fire: the icon was 32 points, which is much bigger than in other viewers
     constexpr const PDFReal rectSize = 20.0;
-    constexpr const PDFReal penWidth = 1.25;
+    constexpr const PDFReal penWidth = 0.8;
 
     QPainter& painter = *parameters.painter;
     painter.setCompositionMode(getCompositionMode());
     QRectF rectangle = getRectangle();
     rectangle.setSize(QSizeF(rectSize, rectSize));
 
+    // The drawing is defined in a 20 x 20 box with the origin at the bottom left corner (y axis upwards)
+    const QPointF origin = rectangle.topLeft();
+    auto p = [&origin](PDFReal x, PDFReal y) { return origin + QPointF(x, y); };
+
     QPen pen(strokeColor);
     pen.setWidthF(penWidth);
+    pen.setJoinStyle(Qt::RoundJoin);
+    pen.setCapStyle(Qt::RoundCap);
     painter.setPen(pen);
-
     painter.setBrush(QBrush(fillColor, Qt::SolidPattern));
 
-    QRectF ellipseRectangle = rectangle;
-    ellipseRectangle.adjust(penWidth, penWidth, -penWidth, -penWidth);
+    QPainterPath outline;
+    QPainterPath lines;
+    QString glyph;
+    if (m_iconName == "Comment" || m_iconName.isEmpty())
+    {
+        outline.moveTo(p(3, 18.5));
+        outline.lineTo(p(17, 18.5));
+        outline.cubicTo(p(18.5, 18.5), p(18.5, 17), p(18.5, 17));
+        outline.lineTo(p(18.5, 8));
+        outline.cubicTo(p(18.5, 6.5), p(17, 6.5), p(17, 6.5));
+        outline.lineTo(p(9.5, 6.5));
+        outline.lineTo(p(5, 2));
+        outline.lineTo(p(5.5, 6.5));
+        outline.lineTo(p(3, 6.5));
+        outline.cubicTo(p(1.5, 6.5), p(1.5, 8), p(1.5, 8));
+        outline.lineTo(p(1.5, 17));
+        outline.cubicTo(p(1.5, 18.5), p(3, 18.5), p(3, 18.5));
+        outline.closeSubpath();
 
-    // Draw the ellipse
-    painter.drawEllipse(ellipseRectangle);
+        lines.moveTo(p(4.5, 15));
+        lines.lineTo(p(15.5, 15));
+        lines.moveTo(p(4.5, 12.5));
+        lines.lineTo(p(15.5, 12.5));
+        lines.moveTo(p(4.5, 10));
+        lines.lineTo(p(11.5, 10));
+    }
+    else
+    {
+        outline.moveTo(p(3, 19));
+        outline.lineTo(p(13, 19));
+        outline.lineTo(p(17, 15));
+        outline.lineTo(p(17, 1));
+        outline.lineTo(p(3, 1));
+        outline.closeSubpath();
 
-    QFont font = painter.font();
-    font.setPixelSize(10.0);
+        lines.moveTo(p(13, 19));
+        lines.lineTo(p(13, 15));
+        lines.lineTo(p(17, 15));
 
-    QString text = getTextForIcon(m_iconName);
+        if (m_iconName == "Note")
+        {
+            lines.moveTo(p(5.5, 12));
+            lines.lineTo(p(14.5, 12));
+            lines.moveTo(p(5.5, 9));
+            lines.lineTo(p(14.5, 9));
+            lines.moveTo(p(5.5, 6));
+            lines.lineTo(p(11.5, 6));
+        }
+        else
+        {
+            // Help, Key, Insert, paragraphs - the page shows the symbol of the icon
+            glyph = getTextForIcon(m_iconName);
+        }
+    }
 
-    QPainterPath textPath;
-    textPath.addText(0.0, 0.0, font, text);
-    textPath = QTransform(1.0, 0.0, 0.0, -1.0, 0.0, 0.0).map(textPath);
-    QRectF textBoundingRect = textPath.boundingRect();
-    QPointF offset = rectangle.center() - textBoundingRect.center();
-    textPath.translate(offset);
-    painter.fillPath(textPath, QBrush(strokeColor, Qt::SolidPattern));
+    painter.drawPath(outline);
+    painter.setBrush(Qt::NoBrush);
+    painter.drawPath(lines);
+
+    if (!glyph.isEmpty())
+    {
+        QFont font = painter.font();
+        font.setPixelSize(9.0);
+
+        QPainterPath textPath;
+        textPath.addText(0.0, 0.0, font, glyph);
+        textPath = QTransform(1.0, 0.0, 0.0, -1.0, 0.0, 0.0).map(textPath);
+        QRectF textBoundingRect = textPath.boundingRect();
+        QPointF offset = p(10, 8.5) - textBoundingRect.center();
+        textPath.translate(offset);
+        painter.fillPath(textPath, QBrush(strokeColor, Qt::SolidPattern));
+    }
 
     parameters.boundingRectangle = rectangle;
 }
