@@ -29,9 +29,67 @@
 #include <QTextCursor>
 #include <QTextLayout>
 #include <QTimer>
+#include <QSyntaxHighlighter>
 
 namespace pdf
 {
+
+namespace
+{
+
+/// PDF Fire: makes the text of an editor invisible without changing the document
+/// of the editor (no step of undo, the typed characters are invisible too). The
+/// page under the editor shows the text with the glyphs of the document instead.
+class PDFFireTransparentTextHighlighter : public QSyntaxHighlighter
+{
+public:
+    using QSyntaxHighlighter::QSyntaxHighlighter;
+
+protected:
+    virtual void highlightBlock(const QString& text) override
+    {
+        QTextCharFormat format;
+        format.setForeground(Qt::transparent);
+        setFormat(0, int(text.size()), format);
+    }
+};
+
+// The editor is on the paper of the page - its colours are fixed, they are not
+// the colours of the (possibly dark) user interface
+const char* const OPAQUE_STYLE = "%1 { background: white; color: black; border: 1px solid #E8590C; "
+                                 "selection-background-color: #9DC3F2; selection-color: black; }";
+
+// In the preview mode only the caret (the colour of the text) and the selection
+// are visible, the frame is drawn by the page content scene around the real text
+const char* const PREVIEW_STYLE = "%1 { background: transparent; color: #202020; border: none; "
+                                  "selection-background-color: rgba(242, 86, 29, 70); selection-color: transparent; }";
+
+/// Turns the preview mode of the editor on or off
+template<typename Editor>
+void setEditorPreviewMode(Editor* editor, QSyntaxHighlighter*& highlighter, bool previewMode, const char* className)
+{
+    if (previewMode == (highlighter != nullptr))
+    {
+        return;
+    }
+
+    if (previewMode)
+    {
+        highlighter = new PDFFireTransparentTextHighlighter(editor->document());
+        editor->setStyleSheet(QString::fromLatin1(PREVIEW_STYLE).arg(QLatin1String(className)));
+        editor->viewport()->setAutoFillBackground(false);
+    }
+    else
+    {
+        highlighter->setDocument(nullptr);
+        delete highlighter;
+        highlighter = nullptr;
+        editor->setStyleSheet(QString::fromLatin1(OPAQUE_STYLE).arg(QLatin1String(className)));
+        editor->viewport()->setAutoFillBackground(true);
+    }
+}
+
+}   // namespace
 
 PDFFireInlineTextEditor::PDFFireInlineTextEditor(QWidget* parent) :
     BaseClass(parent)
@@ -46,8 +104,20 @@ PDFFireInlineTextEditor::PDFFireInlineTextEditor(QWidget* parent) :
     // The editor looks like the paper with the text on it, with a thin frame, so it
     // is clear, which text is being edited. The colours are fixed - the page is paper,
     // not a part of the (possibly dark) user interface.
-    setStyleSheet(QStringLiteral("QPlainTextEdit { background: white; color: black; border: 1px solid #E8590C; "
-                                 "selection-background-color: #9DC3F2; selection-color: black; }"));
+    setStyleSheet(QString::fromLatin1(OPAQUE_STYLE).arg(QLatin1String("QPlainTextEdit")));
+}
+
+void PDFFireInlineTextEditor::setPreviewMode(bool previewMode)
+{
+    setEditorPreviewMode(this, m_previewHighlighter, previewMode, "QPlainTextEdit");
+}
+
+void PDFFireInlineTextEditor::resume()
+{
+    m_isFinished = false;
+    show();
+    raise();
+    setFocus(Qt::OtherFocusReason);
 }
 
 void PDFFireInlineTextEditor::start(const QString& text, const QFont& font, const QRect& rect, QPoint clickPosition)
@@ -107,7 +177,8 @@ void PDFFireInlineTextEditor::keyPressEvent(QKeyEvent* event)
 
         case Qt::Key_Return:
         case Qt::Key_Enter:
-            // A line of a PDF is one line - Enter finishes the editing, as in a cell
+            // A line of a PDF is one line - Enter (and Ctrl+Enter, as in the paragraph
+            // editor) finishes the editing, as in a cell
             event->accept();
             finish();
             return;
@@ -159,8 +230,20 @@ PDFFireInlineParagraphEditor::PDFFireInlineParagraphEditor(QWidget* parent) :
     setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     setTabChangesFocus(true);
     document()->setDocumentMargin(0);
-    setStyleSheet(QStringLiteral("QTextEdit { background: white; color: black; border: 1px solid #E8590C; "
-                                 "selection-background-color: #9DC3F2; selection-color: black; }"));
+    setStyleSheet(QString::fromLatin1(OPAQUE_STYLE).arg(QLatin1String("QTextEdit")));
+}
+
+void PDFFireInlineParagraphEditor::setPreviewMode(bool previewMode)
+{
+    setEditorPreviewMode(this, m_previewHighlighter, previewMode, "QTextEdit");
+}
+
+void PDFFireInlineParagraphEditor::resume()
+{
+    m_isFinished = false;
+    show();
+    raise();
+    setFocus(Qt::OtherFocusReason);
 }
 
 void PDFFireInlineParagraphEditor::start(const QString& text, const QFont& font, const QRect& rect, qreal lineHeight, qreal firstLineIndent, QPoint clickPosition)

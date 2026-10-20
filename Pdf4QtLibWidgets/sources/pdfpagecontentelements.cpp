@@ -28,6 +28,7 @@
 #include "pdfutils.h"
 #include "pdfcms.h"
 #include "pdfpagecontenteditorprocessor.h"
+#include "pdfwidgettool.h"
 
 #include <QBuffer>
 #include <QPainter>
@@ -37,6 +38,8 @@
 #include <QApplication>
 #include <QImageReader>
 #include <QXmlStreamReader>
+
+#include <limits>
 
 namespace pdf
 {
@@ -439,6 +442,11 @@ PDFPageContentElement* PDFPageContentScene::getElementById(PDFInteger id) const
 
 void PDFPageContentScene::clear()
 {
+    m_hiddenElementIds.clear();
+    m_previewElements.clear();
+    m_textOutlines.clear();
+    m_hoveredTextElementId = INVALID_ELEMENT_ID;
+
     if (!m_elements.empty())
     {
         m_manipulator.reset();
@@ -517,6 +525,23 @@ void PDFPageContentScene::mousePressEvent(QWidget* widget, QMouseEvent* event)
         return;
     }
 
+    if (isTextEditInputActive())
+    {
+        // PDF Fire: a click on a text edits it, nothing is selected or moved
+        if (event->button() == Qt::LeftButton)
+        {
+            QPointF pagePoint;
+            const PDFInteger pageIndex = m_widget->getDrawWidgetProxy()->getPageUnderPoint(event->pos(), &pagePoint);
+            const PDFInteger elementId = getTextElementUnderPoint(pageIndex, pagePoint, getSnapPointDistanceThreshold());
+            if (elementId != INVALID_ELEMENT_ID)
+            {
+                event->accept();
+                Q_EMIT editElementRequest({ elementId });
+            }
+        }
+        return;
+    }
+
     MouseEventInfo info = getMouseEventInfo(widget, event->pos());
     if (info.isValid() || isMouseGrabbed())
     {
@@ -569,6 +594,18 @@ void PDFPageContentScene::mouseDoubleClickEvent(QWidget* widget, QMouseEvent* ev
         return;
     }
 
+    if (isTextEditInputActive())
+    {
+        // PDF Fire: the first click has already opened the editor
+        QPointF pagePoint;
+        const PDFInteger pageIndex = m_widget->getDrawWidgetProxy()->getPageUnderPoint(event->pos(), &pagePoint);
+        if (getTextElementUnderPoint(pageIndex, pagePoint, getSnapPointDistanceThreshold()) != INVALID_ELEMENT_ID)
+        {
+            event->accept();
+        }
+        return;
+    }
+
     MouseEventInfo info = getMouseEventInfo(widget, event->pos());
     if (info.isValid())
     {
@@ -589,7 +626,7 @@ void PDFPageContentScene::mouseReleaseEvent(QWidget* widget, QMouseEvent* event)
 {
     Q_UNUSED(widget);
 
-    if (!isActive())
+    if (!isActive() || isTextEditInputActive())
     {
         return;
     }
@@ -623,6 +660,33 @@ void PDFPageContentScene::mouseMoveEvent(QWidget* widget, QMouseEvent* event)
 
     if (!isActive())
     {
+        return;
+    }
+
+    if (m_isTextEditMode)
+    {
+        // PDF Fire: the text under the mouse is reported, so it can be outlined (not
+        // while another tool, which gets the mouse, is active)
+        QPointF pagePoint;
+        const PDFInteger pageIndex = m_widget->getDrawWidgetProxy()->getPageUnderPoint(event->pos(), &pagePoint);
+        const PDFInteger elementId = isTextEditInputActive() ? getTextElementUnderPoint(pageIndex, pagePoint, getSnapPointDistanceThreshold()) : INVALID_ELEMENT_ID;
+        if (elementId != INVALID_ELEMENT_ID)
+        {
+            if (!m_cursor.has_value() || m_cursor->shape() != Qt::IBeamCursor)
+            {
+                m_cursor = QCursor(Qt::IBeamCursor);
+            }
+        }
+        else
+        {
+            m_cursor = std::nullopt;
+        }
+
+        if (elementId != m_hoveredTextElementId)
+        {
+            m_hoveredTextElementId = elementId;
+            Q_EMIT textElementHovered(elementId);
+        }
         return;
     }
 
@@ -718,12 +782,21 @@ void PDFPageContentScene::drawElements(QPainter* painter,
 {
     for (const auto& element : m_elements)
     {
-        if (element->getPageIndex() != pageIndex)
+        if (element->getPageIndex() != pageIndex || m_hiddenElementIds.count(element->getElementId()))
         {
             continue;
         }
 
         element->drawPage(painter, this, pageIndex, compiledPage, layoutGetter, pagePointToDevicePointMatrix, convertor, errors);
+    }
+
+    // PDF Fire: the text being edited, as it will be written
+    for (const auto& element : m_previewElements)
+    {
+        if (element->getPageIndex() == pageIndex)
+        {
+            element->drawPage(painter, this, pageIndex, compiledPage, layoutGetter, pagePointToDevicePointMatrix, convertor, errors);
+        }
     }
 }
 
@@ -742,6 +815,117 @@ void PDFPageContentScene::drawPage(QPainter* painter,
 
     drawElements(painter, pageIndex, layoutGetter, pagePointToDevicePointMatrix, compiledPage, convertor, errors);
     m_manipulator.drawPage(painter, pageIndex, compiledPage, layoutGetter, pagePointToDevicePointMatrix, convertor, errors);
+
+    // PDF Fire: thin frames around the text under the mouse and the edited text. They
+    // are drawn on the paper, so the accent colour of the application is used, whatever
+    // the theme.
+    for (const TextOutline& outline : m_textOutlines)
+    {
+        if (outline.pageIndex != pageIndex || !outline.rect.isValid())
+        {
+            continue;
+        }
+
+        if (!outline.isEdited && !isTextEditInputActive())
+        {
+            // Another tool gets the mouse - a click would not edit the text
+            continue;
+        }
+
+        PDFPainterStateGuard guard(painter);
+        const QRectF deviceRect = pagePointToDevicePointMatrix.mapRect(outline.rect).adjusted(-3, -2, 3, 2);
+        QColor color(0xF2, 0x56, 0x1D);
+        if (!outline.isEdited)
+        {
+            color.setAlpha(170);
+        }
+        QPen pen(color, outline.isEdited ? 1.5 : 1.0);
+        pen.setCosmetic(true);
+        painter->setRenderHint(QPainter::Antialiasing, false);
+        painter->setPen(pen);
+        painter->setBrush(Qt::NoBrush);
+        painter->drawRect(deviceRect);
+    }
+}
+
+void PDFPageContentScene::setTextOutlines(std::vector<TextOutline> outlines)
+{
+    m_textOutlines = std::move(outlines);
+}
+
+void PDFPageContentScene::setTransientPreview(std::set<PDFInteger> hiddenElementIds, std::vector<std::unique_ptr<PDFPageContentElement>> previewElements)
+{
+    m_hiddenElementIds = std::move(hiddenElementIds);
+    m_previewElements = std::move(previewElements);
+
+    // A hidden element is not selected (its selection would be drawn over the preview)
+    if (!m_hiddenElementIds.empty())
+    {
+        m_manipulator.deselect(m_hiddenElementIds);
+    }
+}
+
+void PDFPageContentScene::clearTransientPreview()
+{
+    m_hiddenElementIds.clear();
+    m_previewElements.clear();
+}
+
+void PDFPageContentScene::setTextEditMode(bool textEditMode)
+{
+    if (m_isTextEditMode != textEditMode)
+    {
+        m_isTextEditMode = textEditMode;
+        m_hoveredTextElementId = INVALID_ELEMENT_ID;
+        m_cursor = std::nullopt;
+        if (textEditMode)
+        {
+            m_mouseGrabInfo = MouseGrabInfo();
+            m_manipulator.deselectAll();
+        }
+    }
+}
+
+bool PDFPageContentScene::isTextEditInputActive() const
+{
+    // Another tool (for example Add Text, or a tool of a comment) gets the mouse
+    PDFToolManager* toolManager = m_widget ? m_widget->getToolManager() : nullptr;
+    return m_isTextEditMode && !(toolManager && toolManager->getActiveTool());
+}
+
+PDFInteger PDFPageContentScene::getTextElementUnderPoint(PDFInteger pageIndex, QPointF pagePoint, PDFReal tolerance) const
+{
+    PDFInteger result = INVALID_ELEMENT_ID;
+    qreal resultArea = std::numeric_limits<qreal>::infinity();
+
+    for (const auto& element : m_elements)
+    {
+        if (element->getPageIndex() != pageIndex)
+        {
+            continue;
+        }
+
+        const PDFPageContentElementEdited* editedElement = element->asElementEdited();
+        if (!editedElement || !editedElement->getElement()->asText())
+        {
+            continue;
+        }
+
+        const QRectF rect = element->getBoundingBox().normalized();
+        if (!rect.adjusted(-tolerance, -tolerance, tolerance, tolerance).contains(pagePoint))
+        {
+            continue;
+        }
+
+        const qreal area = rect.width() * rect.height();
+        if (area < resultArea)
+        {
+            resultArea = area;
+            result = element->getElementId();
+        }
+    }
+
+    return result;
 }
 
 PDFPageContentScene::MouseEventInfo PDFPageContentScene::getMouseEventInfo(QWidget* widget, QPoint point)
