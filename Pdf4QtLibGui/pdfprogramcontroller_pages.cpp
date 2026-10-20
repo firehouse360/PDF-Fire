@@ -616,8 +616,16 @@ bool PDFProgramController::replacePages(const std::vector<pdf::PDFInteger>& page
         }
         else
         {
-            summaryLabel->setText(tr("Pages %1-%2 are replaced by pages %3-%4 of '%5'. The replaced pages are removed (Undo brings them back).")
-                                  .arg(firstPageSpinBox->value()).arg(lastPageSpinBox->value()).arg(sourceFirstPageSpinBox->value()).arg(sourceLast).arg(QFileInfo(fileName).fileName()));
+            if (count == 1)
+            {
+                summaryLabel->setText(tr("Page %1 is replaced by page %2 of '%3'. The replaced page is removed (Undo brings it back).")
+                                      .arg(firstPageSpinBox->value()).arg(sourceFirstPageSpinBox->value()).arg(QFileInfo(fileName).fileName()));
+            }
+            else
+            {
+                summaryLabel->setText(tr("Pages %1-%2 are replaced by pages %3-%4 of '%5'. The replaced pages are removed (Undo brings them back).")
+                                      .arg(firstPageSpinBox->value()).arg(lastPageSpinBox->value()).arg(sourceFirstPageSpinBox->value()).arg(sourceLast).arg(QFileInfo(fileName).fileName()));
+            }
         }
         buttons->button(QDialogButtonBox::Ok)->setEnabled(isValid);
     };
