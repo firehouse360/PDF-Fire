@@ -1,0 +1,267 @@
+// MIT License
+//
+// Copyright (c) 2026 PDF Fire contributors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+// PDF Fire: regression tests for hostile (damaged or malicious) PDF files. Each test
+// feeds a small hand-made input, which crashed the application, read or wrote memory
+// out of bounds, or exhausted the memory, and checks it now fails gracefully. They
+// are meant to be run under AddressSanitizer as well (build kind "asan").
+
+#include "pdfcertificatemanager.h"
+#include "pdfcms.h"
+#include "pdfconstants.h"
+#include "pdfdocument.h"
+#include "pdfdocumentbuilder.h"
+#include "pdfdocumentreader.h"
+#include "pdfdocumentsigner.h"
+#include "pdfdocumentwriter.h"
+#include "pdfexception.h"
+#include "pdffont.h"
+#include "pdffunction.h"
+#include "pdfmeshqualitysettings.h"
+#include "pdfoptionalcontent.h"
+#include "pdfparser.h"
+#include "pdfrenderer.h"
+#include "pdfsecurityhandler.h"
+#include "pdfstreamfilters.h"
+
+#include <QtTest>
+#include <QBuffer>
+#include <QElapsedTimer>
+#include <QPainter>
+#include <QRandomGenerator>
+
+#include <openssl/evp.h>
+#include <openssl/pkcs12.h>
+#include <openssl/x509.h>
+
+#include <zlib.h>
+
+#include <limits>
+
+using namespace pdf;
+
+class HostileFilesTest : public QObject
+{
+    Q_OBJECT
+
+private slots:
+    void runLengthTruncated();
+    void runLengthFuzz();
+    void decompressionBombFlate();
+    void decompressionBombAscii85();
+    void predictorHugeColumns();
+
+private:
+    /// Builds a PDF file from the bodies of objects 1..n (object 1 is the catalog)
+    static QByteArray makePdf(const QList<QByteArray>& objects);
+
+    /// Body of a stream object with the given dictionary entries (without /Length)
+    static QByteArray makeStream(const QByteArray& dictionary, const QByteArray& data);
+
+    static PDFDocument readPdf(const QByteArray& data, PDFDocumentReader::Result* result = nullptr, bool permissive = false);
+
+    /// Renders the first page, returns the rendering errors
+    static QList<PDFRenderError> renderFirstPage(const PDFDocument& document);
+
+    /// zlib (deflate) compression, fast level
+    static QByteArray deflate(const QByteArray& data);
+
+    static QByteArray decodeStream(const PDFDocument& document, PDFInteger objectNumber);
+};
+
+QByteArray HostileFilesTest::makePdf(const QList<QByteArray>& objects)
+{
+    QByteArray pdf = "%PDF-1.7\n%\xE2\xE3\xCF\xD3\n";
+    std::vector<qsizetype> offsets;
+    for (qsizetype i = 0; i < objects.size(); ++i)
+    {
+        offsets.push_back(pdf.size());
+        pdf += QByteArray::number(i + 1) + " 0 obj\n" + objects[i] + "\nendobj\n";
+    }
+
+    const qsizetype xrefOffset = pdf.size();
+    pdf += "xref\n0 " + QByteArray::number(objects.size() + 1) + "\n0000000000 65535 f \n";
+    for (const qsizetype offset : offsets)
+    {
+        pdf += QByteArray::number(offset).rightJustified(10, '0') + " 00000 n \n";
+    }
+    pdf += "trailer\n<< /Size " + QByteArray::number(objects.size() + 1) + " /Root 1 0 R >>\nstartxref\n" + QByteArray::number(xrefOffset) + "\n%%EOF\n";
+    return pdf;
+}
+
+QByteArray HostileFilesTest::makeStream(const QByteArray& dictionary, const QByteArray& data)
+{
+    return "<< " + dictionary + " /Length " + QByteArray::number(data.size()) + " >>\nstream\n" + data + "\nendstream";
+}
+
+PDFDocument HostileFilesTest::readPdf(const QByteArray& data, PDFDocumentReader::Result* result, bool permissive)
+{
+    PDFDocumentReader reader(nullptr, [](bool* ok) { *ok = false; return QString(); }, permissive, false);
+    PDFDocument document = reader.readFromBuffer(data);
+    if (result)
+    {
+        *result = reader.getReadingResult();
+    }
+    return document;
+}
+
+QList<PDFRenderError> HostileFilesTest::renderFirstPage(const PDFDocument& document)
+{
+    PDFFontCache fontCache(DEFAULT_FONT_CACHE_LIMIT, DEFAULT_REALIZED_FONT_CACHE_LIMIT);
+    PDFOptionalContentActivity optionalContentActivity(&document, OCUsage::View, nullptr);
+    PDFModifiedDocument modifiedDocument(const_cast<PDFDocument*>(&document), &optionalContentActivity);
+    fontCache.setDocument(modifiedDocument);
+    PDFCMSGeneric cms;
+    PDFMeshQualitySettings meshQualitySettings;
+
+    PDFRenderer renderer(&document, &fontCache, &cms, &optionalContentActivity, PDFRenderer::getDefaultFeatures(), meshQualitySettings);
+    QImage image(100, 100, QImage::Format_RGB32);
+    image.fill(Qt::white);
+    QPainter painter(&image);
+    QList<PDFRenderError> errors = renderer.render(&painter, QRectF(0, 0, 100, 100), 0);
+    painter.end();
+    return errors;
+}
+
+QByteArray HostileFilesTest::deflate(const QByteArray& data)
+{
+    uLongf size = compressBound(uLong(data.size()));
+    QByteArray result(qsizetype(size), Qt::Uninitialized);
+    if (compress2(reinterpret_cast<Bytef*>(result.data()), &size, reinterpret_cast<const Bytef*>(data.constData()), uLong(data.size()), 1) != Z_OK)
+    {
+        return QByteArray();
+    }
+    result.resize(qsizetype(size));
+    return result;
+}
+
+QByteArray HostileFilesTest::decodeStream(const PDFDocument& document, PDFInteger objectNumber)
+{
+    const PDFObject& object = document.getStorage().getObject(PDFObjectReference(objectNumber, 0));
+    if (!object.isStream())
+    {
+        throw PDFException("Not a stream");
+    }
+    return document.getDecodedStream(object.getStream());
+}
+
+void HostileFilesTest::runLengthTruncated()
+{
+    // A literal run, which is longer than the rest of the input, read the heap behind
+    // it (2 bytes decoded to 28 kB of heap memory). A repeat run without its byte read
+    // one byte past the end and continued from there.
+    const PDFStreamFilter* filter = PDFStreamFilterStorage::getFilter("RunLengthDecode");
+    QVERIFY(filter);
+
+    QCOMPARE(filter->apply(QByteArray("\x7f" "A", 2), PDFObject(), nullptr), QByteArray("A"));
+    QCOMPARE(filter->apply(QByteArray("\x81", 1), PDFObject(), nullptr), QByteArray());
+    QCOMPARE(filter->apply(QByteArray("\x02" "AB", 3), PDFObject(), nullptr), QByteArray("AB"));
+
+    // Well-formed input is unchanged: 3 literal bytes, 4 repeated bytes, end of data
+    QCOMPARE(filter->apply(QByteArray("\x02" "abc" "\xfd" "x" "\x80" "zz", 8), PDFObject(), nullptr), QByteArray("abcxxxx"));
+}
+
+void HostileFilesTest::runLengthFuzz()
+{
+    // Random short inputs - meaningful under AddressSanitizer
+    const PDFStreamFilter* filter = PDFStreamFilterStorage::getFilter("RunLengthDecode");
+    QRandomGenerator generator(431);
+    for (int i = 0; i < 20000; ++i)
+    {
+        QByteArray input(generator.bounded(1, 12), Qt::Uninitialized);
+        for (char& byte : input)
+        {
+            byte = char(generator.bounded(256));
+        }
+
+        const QByteArray output = filter->apply(input, PDFObject(), nullptr);
+        QVERIFY(output.size() <= input.size() * 128);
+    }
+}
+
+void HostileFilesTest::decompressionBombFlate()
+{
+    // Two Flate filters: about 1 kB per 1 MB of zeros on each level. 300 MB of zeros
+    // (more than the limit of a decoded stream) compress to a few kilobytes. The stream
+    // must fail quickly instead of exhausting the memory.
+    const QByteArray zeros(300 * 1024 * 1024, 0);
+    const QByteArray once = deflate(zeros);
+    const QByteArray twice = deflate(once);
+    QVERIFY(!twice.isEmpty());
+    QVERIFY(twice.size() < 64 * 1024);
+
+    const PDFDocument document = readPdf(makePdf({ "<< /Type /Catalog /Pages 2 0 R >>",
+                                                   "<< /Type /Pages /Kids [] /Count 0 >>",
+                                                   makeStream("/Filter [/FlateDecode /FlateDecode]", twice) }));
+
+    QElapsedTimer timer;
+    timer.start();
+    QVERIFY_THROWS_EXCEPTION(PDFException, decodeStream(document, 3));
+    QVERIFY(timer.elapsed() < 30000);
+
+    // A single filter of the same data is decoded (the limit is not hit)
+    const PDFDocument smallDocument = readPdf(makePdf({ "<< /Type /Catalog /Pages 2 0 R >>",
+                                                        "<< /Type /Pages /Kids [] /Count 0 >>",
+                                                        makeStream("/Filter /FlateDecode", deflate(QByteArray(1024 * 1024, 'a'))) }));
+    QCOMPARE(decodeStream(smallDocument, 3).size(), 1024 * 1024);
+}
+
+void HostileFilesTest::decompressionBombAscii85()
+{
+    // ASCII85 'z' stands for four zero bytes: Flate of 70 million 'z' is tiny, it
+    // decodes to 280 MB (pdfcraft v0.9.0 fixed the same chain bomb)
+    const QByteArray letters(70 * 1024 * 1024, 'z');
+    const QByteArray compressed = deflate(letters);
+    QVERIFY(!compressed.isEmpty());
+
+    const PDFDocument document = readPdf(makePdf({ "<< /Type /Catalog /Pages 2 0 R >>",
+                                                   "<< /Type /Pages /Kids [] /Count 0 >>",
+                                                   makeStream("/Filter [/FlateDecode /ASCII85Decode]", compressed) }));
+    QVERIFY_THROWS_EXCEPTION(PDFException, decodeStream(document, 3));
+
+    // Ordinary ASCII85 still works
+    const PDFStreamFilter* filter = PDFStreamFilterStorage::getFilter("ASCII85Decode");
+    QCOMPARE(filter->apply(QByteArray("87cURD]i,\"Ebo80~>"), PDFObject(), nullptr), QByteArray("Hello World!"));
+    QCOMPARE(filter->apply(QByteArray("zz~>"), PDFObject(), nullptr), QByteArray(8, 0));
+}
+
+void HostileFilesTest::predictorHugeColumns()
+{
+    // One predictor tag byte with /Columns 100000000 produced a 100 MB row of zeros;
+    // a larger /Columns overflowed the int row size (undefined behaviour).
+    const QByteArray oneByte = deflate(QByteArray("\x02", 1));
+    const PDFDocument document = readPdf(makePdf({ "<< /Type /Catalog /Pages 2 0 R >>",
+                                                   "<< /Type /Pages /Kids [] /Count 0 >>",
+                                                   makeStream("/Filter /FlateDecode /DecodeParms << /Predictor 12 /Columns 100000000 >>", oneByte),
+                                                   makeStream("/Filter /FlateDecode /DecodeParms << /Predictor 12 /Colors 32 /BitsPerComponent 16 /Columns 2147483647 >>", oneByte),
+                                                   makeStream("/Filter /FlateDecode /DecodeParms << /Predictor 12 /Columns 4 >>", deflate(QByteArray("\x00" "abcd" "\x02" "\x01\x01\x01\x01", 10))) }));
+
+    QVERIFY(decodeStream(document, 3).size() < 1024);
+    QVERIFY_THROWS_EXCEPTION(PDFException, decodeStream(document, 4));
+
+    // A well-formed PNG predictor (None, then Up) is unchanged
+    QCOMPARE(decodeStream(document, 5), QByteArray("abcd" "bcde"));
+}
+
+QTEST_GUILESS_MAIN(HostileFilesTest)
+
+#include "tst_hostilefilestest.moc"
