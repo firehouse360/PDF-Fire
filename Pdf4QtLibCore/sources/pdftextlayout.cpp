@@ -1290,6 +1290,34 @@ PDFFindResults PDFTextLayoutStorage::find(const QRegularExpression& expression, 
     return results;
 }
 
+PDFFindResults PDFTextLayoutStorage::find(const PDFTextMatcher& matcher, PDFTextFlow::FlowFlags flowFlags) const
+{
+    // PDF Fire: the same as the search for a regular expression, with a matcher
+    PDFFindResults results;
+
+    QMutex resultsMutex;
+    auto findImpl = [this, flowFlags, &results, &resultsMutex, &matcher](size_t pageIndex)
+    {
+        PDFTextLayout textLayout = getTextLayout(pageIndex);
+        PDFTextFlows textFlows = PDFTextFlow::createTextFlows(textLayout, flowFlags, pageIndex);
+        for (const PDFTextFlow& textFlow : textFlows)
+        {
+            PDFFindResults flowResults = textFlow.find(matcher);
+            if (!flowResults.empty())
+            {
+                QMutexLocker lock(&resultsMutex);
+                results.insert(results.end(), flowResults.begin(), flowResults.end());
+            }
+        }
+    };
+
+    auto range = PDFIntegerRange<size_t>(0, m_offsets.size());
+    PDFExecutionPolicy::execute(PDFExecutionPolicy::Scope::Page, range.begin(), range.end(), findImpl);
+
+    std::sort(results.begin(), results.end());
+    return results;
+}
+
 QDataStream& operator<<(QDataStream& stream, const PDFTextLayoutSettings& settings)
 {
     stream << settings.samples;
@@ -1407,6 +1435,31 @@ PDFFindResults PDFTextFlow::find(const QRegularExpression& expression) const
 
         PDFFindResult result;
         result.matched = match.captured();
+        result.textSelectionItems = getTextSelectionItems(index, length);
+        result.context = getContext(index, length);
+
+        if (!result.textSelectionItems.empty())
+        {
+            results.emplace_back(qMove(result));
+        }
+    }
+
+    return results;
+}
+
+PDFFindResults PDFTextFlow::find(const PDFTextMatcher& matcher) const
+{
+    PDFFindResults results;
+
+    for (const auto& [index, length] : matcher(m_text))
+    {
+        if (index < 0 || length <= 0 || index + length > m_text.size())
+        {
+            continue;
+        }
+
+        PDFFindResult result;
+        result.matched = m_text.mid(index, length);
         result.textSelectionItems = getTextSelectionItems(index, length);
         result.context = getContext(index, length);
 

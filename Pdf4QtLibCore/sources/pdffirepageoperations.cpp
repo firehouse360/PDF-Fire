@@ -24,6 +24,9 @@
 #include "pdfdocumentbuilder.h"
 #include "pdfoptimizer.h"
 #include "pdfexception.h"
+#include "pdfoutline.h"
+
+#include <optional>
 
 #include "pdfdbgheap.h"
 
@@ -288,7 +291,66 @@ PDFOperationResult PDFPageOperations::movePages(const PDFDocument* document, std
     return true;
 }
 
-PDFOperationResult PDFPageOperations::insertDocument(const PDFDocument* document, const PDFDocument* insertedDocument, PDFInteger position, PDFDocument* result)
+namespace
+{
+
+/// Returns the destination of the bookmark (a named one is looked up), or nothing
+std::optional<PDFDestination> getOutlineDestination(const PDFDocument* document, const PDFOutlineItem* item)
+{
+    const PDFActionGoTo* action = dynamic_cast<const PDFActionGoTo*>(item->getAction());
+    if (!action)
+    {
+        return std::nullopt;
+    }
+
+    const PDFDestination& destination = action->getDestination();
+    if (destination.isNamedDestination())
+    {
+        if (const PDFDestination* namedDestination = document->getCatalog()->getNamedDestination(destination.getName()))
+        {
+            return *namedDestination;
+        }
+        return std::nullopt;
+    }
+    return destination;
+}
+
+/// PDF Fire: the bookmarks of the inserted document are moved to its copied pages.
+/// A bookmark, which leads to a page, gets the copied page (a named destination is
+/// replaced by the destination it names - the names of the inserted document are
+/// not copied); a bookmark leading nowhere in the copied pages loses its action.
+void remapOutline(const PDFDocument* insertedDocument, PDFOutlineItem* item, const std::map<PDFObjectReference, PDFObjectReference>& pageMapping)
+{
+    if (item->getAction() && item->getAction()->getType() == ActionType::GoTo)
+    {
+        std::optional<PDFDestination> destination = getOutlineDestination(insertedDocument, item);
+        auto it = destination ? pageMapping.find(destination->getPageReference()) : pageMapping.cend();
+        if (it != pageMapping.cend())
+        {
+            destination->setPageReference(it->second);
+            item->setAction(PDFActionPtr(new PDFActionGoTo(*destination, PDFDestination())));
+        }
+        else
+        {
+            item->setAction(PDFActionPtr());
+        }
+    }
+    else if (item->getAction() && item->getAction()->getType() != ActionType::URI)
+    {
+        // Only the links to the pages and to the web are kept, a script or a
+        // command of the inserted document is not carried into this one
+        item->setAction(PDFActionPtr());
+    }
+
+    for (size_t i = 0; i < item->getChildCount(); ++i)
+    {
+        remapOutline(insertedDocument, item->getChildPtr(i).data(), pageMapping);
+    }
+}
+
+}   // namespace
+
+PDFOperationResult PDFPageOperations::insertDocument(const PDFDocument* document, const PDFDocument* insertedDocument, PDFInteger position, PDFDocument* result, QString title)
 {
     Q_ASSERT(document);
     Q_ASSERT(insertedDocument);
@@ -346,6 +408,66 @@ PDFOperationResult PDFPageOperations::insertDocument(const PDFDocument* document
 
         // The copied pages still refer to the page tree of their former document
         builder.flattenPageTree();
+
+        // PDF Fire: the bookmarks of the inserted document are kept
+        QSharedPointer<PDFOutlineItem> insertedOutline = insertedDocument->getCatalog()->getOutlineRootPtr();
+        if (insertedOutline && insertedOutline->getChildCount() > 0)
+        {
+            std::map<PDFObjectReference, PDFObjectReference> pageMapping;
+            for (size_t i = 0; i < std::min(insertedPageCount, insertedDocument->getCatalog()->getPageCount()); ++i)
+            {
+                pageMapping[insertedDocument->getCatalog()->getPage(i)->getPageReference()] = copiedReferences[i];
+            }
+
+            QSharedPointer<PDFOutlineItem> insertedItem = insertedOutline->clone();
+            remapOutline(insertedDocument, insertedItem.data(), pageMapping);
+
+            if (title.isEmpty())
+            {
+                title = insertedDocument->getInfo()->title.trimmed();
+            }
+            if (title.isEmpty())
+            {
+                title = PDFTranslationContext::tr("Inserted pages");
+            }
+            insertedItem->setTitle(title);
+            insertedItem->setAction(PDFActionPtr(new PDFActionGoTo(PDFDestination::createFit(copiedReferences.front()), PDFDestination())));
+
+            // The new bookmark is put before the first bookmark of the document, which
+            // leads to a page after the inserted ones
+            QSharedPointer<PDFOutlineItem> root = document->getCatalog()->getOutlineRootPtr();
+            root = root ? root->clone() : QSharedPointer<PDFOutlineItem>(new PDFOutlineItem());
+
+            std::vector<PDFObjectReference> originalPages;
+            for (size_t i = 0; i < document->getCatalog()->getPageCount(); ++i)
+            {
+                originalPages.push_back(document->getCatalog()->getPage(i)->getPageReference());
+            }
+            size_t insertIndex = root->getChildCount();
+            for (size_t i = 0; i < root->getChildCount(); ++i)
+            {
+                std::optional<PDFDestination> destination = getOutlineDestination(document, root->getChild(i));
+                if (!destination)
+                {
+                    continue;
+                }
+
+                PDFInteger pageIndex = -1;
+                auto it = std::find(originalPages.cbegin(), originalPages.cend(), destination->getPageReference());
+                if (it != originalPages.cend())
+                {
+                    pageIndex = PDFInteger(std::distance(originalPages.cbegin(), it));
+                }
+                if (pageIndex >= position)
+                {
+                    insertIndex = i;
+                    break;
+                }
+            }
+
+            root->insertChild(insertIndex, insertedItem);
+            builder.setOutline(root.data());
+        }
 
         *result = builder.build();
     }

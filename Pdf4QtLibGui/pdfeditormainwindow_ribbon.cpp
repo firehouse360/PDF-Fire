@@ -37,19 +37,31 @@
 #include "pdfwidgetutils.h"
 #include "pdfdrawwidget.h"
 #include "pdfdrawspacecontroller.h"
+#include "pdfdocumenttextflow.h"
 
+#include <QApplication>
 #include <QDesktopServices>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QDir>
+#include <QFileInfo>
+#include <QFormLayout>
+#include <QMessageBox>
+#include <QProcess>
+#include <QStandardPaths>
 #include <QDockWidget>
 #include <QDoubleSpinBox>
 #include <QLabel>
 #include <QLayout>
 #include <QLineEdit>
+#include <QLocale>
 #include <QMenuBar>
 #include <QSettings>
 #include <QSpinBox>
 #include <QStatusBar>
 #include <QTimer>
 #include <QUrl>
+#include <QVBoxLayout>
 #include <QToolBar>
 #include <QToolButton>
 #include <QWidgetAction>
@@ -100,6 +112,57 @@ QIcon themedIcon(const QWidget* widget, const QString& resource)
         icon = pdf::PDFWidgetUtils::convertIconForDarkTheme(icon, pdf::PDFWidgetUtils::scaleDPI(widget, QSize(28, 28)), widget->devicePixelRatioF());
     }
     return icon;
+}
+
+/// PDF Fire: the words and characters of the text
+struct TextCounts
+{
+    qint64 words = 0;
+    qint64 characters = 0;          ///< With spaces (line breaks are not counted)
+    qint64 charactersNoSpaces = 0;
+
+    void add(const QString& text)
+    {
+        bool inWord = false;
+        for (const QChar c : text)
+        {
+            if (c == QChar('\n') || c == QChar('\r'))
+            {
+                inWord = false;
+                continue;
+            }
+
+            ++characters;
+            if (c.isSpace())
+            {
+                inWord = false;
+                continue;
+            }
+
+            ++charactersNoSpaces;
+            if (!inWord && c.isLetterOrNumber())
+            {
+                ++words;
+                inWord = true;
+            }
+        }
+    }
+};
+
+/// PDF Fire: the path of the compare program (PDF4QT Diff), which is installed next to PDF Fire
+QString findCompareProgram()
+{
+#ifdef Q_OS_WIN
+    const QString name = QStringLiteral("Pdf4QtDiff.exe");
+#else
+    const QString name = QStringLiteral("Pdf4QtDiff");
+#endif
+    const QString nextToProgram = QDir(QCoreApplication::applicationDirPath()).filePath(name);
+    if (QFileInfo(nextToProgram).isExecutable())
+    {
+        return nextToProgram;
+    }
+    return QStandardPaths::findExecutable(QStringLiteral("Pdf4QtDiff"));
 }
 
 /// Collects the actions of the menu, and of its submenus
@@ -691,6 +754,13 @@ void PDFEditorMainWindow::setupRibbon()
         redactApplyGroup->addLargeAction(action);
     }
 
+    // PDF Fire: a check of a document received from someone else (or of our own one)
+    PDFFireRibbonGroup* redactCheckGroup = protectPage->addGroup(tr("Check"));
+    if (QAction* action = findMenuAction(redactMenu, "redactplugin_CheckHiddenText"))
+    {
+        redactCheckGroup->addLargeAction(action);
+    }
+
     // ---- Sign -----------------------------------------------------------------
     PDFFireRibbonPage* signPage = m_ribbon->addPage(tr("Sign"));
 
@@ -816,6 +886,13 @@ void PDFEditorMainWindow::setupRibbon()
         {
             automaticGroup->addLargeAction(action);
         }
+
+        // PDF Fire: a finished form is flattened - drawn into the page for good
+        PDFFireRibbonGroup* finishGroup = formsPage->addGroup(tr("Finish"));
+        if (QAction* action = findMenuAction(formsMenu, "formsplugin_Flatten"))
+        {
+            finishGroup->addLargeAction(action);
+        }
     }
 
     // ---- Tools ----------------------------------------------------------------
@@ -831,6 +908,23 @@ void PDFEditorMainWindow::setupRibbon()
     {
         documentGroup->addSmallAction(exportOdtAction);
     }
+    if (QAction* flattenAction = findMenuAction(findPluginMenu("Forms"), "formsplugin_Flatten"))
+    {
+        documentGroup->addSmallAction(flattenAction);   // PDF Fire: flatten form fields and comments
+    }
+
+    // PDF Fire: the words and characters of the document
+    QAction* wordCountAction = createAction("actionWordCount", tr("Word Count"), ":/resources/word-count.svg", tr("Count the words and the characters of the document and of the current page"));
+    connect(wordCountAction, &QAction::triggered, this, &PDFEditorMainWindow::showWordCount);
+    documentGroup->addSmallAction(wordCountAction);
+
+    // PDF Fire: the compare program of PDF4QT is installed with PDF Fire - it is
+    // started with the current file on the left, the other file is chosen there
+    PDFFireRibbonGroup* compareGroup = toolsPage->addGroup(tr("Compare"));
+    QAction* compareAction = createAction("actionCompareFiles", tr("Compare Files"), ":/resources/compare.svg",
+                                          tr("Compare this file with another version of it: the changed text and pages are shown side by side (opens the compare window)"));
+    connect(compareAction, &QAction::triggered, this, &PDFEditorMainWindow::compareFiles);
+    compareGroup->addLargeAction(compareAction);
 
     // PDF Fire: scanning and the text recognition together, as "Scan & OCR" of Acrobat
     PDFFireRibbonGroup* scanGroup = toolsPage->addGroup(tr("Scan & OCR"));
@@ -1124,6 +1218,14 @@ void PDFEditorMainWindow::setupStatusBarControls()
     QWidget* spacer = new QWidget(this);
     spacer->setFixedWidth(pdf::PDFWidgetUtils::scaleDPI_x(this, 16));
 
+    // PDF Fire: the size of the current page (the details in its tool tip)
+    m_pageSizeLabel = new QLabel(this);
+    m_pageSizeLabel->setObjectName("pageSizeLabel");
+    statusBar()->addPermanentWidget(m_pageSizeLabel);
+    QWidget* pageSizeSpacer = new QWidget(this);
+    pageSizeSpacer->setFixedWidth(pdf::PDFWidgetUtils::scaleDPI_x(this, 12));
+    statusBar()->addPermanentWidget(pageSizeSpacer);
+
     statusBar()->addPermanentWidget(createButton(ui->actionGoToPreviousPage));
     statusBar()->addPermanentWidget(m_pageNumberSpinBox);
     statusBar()->addPermanentWidget(m_pageNumberLabel);
@@ -1215,6 +1317,125 @@ void PDFEditorMainWindow::applyDefaultDocumentView()
             ui->actionFitWidth->trigger();
         }
     });
+}
+
+void PDFEditorMainWindow::showWordCount()
+{
+    const pdf::PDFDocument* document = m_programController->getDocument();
+    if (!document)
+    {
+        return;
+    }
+
+    // The text is read by the layout of the text (as it is selected and searched)
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    pdf::PDFDocumentTextFlowFactory factory;
+    const pdf::PDFDocumentTextFlow flow = factory.create(document, pdf::PDFDocumentTextFlowFactory::Algorithm::Layout);
+    QApplication::restoreOverrideCursor();
+
+    const pdf::PDFInteger currentPage = m_programController->getCurrentPageIndex();
+    TextCounts documentCounts;
+    TextCounts pageCounts;
+    for (const pdf::PDFDocumentTextFlow::Item& item : flow.getItems())
+    {
+        if (!item.isText())
+        {
+            continue;
+        }
+
+        // The items of a page are separate blocks - a space between them
+        documentCounts.add(item.text + QChar('\n'));
+        if (item.pageIndex == currentPage)
+        {
+            pageCounts.add(item.text + QChar('\n'));
+        }
+    }
+
+    QDialog dialog(this);
+    dialog.setObjectName("wordCountDialog");
+    dialog.setWindowTitle(tr("Word Count"));
+    QVBoxLayout* layout = new QVBoxLayout(&dialog);
+
+    auto addSection = [&](const QString& title, const TextCounts& counts, int pages)
+    {
+        QLabel* titleLabel = new QLabel(title, &dialog);
+        QFont font = titleLabel->font();
+        font.setBold(true);
+        titleLabel->setFont(font);
+        layout->addWidget(titleLabel);
+
+        QFormLayout* form = new QFormLayout();
+        if (pages > 0)
+        {
+            form->addRow(tr("Pages:"), new QLabel(QLocale().toString(pages), &dialog));
+        }
+        form->addRow(tr("Words:"), new QLabel(QLocale().toString(counts.words), &dialog));
+        form->addRow(tr("Characters (with spaces):"), new QLabel(QLocale().toString(counts.characters), &dialog));
+        form->addRow(tr("Characters (no spaces):"), new QLabel(QLocale().toString(counts.charactersNoSpaces), &dialog));
+        layout->addLayout(form);
+    };
+
+    addSection(tr("Document"), documentCounts, int(document->getCatalog()->getPageCount()));
+    if (currentPage >= 0)
+    {
+        layout->addSpacing(pdf::PDFWidgetUtils::scaleDPI_y(this, 8));
+        addSection(tr("Current page (page %1)").arg(currentPage + 1), pageCounts, 0);
+    }
+
+    QLabel* noteLabel = new QLabel(tr("Only the text of the pages is counted (not comments or form fields). Scanned pages have text only after Recognize Text (OCR)."), &dialog);
+    noteLabel->setWordWrap(true);
+    layout->addSpacing(pdf::PDFWidgetUtils::scaleDPI_y(this, 8));
+    layout->addWidget(noteLabel);
+
+    QDialogButtonBox* buttonBox = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+    connect(buttonBox, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttonBox);
+    dialog.setMinimumWidth(pdf::PDFWidgetUtils::scaleDPI_x(this, 360));
+    dialog.exec();
+}
+
+void PDFEditorMainWindow::compareFiles()
+{
+    const QString program = findCompareProgram();
+    if (program.isEmpty())
+    {
+        QMessageBox::critical(this, tr("Compare Files"), tr("The compare program (Pdf4QtDiff) was not found next to PDF Fire. Reinstall PDF Fire to get it back."));
+        return;
+    }
+
+    QStringList arguments;
+    arguments << (pdf::PDFWidgetUtils::isDarkTheme() ? QStringLiteral("--theme-dark") : QStringLiteral("--theme-light"));
+
+    const pdf::PDFDocument* document = m_programController->getDocument();
+    const QString fileName = document ? m_programController->getOriginalFileName() : QString();
+    if (document && fileName.isEmpty())
+    {
+        QMessageBox::information(this, tr("Compare Files"), tr("This document is not saved yet. Save it first, then compare it with another file."));
+        return;
+    }
+
+    if (!fileName.isEmpty())
+    {
+        const std::vector<PDFProgramController::DocumentTabInfo> tabs = m_programController->getDocumentTabs();
+        const int currentTab = m_programController->getCurrentDocumentTab();
+        if (currentTab >= 0 && currentTab < int(tabs.size()) && tabs[currentTab].isModified)
+        {
+            if (QMessageBox::question(this, tr("Compare Files"),
+                                      tr("This document has changes, which are not saved. The compare window reads the file as it is saved.\n\nCompare the saved file anyway?")) != QMessageBox::Yes)
+            {
+                return;
+            }
+        }
+        arguments << QFileInfo(fileName).absoluteFilePath();
+    }
+
+    if (!QProcess::startDetached(program, arguments))
+    {
+        QMessageBox::critical(this, tr("Compare Files"), tr("The compare program could not be started (%1).").arg(QDir::toNativeSeparators(program)));
+        return;
+    }
+
+    statusBar()->showMessage(tr("The compare window is opening. Open the other version of the file on its right side, then click Compare."), 15000);
 }
 
 }   // namespace pdfviewer

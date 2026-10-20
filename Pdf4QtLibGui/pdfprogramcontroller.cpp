@@ -3449,6 +3449,43 @@ bool PDFProgramController::closeDocumentTab(int index)
     return true;
 }
 
+void PDFProgramController::moveDocumentTab(int from, int to)
+{
+    const int count = int(m_tabs.size());
+    if (from == to || from < 0 || to < 0 || from >= count || to >= count)
+    {
+        return;
+    }
+
+    // The tabs keep their documents, only the order changes - the indices
+    // of the shown and of the previous tab move with them
+    auto moveIndex = [from, to](int index)
+    {
+        if (index == from)
+        {
+            return to;
+        }
+        if (from < to && index > from && index <= to)
+        {
+            return index - 1;
+        }
+        if (to < from && index >= to && index < from)
+        {
+            return index + 1;
+        }
+        return index;
+    };
+
+    DocumentTab tab = std::move(m_tabs[from]);
+    m_tabs.erase(m_tabs.begin() + from);
+    m_tabs.insert(m_tabs.begin() + to, std::move(tab));
+    m_currentTab = moveIndex(m_currentTab);
+    m_previousTab = m_previousTab >= 0 ? moveIndex(m_previousTab) : m_previousTab;
+
+    // The tab bar has moved its tab already (the signal is not emitted, the tab
+    // bar would be updated in the middle of the drag)
+}
+
 bool PDFProgramController::askForSaveAllDocumentsBeforeClose()
 {
     // Every modified document is shown and the user is asked about it

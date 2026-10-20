@@ -373,6 +373,9 @@ public:
     /// Closes the tab (asks to save its modified document); false - cancelled
     bool closeDocumentTab(int index);
 
+    /// PDF Fire: the tab was dragged to another place in the tab bar
+    void moveDocumentTab(int from, int to);
+
     /// Asks to save every modified document (before the application is closed);
     /// false - cancelled
     bool askForSaveAllDocumentsBeforeClose();

@@ -129,6 +129,12 @@ add_library(Pdf4QtLibCore SHARED
     sources/pdffiresmtpclient.h
     sources/pdffirepageoperations.cpp
     sources/pdffirepageoperations.h
+    sources/pdffireflatten.cpp
+    sources/pdffireflatten.h
+    sources/pdffirepiipatterns.cpp
+    sources/pdffirepiipatterns.h
+    sources/pdffirecovercheck.cpp
+    sources/pdffirecovercheck.h
     sources/pdfredact.cpp
     sources/pdfredact.h
     sources/pdfsecurityhandler.cpp

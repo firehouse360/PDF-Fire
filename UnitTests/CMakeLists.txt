@@ -418,6 +418,33 @@ set_target_properties(UnitTestsPageOperations PROPERTIES
 )
 add_test(UnitTestsPageOperations "${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}/UnitTestsPageOperations")
 
+add_executable(UnitTestsFlatten tst_flattentest.cpp)
+target_link_libraries(UnitTestsFlatten PRIVATE Pdf4QtLibCore Qt6::Core Qt6::Gui Qt6::Test)
+set_target_properties(UnitTestsFlatten PROPERTIES
+    WIN32_EXECUTABLE OFF
+    MACOSX_BUNDLE OFF
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}
+)
+add_test(UnitTestsFlatten "${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}/UnitTestsFlatten")
+
+add_executable(UnitTestsPiiPatterns tst_piipatternstest.cpp)
+target_link_libraries(UnitTestsPiiPatterns PRIVATE Pdf4QtLibCore Qt6::Core Qt6::Gui Qt6::Test)
+set_target_properties(UnitTestsPiiPatterns PROPERTIES
+    WIN32_EXECUTABLE OFF
+    MACOSX_BUNDLE OFF
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}
+)
+add_test(UnitTestsPiiPatterns "${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}/UnitTestsPiiPatterns")
+
+add_executable(UnitTestsCoverCheck tst_coverchecktest.cpp)
+target_link_libraries(UnitTestsCoverCheck PRIVATE Pdf4QtLibCore Qt6::Core Qt6::Gui Qt6::Test)
+set_target_properties(UnitTestsCoverCheck PROPERTIES
+    WIN32_EXECUTABLE OFF
+    MACOSX_BUNDLE OFF
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}
+)
+add_test(UnitTestsCoverCheck "${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}/UnitTestsCoverCheck")
+
 add_executable(UnitTestsFormFields tst_formfieldstest.cpp)
 target_link_libraries(UnitTestsFormFields PRIVATE Pdf4QtLibCore Qt6::Core Qt6::Gui Qt6::Test)
 set_target_properties(UnitTestsFormFields PROPERTIES

@@ -5,5 +5,6 @@
         <file>redact-text.svg</file>
         <file>redact-page.svg</file>
         <file>redact-text-selection.svg</file>
+        <file>redact-check-hidden.svg</file>
     </qresource>
 </RCC>

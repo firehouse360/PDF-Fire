@@ -71,6 +71,7 @@ private:
     void onDetectFields();
     void onTabOrder();
     void onFillForm();
+    void onFlatten();
 
     QAction* m_actionEditFields;
     QAction* m_actionFillForm;
@@ -80,6 +81,7 @@ private:
     QAction* m_actionDelete;
     QAction* m_actionDetectFields;
     QAction* m_actionTabOrder;
+    QAction* m_actionFlatten;
     std::map<QAction*, pdf::PDFFireFormFields::Type> m_placeActions;
     std::vector<QAction*> m_actions;
     QActionGroup* m_modeGroup;

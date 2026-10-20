@@ -33,6 +33,7 @@
 #include <set>
 #include <list>
 #include <compare>
+#include <functional>
 
 class QMutex;
 
@@ -302,6 +303,10 @@ using PDFFindResults = std::vector<PDFFindResult>;
 class PDFTextFlow;
 using PDFTextFlows = std::vector<PDFTextFlow>;
 
+/// PDF Fire: finds the matches in a text - returns the index and the length of each
+/// (used for the patterns, which are not regular expressions, like card numbers)
+using PDFTextMatcher = std::function<std::vector<std::pair<int, int>>(const QString&)>;
+
 /// This class represents a portion of continuous text on the page. It can
 /// consists of multiple blocks (which follow reading order).
 class PDF4QTLIBCORESHARED_EXPORT PDFTextFlow
@@ -325,6 +330,10 @@ public:
     /// Finds regular expression matches in current text flow. All text occurences are returned.
     /// \param expression Regular expression to be matched
     PDFFindResults find(const QRegularExpression& expression) const;
+
+    /// PDF Fire: finds the matches of the matcher in current text flow
+    /// \param matcher Function finding the matches in a text
+    PDFFindResults find(const PDFTextMatcher& matcher) const;
 
     /// Returns whole text for this text flow
     QString getText() const { return m_text; }
@@ -619,6 +628,11 @@ public:
     /// \param expression Regular expression to be matched
     /// \param flowFlags Text flow flags
     PDFFindResults find(const QRegularExpression& expression, PDFTextFlow::FlowFlags flowFlags) const;
+
+    /// PDF Fire: finds the matches of the matcher in all pages
+    /// \param matcher Function finding the matches in a text
+    /// \param flowFlags Text flow flags
+    PDFFindResults find(const PDFTextMatcher& matcher, PDFTextFlow::FlowFlags flowFlags) const;
 
     /// Returns number of pages
     size_t getCount() const { return m_offsets.size(); }

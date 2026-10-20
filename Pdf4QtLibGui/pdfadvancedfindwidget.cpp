@@ -27,8 +27,13 @@
 #include "pdfcompiler.h"
 #include "pdfdocument.h"
 #include "pdfdrawspacecontroller.h"
+#include "pdffirepiipatterns.h"
 
+#include <QGridLayout>
+#include <QGroupBox>
+#include <QLabel>
 #include <QMessageBox>
+#include <QPushButton>
 
 #include "pdfdbgheap.h"
 
@@ -51,6 +56,27 @@ PDFAdvancedFindWidget::PDFAdvancedFindWidget(pdf::PDFDrawWidgetProxy* proxy, QWi
     connect(m_proxy, &pdf::PDFDrawWidgetProxy::textLayoutChanged, this, &PDFAdvancedFindWidget::performSearch);
     connect(ui->resultsTableWidget, &QTableWidget::cellDoubleClicked, this, &PDFAdvancedFindWidget::onResultItemDoubleClicked);
     connect(ui->resultsTableWidget, &QTableWidget::itemSelectionChanged, this, &PDFAdvancedFindWidget::onSelectionChanged);
+
+    // PDF Fire: one-click searches for personal information, to be redacted. The
+    // results are selected, so Mark Found Text marks them all.
+    m_patternsGroupBox = new QGroupBox(tr("Find Personal Information"), this);
+    m_patternsGroupBox->setObjectName("patternsGroupBox");
+    QGridLayout* patternsLayout = new QGridLayout(m_patternsGroupBox);
+    QLabel* patternsLabel = new QLabel(tr("Find all of them in the document with one click. The results are selected, "
+                                          "so Mark Found Text (Protect tab) marks them all for redaction."), m_patternsGroupBox);
+    patternsLabel->setWordWrap(true);
+    patternsLayout->addWidget(patternsLabel, 0, 0, 1, 2);
+    int patternIndex = 0;
+    for (const pdf::PDFFirePiiPatterns::Pattern pattern : pdf::PDFFirePiiPatterns::getPatterns())
+    {
+        QPushButton* button = new QPushButton(pdf::PDFFirePiiPatterns::getName(pattern), m_patternsGroupBox);
+        button->setObjectName(QString("patternButton%1").arg(int(pattern)));
+        connect(button, &QPushButton::clicked, this, [this, pattern]() { searchPattern(int(pattern)); });
+        patternsLayout->addWidget(button, 1 + patternIndex / 2, patternIndex % 2);
+        ++patternIndex;
+    }
+    ui->searchTabLayout->insertWidget(1, m_patternsGroupBox);
+
     updateUI();
 }
 
@@ -111,6 +137,7 @@ void PDFAdvancedFindWidget::on_searchButton_clicked()
     m_parameters.isMultiline = ui->multilineMatchingCheckBox->isChecked();
     m_parameters.isSoftHyphenRemoved = ui->removeSoftHyphenCheckBox->isChecked();
     m_parameters.isSearchFinished = m_parameters.phrase.isEmpty();
+    m_parameters.pattern = -1;
 
     if (m_parameters.isSearchFinished)
     {
@@ -132,6 +159,27 @@ void PDFAdvancedFindWidget::on_searchButton_clicked()
             return;
         }
     }
+
+    m_findResults.clear();
+    m_textSelection.dirty();
+    updateResultsUI();
+
+    pdf::PDFAsynchronousTextLayoutCompiler* compiler = m_proxy->getTextLayoutCompiler();
+    if (compiler->isTextLayoutReady())
+    {
+        performSearch();
+    }
+    else
+    {
+        compiler->makeTextLayout();
+    }
+}
+
+void PDFAdvancedFindWidget::searchPattern(int pattern)
+{
+    m_parameters = SearchParameters();
+    m_parameters.phrase = pdf::PDFFirePiiPatterns::getName(pdf::PDFFirePiiPatterns::Pattern(pattern));
+    m_parameters.pattern = pattern;
 
     m_findResults.clear();
     m_textSelection.dirty();
@@ -197,6 +245,7 @@ void PDFAdvancedFindWidget::updateUI()
     const bool enableRegularExpressionUI = enableUI && ui->regularExpressionsCheckbox->isChecked();
     ui->searchForGroupBox->setEnabled(enableUI);
     ui->regularExpressionSettingsGroupBox->setEnabled(enableRegularExpressionUI);
+    m_patternsGroupBox->setEnabled(enableUI);
 }
 
 void PDFAdvancedFindWidget::updateResultsUI()
@@ -247,6 +296,36 @@ void PDFAdvancedFindWidget::performSearch()
     if (!compiler->isTextLayoutReady())
     {
         // Text layout is not ready yet
+        return;
+    }
+
+    const pdf::PDFTextLayoutStorage* patternTextLayoutStorage = compiler->getTextLayoutStorage();
+    if (m_parameters.pattern >= 0)
+    {
+        // PDF Fire: a pattern of personal information - one line is searched at a time
+        const pdf::PDFFirePiiPatterns::Pattern pattern = pdf::PDFFirePiiPatterns::Pattern(m_parameters.pattern);
+        auto matcher = [pattern](const QString& text)
+        {
+            std::vector<std::pair<int, int>> matches;
+            for (const pdf::PDFFirePiiPatterns::Match& match : pdf::PDFFirePiiPatterns::find(pattern, text))
+            {
+                matches.emplace_back(match.start, match.length);
+            }
+            return matches;
+        };
+        m_findResults = patternTextLayoutStorage->find(matcher, pdf::PDFTextFlow::SeparateBlocks | pdf::PDFTextFlow::AddLineBreaks);
+
+        m_textSelection.dirty();
+        updateResultsUI();
+
+        // All results are selected, so they can be marked for redaction at once
+        ui->resultsTableWidget->selectAll();
+        m_proxy->repaintNeeded();
+
+        if (m_findResults.empty())
+        {
+            QMessageBox::information(this, tr("Find Personal Information"), tr("No %1 were found in the document.").arg(m_parameters.phrase.toLower()));
+        }
         return;
     }
 
