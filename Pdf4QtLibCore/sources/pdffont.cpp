@@ -2891,7 +2891,13 @@ PDFFontPointer PDFFont::createFont(const PDFObject& object, QByteArray fontId, c
                 const PDFArray* cidWidths = widthsObject.getArray();
                 const size_t size = cidWidths->getCount();
                 const size_t stride = vertical ? 3 : 1;
-                for (size_t i = 0; i + 1 < size;)
+
+                // PDF Fire: a range like [0 4294967295 500] inserted four billion entries (memory
+                // and CPU exhaustion). A CID font has at most 65536 glyphs; the number of the
+                // assigned widths is limited, widths past the limit fall back to the default.
+                constexpr quint64 MAXIMAL_WIDTH_ENTRIES = quint64(1) << 20;
+                quint64 remainingEntries = MAXIMAL_WIDTH_ENTRIES;
+                for (size_t i = 0; i + 1 < size && remainingEntries > 0;)
                 {
                     const CID startCID = fontLoader.readInteger(cidWidths->getItem(i++), 0);
                     const PDFObject& arrayOrCID = document->getObject(cidWidths->getItem(i++));
@@ -2905,7 +2911,7 @@ PDFFontPointer PDFFont::createFont(const PDFObject& object, QByteArray fontId, c
                         const PDFReal width = fontLoader.readNumber(cidWidths->getItem(i), 0);
                         i += stride;
                         // A wider counter avoids wrapping when the last CID is UINT_MAX.
-                        for (quint64 cid = startCID; cid <= endCID; ++cid)
+                        for (quint64 cid = startCID; cid <= endCID && remainingEntries > 0; ++cid, --remainingEntries)
                         {
                             advances[static_cast<CID>(cid)] = width;
                         }
@@ -2914,7 +2920,7 @@ PDFFontPointer PDFFont::createFont(const PDFObject& object, QByteArray fontId, c
                     {
                         const PDFArray* widthArray = arrayOrCID.getArray();
                         const size_t count = widthArray->getCount() / stride;
-                        for (size_t index = 0; index < count; ++index)
+                        for (size_t index = 0; index < count && remainingEntries > 0; ++index, --remainingEntries)
                         {
                             advances[startCID + static_cast<CID>(index)] = fontLoader.readNumber(widthArray->getItem(index * stride), 0);
                         }

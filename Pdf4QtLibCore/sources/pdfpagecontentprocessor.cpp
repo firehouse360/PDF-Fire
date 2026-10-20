@@ -37,6 +37,11 @@
 namespace pdf
 {
 
+// PDF Fire: a form, a Type 3 glyph or a tiling pattern, which draws itself (directly or
+// through others), would recurse until the stack overflows - a damaged or malicious
+// document crashed the application. The nesting of content streams is limited.
+static constexpr int MAXIMAL_CONTENT_NESTING_LEVEL = 32;
+
 // Graphic state operators - mapping from PDF name to the enum, splitted into groups.
 // Please see Table 4.1 in PDF Reference 1.7, chapter 4.1 - Graphic Objects.
 //
@@ -816,11 +821,8 @@ void PDFPageContentProcessor::processForm(const QTransform& matrix,
         return;
     }
 
-    // PDF Fire: a form, which draws itself (directly or through other forms), would
-    // recurse until the stack overflows - a damaged or malicious document crashed the
-    // application. The nesting is limited.
-    constexpr int MAXIMAL_FORM_NESTING_LEVEL = 32;
-    if (m_formNestingLevel >= MAXIMAL_FORM_NESTING_LEVEL)
+    // PDF Fire: limited nesting, see MAXIMAL_CONTENT_NESTING_LEVEL
+    if (m_formNestingLevel >= MAXIMAL_CONTENT_NESTING_LEVEL)
     {
         m_errorList.push_back(PDFRenderError(RenderErrorType::Error, PDFTranslationContext::tr("Forms are nested too deep (a form draws itself) - the rest is not drawn.")));
         return;
@@ -1160,6 +1162,14 @@ void PDFPageContentProcessor::processTillingPatternPainting(const PDFTilingPatte
     // Mark uncolored flag, if we drawing uncolored color pattern
     PDFTemporaryValueChange guard2(&m_drawingUncoloredTilingPatternState, m_drawingUncoloredTilingPatternState + uncoloredTilingPatternFlag);
 
+    // PDF Fire: a pattern, which paints itself, is limited like a form
+    if (m_formNestingLevel >= MAXIMAL_CONTENT_NESTING_LEVEL)
+    {
+        reportRenderErrorOnce(RenderErrorType::Error, PDFTranslationContext::tr("Tiling patterns are nested too deep (a pattern paints itself) - the rest is not drawn."));
+        return;
+    }
+    PDFTemporaryValueChange contentNestingGuard(&m_formNestingLevel, m_formNestingLevel + 1);
+
     // Tiling parameters
     const QRectF tilingArea = pathTransformationMatrix.map(path).boundingRect();
     const QRectF boundingBox = tilingPattern->getBoundingBox();
@@ -1170,8 +1180,18 @@ void PDFPageContentProcessor::processTillingPatternPainting(const PDFTilingPatte
     boundingPath.addRect(boundingBox);
 
     // Draw the tiling
-    const PDFInteger columns = qMax<PDFInteger>(qCeil(tilingArea.width() / xStep), 1);
-    const PDFInteger rows = qMax<PDFInteger>(qCeil(tilingArea.height() / yStep), 1);
+    // PDF Fire: tile counts in floating point first - a tiny step overflowed the int of qCeil
+    const PDFReal columnsReal = qMax(std::ceil(tilingArea.width() / xStep), 1.0);
+    const PDFReal rowsReal = qMax(std::ceil(tilingArea.height() / yStep), 1.0);
+    constexpr PDFReal MAXIMAL_TILE_COUNT = 1.0e8;
+    if (!std::isfinite(columnsReal) || !std::isfinite(rowsReal) || columnsReal * rowsReal > MAXIMAL_TILE_COUNT)
+    {
+        reportRenderError(RenderErrorType::Warning, PDFTranslationContext::tr("Tiling pattern is too complex and it was not painted."));
+        return;
+    }
+
+    const PDFInteger columns = static_cast<PDFInteger>(columnsReal);
+    const PDFInteger rows = static_cast<PDFInteger>(rowsReal);
 
     if (!isTilingPatternProcessingAllowed(columns * rows))
     {
@@ -3455,6 +3475,13 @@ void PDFPageContentProcessor::drawText(const TextSequence& textSequence)
 
                 if (item.characterContentStream && (fill || stroke))
                 {
+                    // PDF Fire: a Type 3 glyph, which draws its own font, is limited like a form
+                    if (m_formNestingLevel >= MAXIMAL_CONTENT_NESTING_LEVEL)
+                    {
+                        throw PDFRendererException(RenderErrorType::Error, PDFTranslationContext::tr("Type 3 glyphs are nested too deep (a glyph draws itself)."));
+                    }
+                    PDFTemporaryValueChange contentNestingGuard(&m_formNestingLevel, m_formNestingLevel + 1);
+
                     PDFPageContentProcessorStateGuard guard2(this);
 
                     // We must clear operands, because we are processing a new content stream

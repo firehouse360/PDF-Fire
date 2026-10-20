@@ -23,6 +23,7 @@
 #include "pdfparser.h"
 #include "pdfconstants.h"
 #include "pdfexception.h"
+#include "pdfutils.h"
 
 #include <QFile>
 #include <QThread>
@@ -863,6 +864,13 @@ PDFObject PDFParser::getObject()
 
         case PDFLexicalAnalyzer::TokenType::ArrayStart:
         {
+            // PDF Fire: limited nesting (see MAXIMAL_NESTING_DEPTH)
+            if (m_nestingDepth >= MAXIMAL_NESTING_DEPTH)
+            {
+                error(tr("Objects are nested too deep."));
+            }
+            PDFTemporaryValueChange nestingGuard(&m_nestingDepth, m_nestingDepth + 1);
+
             shift();
 
             // Collect items on the scratch stack (if the exception is thrown, items
@@ -893,6 +901,13 @@ PDFObject PDFParser::getObject()
         }
         case PDFLexicalAnalyzer::TokenType::DictionaryStart:
         {
+            // PDF Fire: limited nesting (see MAXIMAL_NESTING_DEPTH)
+            if (m_nestingDepth >= MAXIMAL_NESTING_DEPTH)
+            {
+                error(tr("Objects are nested too deep."));
+            }
+            PDFTemporaryValueChange nestingGuard(&m_nestingDepth, m_nestingDepth + 1);
+
             shift();
 
             // Start reading the dictionary. BEWARE! It can also be a stream. In this case,

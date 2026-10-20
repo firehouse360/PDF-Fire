@@ -77,6 +77,11 @@ private slots:
     void sampledFunctionHugeSize();
     void imageShortSoftMask();
     void imageHugeSize();
+    void type3GlyphDrawsItself();
+    void tilingPatternPaintsItself();
+    void parserNestingDepth();
+    void pageTreeDepth();
+    void cidFontHugeWidthRange();
 
 private:
     /// Builds a PDF file from the bodies of objects 1..n (object 1 is the catalog)
@@ -460,6 +465,114 @@ void HostileFilesTest::imageHugeSize()
     const QList<PDFRenderError> errors = renderFirstPage(document);
     QVERIFY(!errors.isEmpty());
     QVERIFY(timer.elapsed() < 10000);
+}
+
+void HostileFilesTest::type3GlyphDrawsItself()
+{
+    // The glyph procedure of a Type 3 font shows a glyph of the same font: it recursed
+    // until the stack overflowed
+    const PDFDocument document = readPdf(makePdf({ "<< /Type /Catalog /Pages 2 0 R >>",
+                                                   "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                                                   "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+                                                   makeStream("", "BT /F1 12 Tf 10 10 Td (A) Tj ET"),
+                                                   "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /A 6 0 R >> "
+                                                   "/Encoding << /Type /Encoding /Differences [65 /A] >> /FirstChar 65 /LastChar 65 /Widths [1000] /Resources << /Font << /F1 5 0 R >> >> >>",
+                                                   makeStream("", "1000 0 d0 0 0 500 500 re f BT /F1 1000 Tf 0 0 Td (A) Tj ET") }));
+
+    const QList<PDFRenderError> errors = renderFirstPage(document);
+    QVERIFY(!errors.isEmpty());
+}
+
+void HostileFilesTest::tilingPatternPaintsItself()
+{
+    // A tiling pattern, which paints with itself, recursed until the stack overflowed
+    const PDFDocument document = readPdf(makePdf({ "<< /Type /Catalog /Pages 2 0 R >>",
+                                                   "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                                                   "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Pattern << /P1 5 0 R >> >> /Contents 4 0 R >>",
+                                                   makeStream("", "/Pattern cs /P1 scn 0 0 20 20 re f"),
+                                                   makeStream("/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Resources << /Pattern << /P1 5 0 R >> >>",
+                                                              "/Pattern cs /P1 scn 0 0 10 10 re f") }));
+
+    QElapsedTimer timer;
+    timer.start();
+    renderFirstPage(document);
+    QVERIFY(timer.elapsed() < 30000);
+}
+
+void HostileFilesTest::parserNestingDepth()
+{
+    // "[[[[..." recursed once per bracket until the stack overflowed
+    const QByteArray deep = QByteArray(100000, '[') + QByteArray(100000, ']');
+    PDFParser parser(deep, nullptr, PDFParser::None);
+    QVERIFY_THROWS_EXCEPTION(PDFException, parser.getObject());
+
+    const QByteArray deepDictionaries = QByteArray("<< /A ").repeated(100000);
+    PDFParser dictionaryParser(deepDictionaries, nullptr, PDFParser::None);
+    QVERIFY_THROWS_EXCEPTION(PDFException, dictionaryParser.getObject());
+
+    // Ordinary nesting is fine
+    const QByteArray shallow = QByteArray(100, '[') + "1" + QByteArray(100, ']');
+    PDFParser shallowParser(shallow, nullptr, PDFParser::None);
+    QVERIFY(shallowParser.getObject().isArray());
+}
+
+void HostileFilesTest::pageTreeDepth()
+{
+    // A chain of 100000 page tree nodes (no cycle, so the cycle check does not stop
+    // it) recursed once per node
+    constexpr int depth = 100000;
+    QList<QByteArray> objects;
+    objects << "<< /Type /Catalog /Pages 2 0 R >>";
+    for (int i = 0; i < depth; ++i)
+    {
+        const int number = 2 + i;
+        objects << "<< /Type /Pages /Kids [" + QByteArray::number(number + 1) + " 0 R] /Count 1 >>";
+    }
+    objects << "<< /Type /Page /MediaBox [0 0 100 100] >>";
+
+    PDFDocumentReader::Result result = PDFDocumentReader::Result::OK;
+    const PDFDocument document = readPdf(makePdf(objects), &result, false);
+    QVERIFY(result != PDFDocumentReader::Result::OK || document.getCatalog()->getPageCount() == 0);
+
+    // A tree of ordinary depth is read
+    QList<QByteArray> shallowObjects;
+    shallowObjects << "<< /Type /Catalog /Pages 2 0 R >>";
+    for (int i = 0; i < 10; ++i)
+    {
+        shallowObjects << "<< /Type /Pages /Kids [" + QByteArray::number(3 + i) + " 0 R] /Count 1 >>";
+    }
+    shallowObjects << "<< /Type /Page /MediaBox [0 0 100 100] >>";
+    const PDFDocument shallowDocument = readPdf(makePdf(shallowObjects), &result, false);
+    QCOMPARE(result, PDFDocumentReader::Result::OK);
+    QCOMPARE(shallowDocument.getCatalog()->getPageCount(), size_t(1));
+}
+
+void HostileFilesTest::cidFontHugeWidthRange()
+{
+    // /W [0 4294967295 500] inserted four billion entries into a hash map
+    const PDFDocument document = readPdf(makePdf({ "<< /Type /Catalog /Pages 2 0 R >>",
+                                                   "<< /Type /Pages /Kids [] /Count 0 >>",
+                                                   "<< /Type /Font /Subtype /Type0 /BaseFont /Hostile /Encoding /Identity-H /DescendantFonts [4 0 R] >>",
+                                                   "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Hostile /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> "
+                                                   "/W [0 4294967295 500 7 [250]] /DW 1000 >>" }));
+
+    QElapsedTimer timer;
+    timer.start();
+    PDFFontPointer font;
+    try
+    {
+        font = PDFFont::createFont(document.getStorage().getObject(PDFObjectReference(3, 0)), "F1", &document);
+    }
+    catch (const PDFException&)
+    {
+        // A font without a font file may be refused - it must be refused quickly
+    }
+    QVERIFY(timer.elapsed() < 5000);
+
+    if (const PDFType0Font* type0Font = dynamic_cast<const PDFType0Font*>(font.get()))
+    {
+        QCOMPARE(type0Font->getGlyphAdvance(123456), 500.0);
+    }
 }
 
 QTEST_GUILESS_MAIN(HostileFilesTest)

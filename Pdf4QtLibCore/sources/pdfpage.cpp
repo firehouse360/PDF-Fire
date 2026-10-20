@@ -251,8 +251,16 @@ void PDFPage::parseImpl(std::vector<PDFPage>& pages,
                         std::set<PDFObjectReference>& visitedReferences,
                         const PDFPageInheritableAttributes& templateAttributes,
                         const PDFObject& root,
-                        const PDFObjectStorage* storage)
+                        const PDFObjectStorage* storage,
+                        int depth)
 {
+    // PDF Fire: a chain of nested page tree nodes (without a cycle) overflowed the stack
+    constexpr int MAXIMAL_PAGE_TREE_DEPTH = 256;
+    if (depth > MAXIMAL_PAGE_TREE_DEPTH)
+    {
+        throw PDFException(PDFTranslationContext::tr("Page tree is nested too deep."));
+    }
+
     // Are we in internal node, or leaf (page object)?
     PDFObjectReference objectReference = root.isReference() ? root.getReference() : PDFObjectReference();
     const PDFObject& dereferenced = storage->getObject(root);
@@ -291,7 +299,7 @@ void PDFPage::parseImpl(std::vector<PDFPage>& pages,
                         }
 
                         visitedReferences.insert(kid.getReference());
-                        parseImpl(pages, visitedReferences, currentInheritableAttributes, kid, storage);
+                        parseImpl(pages, visitedReferences, currentInheritableAttributes, kid, storage, depth + 1);
                     }
                 }
                 else

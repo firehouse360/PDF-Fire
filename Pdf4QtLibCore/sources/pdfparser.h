@@ -375,6 +375,11 @@ private:
     /// (a parser is created for each object of the document).
     QVarLengthArray<PDFObject, 64> m_arrayItemStack;
     QVarLengthArray<PDFDictionary::DictionaryEntry, 32> m_dictionaryEntryStack;
+
+    /// PDF Fire: depth of the nested arrays and dictionaries being parsed. Parsing is
+    /// recursive, so "[[[[..." of a hostile file overflowed the stack. The depth is limited.
+    static constexpr int MAXIMAL_NESTING_DEPTH = 512;
+    int m_nestingDepth = 0;
 };
 
 // Implementation

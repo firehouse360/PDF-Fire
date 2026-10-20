@@ -285,11 +285,13 @@ private:
     /// \param templateAttributes Template attributes (inheritable attributes defined in parent)
     /// \param root Root object of page tree
     /// \param storage Storage owning this tree
+    /// \param depth PDF Fire: depth of \p root in the page tree (the depth is limited)
     static void parseImpl(std::vector<PDFPage>& pages,
                           std::set<PDFObjectReference>& visitedReferences,
                           const PDFPageInheritableAttributes& templateAttributes,
                           const PDFObject& root,
-                          const PDFObjectStorage* storage);
+                          const PDFObjectStorage* storage,
+                          int depth = 0);
 
     /// Returns object from page dictionary. This function requires,
     /// that storage of object is present, for object fetching. Objects
