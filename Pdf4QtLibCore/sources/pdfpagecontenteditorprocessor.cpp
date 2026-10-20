@@ -200,6 +200,7 @@ void PDFPageContentEditorProcessor::performInterceptInstruction(Operator current
             }
             m_contentElementText.reset();
             m_textPath = QPainterPath();
+            m_isTextSequenceProcessed = false;
         }
     }
 }
@@ -216,6 +217,16 @@ void PDFPageContentEditorProcessor::performPathPainting(const QPainterPath& path
     if (text)
     {
         m_textPath.addPath(path);
+    }
+    else if (fill && !stroke && m_contentElementText && isTextProcessing() && m_isTextSequenceProcessed)
+    {
+        // PDF Fire: a filled path inside a text object is a glyph of a Type 3 font
+        // (its character procedure, painted in the glyph space) - it is a part of the
+        // text, not an element of its own. Otherwise the text read back after an edit
+        // (a fallback font is a Type 3 font) had no glyphs of the fallback characters,
+        // and their outlines were extra elements written over the text again.
+        const QTransform glyphToText = getGraphicState()->getCurrentTransformationMatrix() * m_contentElementText->getTransform().inverted();
+        m_textPath.addPath(glyphToText.map(path));
     }
     else
     {
@@ -245,6 +256,9 @@ void PDFPageContentEditorProcessor::performUpdateGraphicsState(const PDFPageCont
 void PDFPageContentEditorProcessor::performProcessTextSequence(const TextSequence& textSequence, ProcessOrder order)
 {
     BaseClass::performProcessTextSequence(textSequence, order);
+
+    // PDF Fire: the paths painted while a shown text is drawn are glyphs of a Type 3 font
+    m_isTextSequenceProcessed = (order == ProcessOrder::BeforeOperation);
 
     if (order == ProcessOrder::BeforeOperation && m_contentElementText)
     {
@@ -1485,19 +1499,101 @@ static QString createColorCommand(const char* tag, const PDFAbstractColorSpace* 
 
 QString PDFEditedPageContentElementText::createItemsAsText(const PDFPageContentProcessorState& initialState,
                                                            const std::vector<Item>& items,
-                                                           const std::function<QByteArray(const PDFFont*)>& getFontKey)
+                                                           const std::function<QByteArray(const PDFFont*)>& getFontKey,
+                                                           const std::set<size_t>* followingItems,
+                                                           bool* isFollowingResolved)
 {
     QString text;
+
+    if (isFollowingResolved)
+    {
+        *isFollowingResolved = true;
+    }
+
+    // PDF Fire: the size of the font of the written text (the last font command), with
+    // which a following text's move is written
+    PDFReal writtenFontSize = initialState.getTextFontSize();
+
+    // PDF Fire: a following text has started, its position has not been set yet; the
+    // end of the text before it (where the following text continues)
+    bool isFollowingPending = false;
+    bool isFollowingPenKnown = false;
+    bool isFollowingPenValid = false;
+    QTransform followingPen;
 
     PDFPageContentProcessorState state = initialState;
     state.setStateFlags(PDFPageContentProcessorState::StateFlags());
 
-    for (const Item& item : items)
+    // PDF Fire: the move of the text position done by the shown text itself (as the
+    // content processor computes it). A text matrix, which is just the position after
+    // the shown text, is not written as a position: the text after it follows the
+    // text before it, whatever its width. Otherwise every change of the font (a
+    // fallback font of a typed character) or of the colour inside a line fixed the
+    // position, which was read as a gap between words, and a later edit could not
+    // move the text after it.
+    PDFReal textAdvance = 0.0;
+    bool isTextAdvanceKnown = true;
+    bool hasTextAdvance = false;
+
+    for (size_t itemIndex = 0; itemIndex < items.size(); ++itemIndex)
     {
+        const Item& item = items[itemIndex];
+        if (followingItems && followingItems->count(itemIndex))
+        {
+            isFollowingPending = true;
+        }
+
+        if (item.isText && isFollowingPending)
+        {
+            // The following text has no position of its own
+            isFollowingPending = false;
+            isFollowingPenKnown = false;
+            if (isFollowingResolved)
+            {
+                *isFollowingResolved = false;
+            }
+        }
+
         if (item.isText)
         {
+            const PDFFontPointer& font = state.getTextFont();
+            const bool isType3Font = font && font->getFontType() == FontType::Type3;
+            const PDFReal fontSize = state.getTextFontSize();
+            const PDFReal horizontalScaling = state.getTextHorizontalScaling() * 0.01;
+            const PDFReal fontFactor = (fontSize < 0.0) ? -1.0 : 1.0;
+            QTransform type3Matrix;
+            if (isType3Font)
+            {
+                type3Matrix = static_cast<const PDFType3Font*>(font.data())->getFontMatrix() *
+                              QTransform(fontSize, 0.0, 0.0, fontSize, 0.0, 0.0) *
+                              QTransform(horizontalScaling * fontFactor, 0.0, 0.0, fontFactor, 0.0, 0.0);
+            }
+            isTextAdvanceKnown = isTextAdvanceKnown && font && !item.textSequence.items.empty();
+            hasTextAdvance = true;
+
             for (const TextSequenceItem& textItem : item.textSequence.items)
             {
+                if (isType3Font)
+                {
+                    if (!textItem.isContentStream())
+                    {
+                        textAdvance += -textItem.advance * 0.001 * fontSize * horizontalScaling;
+                    }
+                    else if (textItem.advance != 0.0)
+                    {
+                        textAdvance += type3Matrix.map(QPointF(textItem.advance, 0.0)).x();
+                    }
+                }
+                else if (textItem.isCharacter())
+                {
+                    const PDFReal additionalAdvance = (textItem.character == QChar(QChar::Space)) ? state.getTextWordSpacing() + state.getTextCharacterSpacing() : state.getTextCharacterSpacing();
+                    textAdvance += (textItem.advance + additionalAdvance) * horizontalScaling * fontFactor;
+                }
+                else if (textItem.isAdvance())
+                {
+                    textAdvance += -textItem.advance * 0.001 * fontSize * horizontalScaling;
+                }
+
                 if (textItem.isCharacter() || textItem.isContentStream())
                 {
                     if (!textItem.character.isNull())
@@ -1590,10 +1686,101 @@ QString PDFEditedPageContentElementText::createItemsAsText(const PDFPageContentP
                 {
                     const QByteArray fontKey = getFontKey ? getFontKey(font.data()) : font->getFontId();
                     text += QString("<tf font=\"%1\" size=\"%2\"/>").arg(QString::fromLatin1(fontKey).toHtmlEscaped()).arg(newState.getTextFontSize());
+                    writtenFontSize = newState.getTextFontSize();
+                }
+            }
+
+            bool isPositionAfterText = false;
+            if (flags.testFlag(PDFPageContentProcessorState::StateTextMatrix) && hasTextAdvance && isTextAdvanceKnown)
+            {
+                QTransform expectedTransform = state.getTextMatrix();
+                expectedTransform.translate(textAdvance, 0.0);
+                const QTransform actualTransform = newState.getTextMatrix();
+                isPositionAfterText = qAbs(expectedTransform.m11() - actualTransform.m11()) < 1e-6 &&
+                                      qAbs(expectedTransform.m12() - actualTransform.m12()) < 1e-6 &&
+                                      qAbs(expectedTransform.m21() - actualTransform.m21()) < 1e-6 &&
+                                      qAbs(expectedTransform.m22() - actualTransform.m22()) < 1e-6 &&
+                                      qAbs(expectedTransform.dx() - actualTransform.dx()) < 1e-3 &&
+                                      qAbs(expectedTransform.dy() - actualTransform.dy()) < 1e-3;
+            }
+            // PDF Fire: a text joined to the line follows the text before it - its position
+            // is written as a move after that text (on the same baseline). Its text object
+            // starts at the origin (BT), the first position before its text is a temporary
+            // one (for example, the font is set before the Td command) - the last one counts.
+            bool isPositionWrittenAsMove = false;
+            if (isFollowingPending && flags.testFlag(PDFPageContentProcessorState::StateTextMatrix))
+            {
+                if (!isFollowingPenKnown)
+                {
+                    isFollowingPenKnown = true;
+                    isFollowingPenValid = hasTextAdvance && isTextAdvanceKnown;
+                    followingPen = state.getTextMatrix();
+                    followingPen.translate(textAdvance, 0.0);
+                }
+
+                bool isPositionTemporary = false;
+                for (size_t nextIndex = itemIndex + 1; nextIndex < items.size() && !items[nextIndex].isText; ++nextIndex)
+                {
+                    if (items[nextIndex].isUpdateGraphicState && items[nextIndex].state.getTextMatrix() != newState.getTextMatrix())
+                    {
+                        isPositionTemporary = true;
+                        break;
+                    }
+                }
+
+                if (isPositionTemporary)
+                {
+                    // Not written at all - the text follows from the end of the text before it
+                    isPositionWrittenAsMove = true;
+                }
+                else
+                {
+                    isFollowingPending = false;
+                    isFollowingPenKnown = false;
+
+                    bool isResolved = false;
+                    const QTransform& expectedTransform = followingPen;
+                    const QTransform actualTransform = newState.getTextMatrix();
+                    const bool isSameDirection = qAbs(expectedTransform.m11() - actualTransform.m11()) < 1e-6 &&
+                                                 qAbs(expectedTransform.m12() - actualTransform.m12()) < 1e-6 &&
+                                                 qAbs(expectedTransform.m21() - actualTransform.m21()) < 1e-6 &&
+                                                 qAbs(expectedTransform.m22() - actualTransform.m22()) < 1e-6;
+                    const PDFReal horizontalScaling = newState.getTextHorizontalScaling() * 0.01;
+                    if (isFollowingPenValid && isSameDirection && expectedTransform.isInvertible() && horizontalScaling > 0.0 && writtenFontSize > 0.0)
+                    {
+                        // The start of the following text in the text space of the end of the
+                        // text before it: x is the gap, y must be zero (the same baseline)
+                        const QPointF start = expectedTransform.inverted().map(QPointF(actualTransform.dx(), actualTransform.dy()));
+                        if (qAbs(start.y()) < 1e-3 && start.x() > -0.5 * writtenFontSize && start.x() < 1.5 * writtenFontSize)
+                        {
+                            if (qAbs(start.x()) >= 1e-3)
+                            {
+                                const PDFReal advance = -start.x() * 1000.0 / (writtenFontSize * horizontalScaling);
+                                text += QString("<space advance=\"%1\"/>").arg(advance);
+                            }
+                            isResolved = true;
+                            isPositionWrittenAsMove = true;
+                        }
+                    }
+
+                    if (!isResolved && isFollowingResolved)
+                    {
+                        *isFollowingResolved = false;
+                    }
                 }
             }
 
             if (flags.testFlag(PDFPageContentProcessorState::StateTextMatrix))
+            {
+                // The move by the text is used up by the new position (a change of the
+                // state without a new position, for example after a glyph of a Type 3
+                // font, keeps it)
+                textAdvance = 0.0;
+                isTextAdvanceKnown = true;
+                hasTextAdvance = false;
+            }
+
+            if (flags.testFlag(PDFPageContentProcessorState::StateTextMatrix) && !isPositionAfterText && !isPositionWrittenAsMove)
             {
                 QTransform transform = newState.getTextMatrix();
 

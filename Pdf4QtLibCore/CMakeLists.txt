@@ -111,6 +111,8 @@ add_library(Pdf4QtLibCore SHARED
     sources/pdfprogress.h
     sources/pdffireeditedtext.cpp
     sources/pdffireeditedtext.h
+    sources/pdffiretextelementupdater.cpp
+    sources/pdffiretextelementupdater.h
     sources/pdffireformfields.cpp
     sources/pdffireformfields.h
     sources/pdffireembeddedfont.cpp

@@ -68,6 +68,13 @@ public:
                             PDFDictionaryBuilder& fontDictionary,
                             const std::function<void(const QString&)>& errorCallback);
 
+    /// PDF Fire: returns the width of a space (in the thousandths of the font size)
+    /// for a font, which has no space glyph (a subset) - the space of the font program
+    /// of the document, or of the similar font of the system. It is never narrower than
+    /// a gap between words (PDFEditedTextMarkup::WORD_GAP_ADVANCE), so it is read back
+    /// as a space.
+    PDFReal getSpaceWidth(const PDFFontPointer& similarToFont);
+
 private:
     struct GlyphRecord
     {
@@ -88,6 +95,7 @@ private:
 
     struct SourceFontFallback
     {
+        QRawFont documentFont;      ///< PDF Fire: the complete font program of the document (not a subset), if usable
         QRawFont substituteFont;
         std::vector<FallbackFont> fonts;
         std::map<char32_t, std::pair<size_t, int>> codeMap; ///< Code point to (font index, character code)
@@ -115,7 +123,11 @@ private:
 
     /// Extracts the glyph outline and advance for the code point from the
     /// substitute font, or from the cascade of generic fallback fonts.
-    GlyphRecord createGlyphRecord(const QRawFont& substituteFont, char32_t codePoint) const;
+    GlyphRecord createGlyphRecord(const SourceFontFallback& fallback, char32_t codePoint) const;
+
+    /// PDF Fire: returns the complete font program embedded in the document, if
+    /// the font is not a subset and its licence allows editing (else an invalid font)
+    static QRawFont getDocumentFontProgram(const PDFFontPointer& font);
 
     /// Builds the Type 3 font dictionary object (including character content
     /// streams and the ToUnicode stream) for the fallback font.

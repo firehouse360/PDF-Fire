@@ -28,17 +28,24 @@
 #include <QPlainTextEdit>
 #include <QTextEdit>
 
+class QSyntaxHighlighter;
+
 namespace pdf
 {
 
 /// PDF Fire: edits a line of the text of a page in place, like a word processor:
 /// a caret in the text, selection by the mouse and the keyboard, clipboard, undo.
-/// The editor is put exactly over the text (it covers the text with the colour of
-/// the paper, and shows the same text in the font of the document). The text is
-/// written back the same way as by the edit dialog, so the original font and the
-/// spacing of the untouched characters are kept.
+/// The editor is put exactly over the text. The text is written back the same way
+/// as by the edit dialog, so the original font and the spacing of the untouched
+/// characters are kept.
 ///
-/// Enter or a click outside commits the text, Esc cancels the editing.
+/// In the preview mode the editor itself is transparent - only the caret and the
+/// selection are drawn. The page shows the edited text with the real glyphs of the
+/// document (a preview of the text, as it will be written, drawn by the page
+/// content scene under the editor). Otherwise the editor covers the text with the
+/// colour of the paper and shows the text in a similar font of the system.
+///
+/// Enter, Ctrl+Enter or a click outside commits the text, Esc cancels the editing.
 class PDF4QTLIBWIDGETSSHARED_EXPORT PDFFireInlineTextEditor : public QPlainTextEdit
 {
     Q_OBJECT
@@ -60,6 +67,14 @@ public:
     /// Finishes the editing - the text is committed (if not cancelled before)
     void finish();
 
+    /// Continues the editing after a commit, which could not be done - the typed
+    /// text stays in the editor, so it is not lost
+    void resume();
+
+    /// Turns the preview mode on or off (see the description of the class)
+    void setPreviewMode(bool previewMode);
+    bool isPreviewMode() const { return m_previewHighlighter != nullptr; }
+
 signals:
     void committed(const QString& text);
     void cancelled();
@@ -73,6 +88,7 @@ private:
 
     bool m_isFinished = false;
     QRect m_originalRect;
+    QSyntaxHighlighter* m_previewHighlighter = nullptr;
 };
 
 /// PDF Fire: edits a paragraph of the page in place - several lines, which are
@@ -105,6 +121,14 @@ public:
 
     void finish();
 
+    /// Continues the editing after a commit, which could not be done - the typed
+    /// text stays in the editor, so it is not lost
+    void resume();
+
+    /// Turns the preview mode on or off (see PDFFireInlineTextEditor)
+    void setPreviewMode(bool previewMode);
+    bool isPreviewMode() const { return m_previewHighlighter != nullptr; }
+
 signals:
     void committed(const QStringList& lines);
     void cancelled();
@@ -118,6 +142,7 @@ private:
     void updateHeight();
 
     bool m_isFinished = false;
+    QSyntaxHighlighter* m_previewHighlighter = nullptr;
     qreal m_lineHeight = 0.0;
     qreal m_firstLineIndent = 0.0;
     int m_lineWidth = 0;

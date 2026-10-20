@@ -25,7 +25,9 @@
 #include "pdfexception.h"
 
 #include <QFont>
+#include <QFontInfo>
 #include <QTextStream>
+#include <QtEndian>
 
 #include "pdfdbgheap.h"
 
@@ -109,6 +111,29 @@ PDFEditorFallbackFontManager::SourceFontFallback& PDFEditorFallbackFontManager::
             }
 
             substituteFont = QFont(QString::fromLatin1(fontFamily));
+
+            // PDF Fire: common fonts of Windows documents have metric-compatible free
+            // twins, which are usually installed on Linux (the same table as the
+            // in-place text editor uses)
+            QString familyName = QString::fromLatin1(fontFamily).section(QChar('-'), 0, 0).section(QChar(','), 0, 0);
+            static const std::pair<const char*, const char*> twins[] = {
+                { "Calibri", "Carlito" }, { "Cambria", "Caladea" }, { "Arial", "Liberation Sans" },
+                { "TimesNewRoman", "Liberation Serif" }, { "Times New Roman", "Liberation Serif" },
+                { "CourierNew", "Liberation Mono" }, { "Courier New", "Liberation Mono" }, { "Helvetica", "Liberation Sans" },
+                { "Times", "Liberation Serif" }, { "Courier", "Liberation Mono" }
+            };
+            if (QFontInfo(substituteFont).family().compare(familyName, Qt::CaseInsensitive) != 0)
+            {
+                for (const auto& [windowsName, twin] : twins)
+                {
+                    if (familyName.startsWith(QLatin1String(windowsName), Qt::CaseInsensitive) && QFontInfo(QFont(QLatin1String(twin))).family() == QLatin1String(twin))
+                    {
+                        substituteFont = QFont(QLatin1String(twin));
+                        break;
+                    }
+                }
+            }
+
             substituteFont.setWeight(QFont::Weight(qBound(1, int(descriptor->fontWeight), 1000)));
             substituteFont.setStretch(descriptor->fontStretch);
             substituteFont.setItalic(descriptor->isItalic());
@@ -118,6 +143,7 @@ PDFEditorFallbackFontManager::SourceFontFallback& PDFEditorFallbackFontManager::
 
         substituteFont.setPixelSize(1000);
         fallbackData.substituteFont = QRawFont::fromFont(substituteFont);
+        fallbackData.documentFont = getDocumentFontProgram(similarToFont);
 
         it = m_fallbacks.emplace(sourceFontId, std::move(fallbackData)).first;
     }
@@ -138,7 +164,7 @@ std::pair<size_t, int> PDFEditorFallbackFontManager::assignCode(SourceFontFallba
     const size_t fontIndex = fallback.fonts.size() - 1;
     FallbackFont& font = fallback.fonts[fontIndex];
 
-    GlyphRecord glyphRecord = createGlyphRecord(fallback.substituteFont, codePoint);
+    GlyphRecord glyphRecord = createGlyphRecord(fallback, codePoint);
     if (!glyphRecord.hasGlyph && errorCallback)
     {
         errorCallback(PDFTranslationContext::tr("Character '%1' (U+%2) is not available in any substitute font, an empty glyph is used.")
@@ -178,7 +204,7 @@ PDFEditorFallbackFontManager::FallbackFont& PDFEditorFallbackFontManager::create
     return fallback.fonts.back();
 }
 
-PDFEditorFallbackFontManager::GlyphRecord PDFEditorFallbackFontManager::createGlyphRecord(const QRawFont& substituteFont, char32_t codePoint) const
+PDFEditorFallbackFontManager::GlyphRecord PDFEditorFallbackFontManager::createGlyphRecord(const SourceFontFallback& fallback, char32_t codePoint) const
 {
     GlyphRecord record;
     record.codePoint = codePoint;
@@ -221,7 +247,9 @@ PDFEditorFallbackFontManager::GlyphRecord PDFEditorFallbackFontManager::createGl
         return true;
     };
 
-    if (tryExtractGlyph(substituteFont))
+    // PDF Fire: the font of the document itself first (its complete program), then
+    // the similar font of the system
+    if (tryExtractGlyph(fallback.documentFont) || tryExtractGlyph(fallback.substituteFont))
     {
         return record;
     }
@@ -256,12 +284,95 @@ const std::vector<QRawFont>& PDFEditorFallbackFontManager::getCascadeFonts() con
             }
         };
 
+        // PDF Fire: the fonts of Linux distributions first (DejaVu, Liberation and Noto
+        // cover most of the symbols), the fonts of Windows after them. A font, which is
+        // not installed, is not added (Qt would substitute the default font for it).
         addCascadeFont(QFont());
-        addCascadeFont(QFont("Segoe UI Symbol"));
-        addCascadeFont(QFont("Segoe UI Emoji"));
+        for (const char* family : { "DejaVu Sans", "Liberation Sans", "Noto Sans", "Noto Sans Symbols", "Noto Sans Symbols 2",
+                                    "Noto Sans Math", "DejaVu Serif", "FreeSerif", "Segoe UI Symbol", "Segoe UI Emoji" })
+        {
+            QFont font{ QLatin1String(family) };
+            if (QFontInfo(font).family().compare(QLatin1String(family), Qt::CaseInsensitive) == 0)
+            {
+                addCascadeFont(font);
+            }
+        }
     }
 
     return m_cascadeFonts;
+}
+
+PDFReal PDFEditorFallbackFontManager::getSpaceWidth(const PDFFontPointer& similarToFont)
+{
+    const SourceFontFallback& fallback = getSourceFontFallback(similarToFont);
+
+    PDFReal width = 0.0;
+    for (const QRawFont* rawFont : { &fallback.documentFont, &fallback.substituteFont })
+    {
+        if (width <= 0.0 && rawFont->isValid())
+        {
+            const QList<quint32> glyphIndices = rawFont->glyphIndexesForString(QStringLiteral(" "));
+            if (glyphIndices.size() == 1 && glyphIndices.front() != 0)
+            {
+                const QList<QPointF> advances = rawFont->advancesForGlyphIndexes(glyphIndices);
+                width = advances.size() == 1 ? advances.front().x() * 1000.0 / rawFont->pixelSize() : 0.0;
+            }
+        }
+    }
+
+    if (width <= 0.0)
+    {
+        width = 250.0;
+    }
+
+    // A narrower gap would not be read back as a space
+    return qBound(220.0, width, 600.0);
+}
+
+QRawFont PDFEditorFallbackFontManager::getDocumentFontProgram(const PDFFontPointer& font)
+{
+    if (!font)
+    {
+        return QRawFont();
+    }
+
+    // A subset has only the glyphs, which the document uses - it can't draw new ones
+    // (and its character map is private). Only a complete font program is used.
+    const FontDescriptor* descriptor = font->getFontDescriptor();
+    const QByteArray& fontName = descriptor->fontName;
+    if (fontName.size() > 7 && fontName[6] == '+')
+    {
+        return QRawFont();
+    }
+
+    const QByteArray* fontData = descriptor->getEmbeddedFontData();
+    if (!fontData || fontData->isEmpty() || fontData->size() > 16 * 1024 * 1024)
+    {
+        return QRawFont();
+    }
+
+    QRawFont rawFont(*fontData, 1000);
+    if (!rawFont.isValid())
+    {
+        return QRawFont();
+    }
+
+    // Ported from PdfCraft crates/fonts/src/embedding.rs (validate, the licence of the
+    // font) (MIT OR Apache-2.0), Copyright (c) 2026 ArtCraft Team and the PdfCraft
+    // contributors: a font with the restricted licence (0x0002), with the preview and
+    // print licence (0x0004) or with the bitmap only licence (0x0200) is not used to
+    // draw new text.
+    const QByteArray os2 = rawFont.fontTable("OS/2");
+    if (os2.size() >= 10)
+    {
+        const quint16 fsType = qFromBigEndian<quint16>(reinterpret_cast<const uchar*>(os2.constData()) + 8);
+        if (fsType & (0x0002 | 0x0004 | 0x0200))
+        {
+            return QRawFont();
+        }
+    }
+
+    return rawFont;
 }
 
 PDFObject PDFEditorFallbackFontManager::buildFontDictionaryObject(const FallbackFont& font) const

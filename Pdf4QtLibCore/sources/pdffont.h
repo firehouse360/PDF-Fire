@@ -413,6 +413,13 @@ public:
 
     virtual QByteArray encodeCharacter(char32_t codePoint) const override;
 
+    /// PDF Fire: returns true, if the font has a glyph for the character code. A subset
+    /// font lacks the glyphs it doesn't use - its widths say, which glyphs it has.
+    bool hasGlyphForCode(int code) const;
+
+    /// PDF Fire: returns true, if the font is a subset (its name has a tag "ABCDEF+")
+    bool isSubsetFont() const;
+
     virtual void dumpFontToTreeItem(ITreeFactory* treeFactory) const override;
 
 protected:

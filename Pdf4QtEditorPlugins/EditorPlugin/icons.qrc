@@ -16,5 +16,6 @@
         <file>create-text.svg</file>
         <file>create-vertical-line.svg</file>
         <file>create-yes-mark.svg</file>
+        <file>edit-text.svg</file>
     </qresource>
 </RCC>

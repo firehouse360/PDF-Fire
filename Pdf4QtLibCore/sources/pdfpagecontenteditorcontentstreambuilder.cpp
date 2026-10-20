@@ -1520,10 +1520,17 @@ void PDFPageContentEditorContentStreamBuilder::writeTextWithFallback(QTextStream
 
     // Split the text into maximal runs of code points encodable by the current
     // font, and runs of code points which must be written with a fallback font.
+    enum class RunType
+    {
+        Encodable,
+        Fallback,
+        SpaceMove   ///< PDF Fire: a space missing in the font (a subset) - written as a move
+    };
+
     struct CodePointRun
     {
         std::u32string codePoints;
-        bool isEncodable = false;
+        RunType type = RunType::Fallback;
     };
     std::vector<CodePointRun> runs;
 
@@ -1538,17 +1545,38 @@ void PDFPageContentEditorContentStreamBuilder::writeTextWithFallback(QTextStream
             ++i;
         }
 
-        const bool isEncodable = !m_textFont->encodeCharacter(codePoint).isEmpty();
-        if (runs.empty() || runs.back().isEncodable != isEncodable)
+        RunType type = RunType::Encodable;
+        if (m_textFont->encodeCharacter(codePoint).isEmpty())
         {
-            runs.push_back(CodePointRun{ std::u32string(), isEncodable });
+            // PDF Fire: a subset often lacks the space glyph; a space is then a move of
+            // the text position (as PdfCraft writes it), not a glyph of a fallback font
+            type = (codePoint == U' ') ? RunType::SpaceMove : RunType::Fallback;
+        }
+
+        if (runs.empty() || runs.back().type != type)
+        {
+            runs.push_back(CodePointRun{ std::u32string(), type });
         }
         runs.back().codePoints.push_back(codePoint);
     }
 
     for (const CodePointRun& run : runs)
     {
-        if (run.isEncodable)
+        if (run.type == RunType::SpaceMove)
+        {
+            // The move of a space glyph: its width, and the character spacing, which is
+            // applied to each glyph (in the thousandths of the font size, negative = to the right)
+            PDFReal width = m_fallbackFontManager.getSpaceWidth(m_textFont);
+            if (m_currentTextFontSize > 0.0)
+            {
+                width += m_currentState.getTextCharacterSpacing() * 1000.0 / m_currentTextFontSize;
+            }
+            for (size_t i = 0; i < run.codePoints.size(); ++i)
+            {
+                m_pendingTextArray += formatNumber(-width) + " ";
+            }
+        }
+        else if (run.type == RunType::Encodable)
         {
             PDFEncodedText encodedText = m_textFont->encodeText(QString::fromUcs4(run.codePoints.data(), int(run.codePoints.size())));
 
@@ -1679,6 +1707,31 @@ void PDFPageContentEditorContentStreamBuilder::writeImageObject(QTextStream& str
 }
 
 QByteArray PDFPageContentEditorContentStreamBuilder::selectFont(const QByteArray& font)
+{
+    QByteArray fontKey = selectFontImpl(font);
+
+    // PDF Fire: a fallback font of a previous edit (a Type 3 font created, when the text
+    // was written into a temporary document) is not a font of this document. Its
+    // characters are written again in the font of the text before it - the characters,
+    // which that font can't draw, get the same fallback font again (the same glyphs,
+    // the same widths). The default font would have other widths than the ones, with
+    // which the text was positioned.
+    if (font.startsWith("PDF4QT_Fb") && fontKey != font && m_lastTextFont)
+    {
+        m_textFont = m_lastTextFont;
+        return m_lastTextFontKey;
+    }
+
+    if (m_textFont && !fontKey.startsWith("PDF4QT_"))
+    {
+        m_lastTextFont = m_textFont;
+        m_lastTextFontKey = fontKey;
+    }
+
+    return fontKey;
+}
+
+QByteArray PDFPageContentEditorContentStreamBuilder::selectFontImpl(const QByteArray& font)
 {
     m_textFont = nullptr;
     QByteArray fontKey = font;

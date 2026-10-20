@@ -35,6 +35,7 @@
 #include "pdfoptimizer.h"
 #include "pdffireeditedtext.h"
 #include "pdffireinlinetexteditor.h"
+#include "pdffiretextelementupdater.h"
 #include <QApplication>
 #include <QStatusBar>
 #include <QFontDatabase>
@@ -67,6 +68,12 @@ EditorPlugin::EditorPlugin() :
     m_isUndoRedoInProgress(false)
 {
     m_scene.setIsPageContentDrawSuppressed(true);
+
+    // PDF Fire: the preview of the text edited in place is updated shortly after the
+    // last keystroke (a fast typist does not wait for each one)
+    m_previewTimer.setSingleShot(true);
+    m_previewTimer.setInterval(40);
+    connect(&m_previewTimer, &QTimer::timeout, this, &EditorPlugin::updateInlinePreview);
 }
 
 void EditorPlugin::setWidget(pdf::PDFWidget* widget)
@@ -76,6 +83,7 @@ void EditorPlugin::setWidget(pdf::PDFWidget* widget)
     BaseClass::setWidget(widget);
 
     QAction* activateAction = new QAction(QIcon(":/pdfplugins/editorplugin/activate.svg"), tr("&Edit page content"), this);
+    QAction* editTextAction = new QAction(QIcon(":/pdfplugins/editorplugin/edit-text.svg"), tr("Edit Te&xt"), this);
     QAction* createTextAction = new QAction(QIcon(":/pdfplugins/editorplugin/create-text.svg"), tr("Create &Text Label"), this);
     QAction* createFreehandCurveAction = new QAction(QIcon(":/pdfplugins/editorplugin/create-freehand-curve.svg"), tr("Create &Freehand Curve"), this);
     QAction* createAcceptMarkAction = new QAction(QIcon(":/pdfplugins/editorplugin/create-yes-mark.svg"), tr("Create &Accept Mark"), this);
@@ -93,6 +101,7 @@ void EditorPlugin::setWidget(pdf::PDFWidget* widget)
     QAction* clearAction = new QAction(QIcon(":/pdfplugins/editorplugin/clear.svg"), tr("Clear A&ll Graphics"), this);
 
     activateAction->setObjectName("editortool_activateAction");
+    editTextAction->setObjectName("editortool_editTextAction");
     createTextAction->setObjectName("editortool_createTextAction");
     createFreehandCurveAction->setObjectName("editortool_createFreehandCurveAction");
     createAcceptMarkAction->setObjectName("editortool_createAcceptMarkAction");
@@ -110,6 +119,11 @@ void EditorPlugin::setWidget(pdf::PDFWidget* widget)
     clearAction->setObjectName("editortool_clearAction");
 
     activateAction->setCheckable(true);
+    editTextAction->setCheckable(true);
+    editTextAction->setToolTip(tr("Edit Text\n\n"
+                                  "Click a text on the page to change it in place, in the font of the document. "
+                                  "The line or the paragraph under the mouse is outlined. "
+                                  "Enter (a line) or Ctrl+Enter (a paragraph) or a click outside keeps the change, Esc cancels."));
     createTextAction->setCheckable(true);
     createFreehandCurveAction->setCheckable(true);
     createAcceptMarkAction->setCheckable(true);
@@ -129,6 +143,7 @@ void EditorPlugin::setWidget(pdf::PDFWidget* widget)
                                                 "Hold Shift to define a different size."));
 
     m_actions[Activate] = activateAction;
+    m_actions[EditText] = editTextAction;
     m_actions[Text] = createTextAction;
     m_actions[FreehandCurve] = createFreehandCurveAction;
     m_actions[AcceptMark] = createAcceptMarkAction;
@@ -207,6 +222,8 @@ void EditorPlugin::setWidget(pdf::PDFWidget* widget)
     connect(&m_scene, &pdf::PDFPageContentScene::sceneChanged, this, &EditorPlugin::onSceneChanged);
     connect(&m_scene, &pdf::PDFPageContentScene::selectionChanged, this, &EditorPlugin::onSceneSelectionChanged);
     connect(&m_scene, &pdf::PDFPageContentScene::editElementRequest, this, &EditorPlugin::onSceneEditElement);
+    connect(&m_scene, &pdf::PDFPageContentScene::textElementHovered, this, &EditorPlugin::onTextElementHovered);
+    connect(editTextAction, &QAction::triggered, this, &EditorPlugin::onEditTextTriggered);
     // PDF Fire: this removes everything from the edited pages, including their original
     // content - applying the changes then writes empty pages. So it is confirmed first.
     connect(clearAction, &QAction::triggered, this, [this]()
@@ -251,6 +268,7 @@ std::vector<QAction*> EditorPlugin::getActions() const
     std::vector<QAction*> result;
 
     result.push_back(m_actions[Activate]);
+    result.push_back(m_actions[EditText]);
     result.push_back(nullptr);
 
     for (auto actionId : { Text, FreehandCurve, AcceptMark, RejectMark,
@@ -404,83 +422,12 @@ bool EditorPlugin::updatePageContent(pdf::PDFInteger pageIndex,
     QStringList errors = contentStreamBuilder.getErrors();
     contentStreamBuilder.clearErrors();
 
-    if (!errors.empty())
+    if (!confirmContentStreamErrors(errors, pageIndex))
     {
-        const int errorCount = errors.size();
-        if (errors.size() > 3)
-        {
-            errors.resize(3);
-        }
-
-        QString message = tr("Errors (%2) occured while creating content stream on page %3.<br>%1").arg(errors.join("<br>")).arg(errorCount).arg(pageIndex + 1);
-        if (QMessageBox::question(m_dataExchangeInterface->getMainWindow(), tr("Error"), message, QMessageBox::Abort, QMessageBox::Ignore) == QMessageBox::Abort)
-        {
-            return false;
-        }
+        return false;
     }
 
-    pdf::PDFDictionaryBuilder fontDictionary = contentStreamBuilder.getFontDictionary();
-    pdf::PDFDictionaryBuilder xobjectDictionary = contentStreamBuilder.getXObjectDictionary();
-    pdf::PDFDictionaryBuilder graphicStateDictionary = contentStreamBuilder.getGraphicStateDictionary();
-    pdf::PDFDictionaryBuilder shadingDictionary = contentStreamBuilder.getShadingDictionary();
-
-    builder->replaceObjectsByReferences(fontDictionary);
-    builder->replaceObjectsByReferences(xobjectDictionary);
-    builder->replaceObjectsByReferences(graphicStateDictionary);
-    builder->replaceObjectsByReferences(shadingDictionary);
-
-    pdf::PDFArrayBuilder array;
-    array.appendItem(pdf::PDFObject::createName("FlateDecode"));
-
-    // Compress the content stream
-    QByteArray compressedData = pdf::PDFFlateDecodeFilter::compress(contentStreamBuilder.getOutputContent());
-    pdf::PDFDictionaryBuilder contentDictionary;
-    contentDictionary.setEntry(pdf::PDFInplaceOrMemoryString("Length"), pdf::PDFObject::createInteger(compressedData.size()));
-    contentDictionary.setEntry(pdf::PDFInplaceOrMemoryString("Filter"), pdf::PDFObject::createArray(qMove(array)));
-    pdf::PDFObject contentObject = pdf::PDFObject::createStream(pdf::PDFStream(qMove(contentDictionary), qMove(compressedData)));
-
-    pdf::PDFObject pageObject = builder->getObjectByReference(page->getPageReference());
-
-    // The new resource dictionary is created from the current one (which can also
-    // be inherited from the page tree), so resources, which are not regenerated by
-    // the content stream builder - for example color spaces, patterns, shadings or
-    // properties - are preserved. Only the regenerated categories are replaced.
-    // The current resources cannot be merged by the merge operation below, because
-    // they are usually an indirect object, which is replaced as a whole.
-    pdf::PDFDictionaryBuilder resourcesDictionary;
-    if (const pdf::PDFDictionary* currentResourcesDictionary = m_document->getDictionaryFromObject(page->getResources()))
-    {
-        resourcesDictionary = pdf::PDFDictionaryBuilder(*currentResourcesDictionary);
-    }
-
-    auto setResources = [&resourcesDictionary](const char* key, const pdf::PDFDictionaryBuilder& dictionary)
-    {
-        if (!dictionary.isEmpty())
-        {
-            resourcesDictionary.setEntry(pdf::PDFInplaceOrMemoryString(key),
-                                         pdf::PDFObject::createDictionary(dictionary));
-        }
-    };
-
-    setResources("Font", fontDictionary);
-    setResources("XObject", xobjectDictionary);
-    setResources("ExtGState", graphicStateDictionary);
-    setResources("Shading", shadingDictionary);
-
-    pdf::PDFObjectFactory factory;
-    factory.beginDictionary();
-    factory.beginDictionaryItem("Resources");
-    factory << resourcesDictionary;
-    factory.endDictionaryItem();
-
-    factory.beginDictionaryItem("Contents");
-    factory << builder->addObject(std::move(contentObject));
-    factory.endDictionaryItem();
-
-    factory.endDictionary();
-
-    pageObject = pdf::PDFObjectManipulator::merge(pageObject, factory.takeObject(), pdf::PDFObjectManipulator::RemoveNullObjects);
-    builder->setObject(page->getPageReference(), std::move(pageObject));
+    pdf::PDFFireTextElementUpdater::writePageContent(builder, m_document, page, contentStreamBuilder);
 
     return true;
 }
@@ -520,6 +467,12 @@ bool EditorPlugin::save()
 
 bool EditorPlugin::writePageContentToDocument()
 {
+    // PDF Fire: the text being edited in place is a part of the changes
+    if (!finishInlineEdit())
+    {
+        return false;
+    }
+
     pdf::PDFDocumentModifier modifier(m_document);
     pdf::PDFDocumentBuilder* builder = modifier.getBuilder();
 
@@ -632,6 +585,14 @@ pdf::PDFWidgetTool* EditorPlugin::getActiveTool()
 
 void EditorPlugin::onToolActivityChanged()
 {
+    // PDF Fire: a tool of the page content editing switches the Edit Text mode off
+    if (m_scene.isTextEditMode() && getActiveTool())
+    {
+        // The page content editing goes on with the tool
+        setTextEditMode(false);
+        m_isSceneActivatedByEditText = false;
+    }
+
     if (m_editorWidget)
     {
         pdf::PDFWidgetTool* activeTool = getActiveTool();
@@ -650,6 +611,13 @@ void EditorPlugin::onToolActivityChanged()
 void EditorPlugin::onSceneEditElement(const std::set<pdf::PDFInteger>& elements)
 {
     if (elements.empty())
+    {
+        return;
+    }
+
+    // PDF Fire: the text edited in place is applied first (it can change the elements).
+    // If it can't be applied, its editor stays open and nothing else is edited.
+    if (!finishInlineEdit())
     {
         return;
     }
@@ -770,7 +738,28 @@ bool EditorPlugin::startInlineTextEdit(pdf::PDFPageContentElement* element)
         return true;
     }
 
-    const pdf::PDFPageContentElementEdited* editedElement = element->asElementEdited();
+    InlineLine line;
+    if (!element || !getJoinedInlineLine(element, &line))
+    {
+        // Not a single line of horizontal text - a line with several lines (T*) is
+        // still edited alone, if it is horizontal
+        const pdf::PDFPageContentElementEdited* editedElement = element ? element->asElementEdited() : nullptr;
+        const pdf::PDFEditedPageContentElementText* textElement = editedElement ? editedElement->getElement()->asText() : nullptr;
+        if (!textElement)
+        {
+            return false;
+        }
+
+        line.id = element->getElementId();
+        line.pageIndex = element->getPageIndex();
+        line.rect = element->getBoundingBox().normalized();
+        line.text = pdf::PDFEditedTextMarkup(textElement->getItemsAsText()).getPlainText();
+        line.font = textElement->getState().getTextFont();
+    }
+
+    // The text of the line (the texts of the line joined, if it is written as several)
+    const pdf::PDFPageContentElement* lineElement = line.joinedElement ? line.joinedElement.get() : element;
+    const pdf::PDFPageContentElementEdited* editedElement = lineElement->asElementEdited();
     const pdf::PDFEditedPageContentElementText* textElement = editedElement ? editedElement->getElement()->asText() : nullptr;
     if (!textElement)
     {
@@ -811,54 +800,34 @@ bool EditorPlugin::startInlineTextEdit(pdf::PDFPageContentElement* element)
 
     QFont font = getInlineEditorFont(pdfFont);
 
+    // PDF Fire: the text itself is shown by the page (the real glyphs), the editor only
+    // places the caret - its font has the size of the font of the text, so the caret is
+    // as high as the line of the text
     const qreal fontSize = markup.getFirstFontSize() > 0.0 ? markup.getFirstFontSize() : textElement->getState().getTextFontSize();
     const qreal textScale = std::hypot(textTransform.m21(), textTransform.m22());
     const qreal deviceScale = std::hypot(pageToDevice.m21(), pageToDevice.m22());
     font.setPixelSize(qMax(4, qRound(fontSize * (textScale > 0.0 ? textScale : 1.0) * deviceScale)));
 
-    if (m_inlineEditor)
-    {
-        m_inlineEditor->finish();
-    }
-
     QWidget* drawWidget = m_widget->getDrawWidget()->getWidget();
     pdf::PDFFireInlineTextEditor* editor = new pdf::PDFFireInlineTextEditor(drawWidget);
     m_inlineEditor = editor;
 
-    const pdf::PDFInteger elementId = element->getElementId();
-    connect(editor, &pdf::PDFFireInlineTextEditor::committed, this, [this, editor, elementId, plainText](const QString& text)
-    {
-        editor->hide();
-        editor->deleteLater();
-        if (text != plainText)
-        {
-            applyInlineTextEdit(elementId, text);
-        }
-    });
-    connect(editor, &pdf::PDFFireInlineTextEditor::cancelled, this, [editor]()
-    {
-        editor->hide();
-        editor->deleteLater();
-    });
+    const QRect deviceRect = pageToDevice.mapRect(lineElement->getBoundingBox()).toAlignedRect();
 
-    // Zooming or scrolling moves the text - the editing finishes then
-    connect(proxy, &pdf::PDFDrawWidgetProxy::drawSpaceChanged, editor, &pdf::PDFFireInlineTextEditor::finish);
-
-    const QRect deviceRect = pageToDevice.mapRect(element->getBoundingBox()).toAlignedRect();
-
-    // The size from the page and the zoom is close, but the font of the system differs
-    // a little - the size is corrected, so the height of the letters (the ink, as the
-    // bounding box of the text on the page) is the same as on the page
-    const qreal inkHeight = QFontMetricsF(font).tightBoundingRect(plainText).height();
-    if (inkHeight > 0.0 && deviceRect.height() > 0)
-    {
-        const qreal factor = qBound(0.5, deviceRect.height() / inkHeight, 2.0);
-        font.setPixelSize(qMax(4, qRound(font.pixelSize() * factor)));
-    }
+    InlineEditSession session;
+    session.isParagraph = false;
+    session.paragraph.lines = { line };
+    session.paragraph.bodyLeft = line.rect.left();
+    session.paragraph.maxRight = line.rect.right();
+    session.paragraph.pitch = line.rect.height();
+    session.originalLines = QStringList{ plainText };
+    session.editorFont = font;
+    session.deviceTextRect = deviceRect;
 
     // The text of a PDF is often set tighter or looser than the natural spacing of the
     // font (Word writes the kerning as small moves). The letter spacing of the editor is
-    // adjusted, so the line is as wide as on the page and the text does not jump.
+    // adjusted, so the line is as wide as on the page and the caret follows the glyphs.
+    // It is adjusted again with each change of the text (updateInlinePreview).
     const qreal naturalWidth = QFontMetricsF(font).horizontalAdvance(plainText);
     if (naturalWidth > 0.0 && plainText.size() > 1)
     {
@@ -868,12 +837,25 @@ bool EditorPlugin::startInlineTextEdit(pdf::PDFPageContentElement* element)
             font.setLetterSpacing(QFont::AbsoluteSpacing, difference / plainText.size());
         }
     }
+
+    editor->setPreviewMode(true);
     editor->start(plainText, font, deviceRect, drawWidget->mapFromGlobal(QCursor::pos()));
+
+    connect(editor, &pdf::PDFFireInlineTextEditor::committed, this, [this](const QString& text) { onInlineEditCommitted(QStringList{ text }); });
+    connect(editor, &pdf::PDFFireInlineTextEditor::cancelled, this, &EditorPlugin::endInlineEdit);
+    connect(editor, &QPlainTextEdit::textChanged, &m_previewTimer, qOverload<>(&QTimer::start));
+
+    // Zooming or scrolling moves the text - the editing finishes then
+    connect(proxy, &pdf::PDFDrawWidgetProxy::drawSpaceChanged, editor, &pdf::PDFFireInlineTextEditor::finish);
+
+    beginInlineEdit(std::move(session), editor);
 
     if (QMainWindow* mainWindow = m_dataExchangeInterface->getMainWindow())
     {
-        mainWindow->statusBar()->showMessage(tr("Type to change the text. Enter or a click outside keeps the change, Esc cancels. "
-                                                "Shift + double-click opens the text properties (font size, position)."), 15000);
+        mainWindow->statusBar()->showMessage(m_scene.isTextEditMode() ? tr("Type to change the text. Enter or a click outside keeps the change, Esc cancels. "
+                                                                           "Shift + click opens the text properties (font size, position).")
+                                                                        : tr("Type to change the text. Enter or a click outside keeps the change, Esc cancels. "
+                                                                           "Shift + double-click opens the text properties (font size, position)."), 15000);
     }
 
     return true;
@@ -922,27 +904,194 @@ bool EditorPlugin::getInlineLine(const pdf::PDFPageContentElement* element, Inli
     return !line->rect.isEmpty();
 }
 
-bool EditorPlugin::findParagraph(pdf::PDFPageContentElement* element, Paragraph* paragraph) const
+std::vector<pdf::PDFInteger> EditorPlugin::InlineLine::getElementIds() const
 {
-    InlineLine clicked;
-    if (!getInlineLine(element, &clicked))
+    std::vector<pdf::PDFInteger> ids = { id };
+    ids.insert(ids.end(), fragmentIds.cbegin(), fragmentIds.cend());
+    return ids;
+}
+
+bool EditorPlugin::InlineLine::containsElement(pdf::PDFInteger elementId) const
+{
+    return id == elementId || std::find(fragmentIds.cbegin(), fragmentIds.cend(), elementId) != fragmentIds.cend();
+}
+
+std::vector<EditorPlugin::InlineLine> EditorPlugin::getPageLines(pdf::PDFInteger pageIndex) const
+{
+    std::vector<InlineLine> fragments;
+    const auto elementsByPage = m_scene.getElementsByPage();
+    auto it = elementsByPage.find(pageIndex);
+    if (it == elementsByPage.cend())
+    {
+        return fragments;
+    }
+    for (const pdf::PDFPageContentElement* pageElement : it->second)
+    {
+        InlineLine line;
+        if (getInlineLine(pageElement, &line))
+        {
+            fragments.push_back(line);
+        }
+    }
+
+    // The texts of one line: their boxes overlap vertically (the box of a smaller text,
+    // for example of a hyphen, is inside the box of the bigger one), each one starting
+    // at most a word gap after the text before it (PdfCraft joins texts of other text
+    // objects within 1.5 font size, Pen::continues in crates/edit/src/text.rs, MIT OR
+    // Apache-2.0). The boxes are the ink of the glyphs - the exact baseline is checked,
+    // when the texts are joined (joinLineFragments).
+    std::stable_sort(fragments.begin(), fragments.end(), [](const InlineLine& a, const InlineLine& b) { return a.rect.left() < b.rect.left(); });
+    std::vector<std::vector<size_t>> rows;
+    for (size_t i = 0; i < fragments.size(); ++i)
+    {
+        const QRectF& rect = fragments[i].rect;
+        std::vector<size_t>* bestRow = nullptr;
+        qreal bestGap = std::numeric_limits<qreal>::infinity();
+        for (std::vector<size_t>& row : rows)
+        {
+            // The height of the row is the height of its highest text
+            QRectF rowRect;
+            for (size_t index : row)
+            {
+                rowRect = rowRect.united(fragments[index].rect);
+            }
+            const QRectF& last = fragments[row.back()].rect;
+            const QRectF& smaller = (rect.height() < rowRect.height()) ? rect : rowRect;
+            const QRectF& bigger = (rect.height() < rowRect.height()) ? rowRect : rect;
+            const qreal height = bigger.height();
+            const qreal overlap = qMin(rect.bottom(), rowRect.bottom()) - qMax(rect.top(), rowRect.top());
+            const bool isSmallerInside = smaller.center().y() > bigger.top() && smaller.center().y() < bigger.bottom();
+            const qreal gap = rect.left() - last.right();
+            if (height <= 0.0 || !isSmallerInside || overlap < 0.5 * smaller.height() || gap < -0.3 * height || gap > 1.5 * height)
+            {
+                continue;
+            }
+            if (qAbs(gap) < bestGap)
+            {
+                bestGap = qAbs(gap);
+                bestRow = &row;
+            }
+        }
+
+        if (bestRow)
+        {
+            bestRow->push_back(i);
+        }
+        else
+        {
+            rows.push_back({ i });
+        }
+    }
+
+    auto getText = [this, &fragments](size_t index) -> const pdf::PDFEditedPageContentElementText*
+    {
+        const pdf::PDFPageContentElement* fragmentElement = m_scene.getElementById(fragments[index].id);
+        const pdf::PDFPageContentElementEdited* editedElement = fragmentElement ? fragmentElement->asElementEdited() : nullptr;
+        return editedElement ? editedElement->getElement()->asText() : nullptr;
+    };
+
+    // The texts of a row are joined, while they can be (a text on another baseline,
+    // for example a superscript, starts a line of its own)
+    std::vector<InlineLine> lines;
+    auto addLine = [&](const std::vector<size_t>& chain, std::unique_ptr<pdf::PDFEditedPageContentElementText> joinedText)
+    {
+        InlineLine line = fragments[chain.front()];
+        if (chain.size() > 1 && joinedText)
+        {
+            std::unique_ptr<pdf::PDFPageContentElement> joinedElement(m_scene.getElementById(line.id)->clone());
+            pdf::PDFPageContentElementEdited* joinedEditedElement = dynamic_cast<pdf::PDFPageContentElementEdited*>(joinedElement.get());
+            if (joinedEditedElement && joinedEditedElement->getElement()->asText())
+            {
+                *joinedEditedElement->getElement()->asText() = *joinedText;
+                for (size_t i = 1; i < chain.size(); ++i)
+                {
+                    line.fragmentIds.push_back(fragments[chain[i]].id);
+                    line.rect = line.rect.united(fragments[chain[i]].rect);
+                }
+                line.text = pdf::PDFEditedTextMarkup(joinedText->getItemsAsText()).getPlainText();
+                line.joinedElement.reset(joinedElement.release());
+                lines.push_back(std::move(line));
+                return;
+            }
+        }
+
+        for (size_t index : chain)
+        {
+            lines.push_back(fragments[index]);
+        }
+    };
+
+    for (const std::vector<size_t>& row : rows)
+    {
+        std::vector<size_t> chain = { row.front() };
+        std::unique_ptr<pdf::PDFEditedPageContentElementText> joinedText;
+        for (size_t i = 1; i < row.size(); ++i)
+        {
+            std::vector<const pdf::PDFEditedPageContentElementText*> texts;
+            for (size_t index : chain)
+            {
+                texts.push_back(getText(index));
+            }
+            texts.push_back(getText(row[i]));
+
+            std::unique_ptr<pdf::PDFEditedPageContentElementText> candidate = pdf::PDFFireTextElementUpdater::joinLineFragments(texts);
+            if (candidate && !pdf::PDFEditedTextMarkup(candidate->getItemsAsText()).getPlainText().contains(QChar('\n')))
+            {
+                chain.push_back(row[i]);
+                joinedText = std::move(candidate);
+            }
+            else
+            {
+                addLine(chain, std::move(joinedText));
+                chain = { row[i] };
+                joinedText.reset();
+            }
+        }
+        addLine(chain, std::move(joinedText));
+    }
+
+    return lines;
+}
+
+bool EditorPlugin::getJoinedInlineLine(const pdf::PDFPageContentElement* element, InlineLine* line) const
+{
+    if (!element)
+    {
+        return false;
+    }
+
+    for (InlineLine& pageLine : getPageLines(element->getPageIndex()))
+    {
+        if (pageLine.containsElement(element->getElementId()))
+        {
+            *line = std::move(pageLine);
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool EditorPlugin::findParagraph(const pdf::PDFPageContentElement* element, Paragraph* paragraph) const
+{
+    if (!element)
     {
         return false;
     }
 
     // The lines of the page, which can be a part of the paragraph
-    std::vector<InlineLine> lines;
-    const auto elementsByPage = m_scene.getElementsByPage();
-    auto it = elementsByPage.find(clicked.pageIndex);
-    if (it == elementsByPage.cend())
+    const std::vector<InlineLine> pageLines = getPageLines(element->getPageIndex());
+    auto clickedIt = std::find_if(pageLines.cbegin(), pageLines.cend(), [element](const InlineLine& line) { return line.containsElement(element->getElementId()); });
+    if (clickedIt == pageLines.cend())
     {
         return false;
     }
-    for (const pdf::PDFPageContentElement* pageElement : it->second)
+    const InlineLine clicked = *clickedIt;
+
+    std::vector<InlineLine> lines;
+    for (const InlineLine& line : pageLines)
     {
-        InlineLine line;
-        if (getInlineLine(pageElement, &line) && line.fontName == clicked.fontName &&
-            qAbs(line.rect.height() - clicked.rect.height()) <= clicked.rect.height() * 0.3)
+        if (line.fontName == clicked.fontName && qAbs(line.rect.height() - clicked.rect.height()) <= clicked.rect.height() * 0.3)
         {
             lines.push_back(line);
         }
@@ -1140,87 +1289,142 @@ bool EditorPlugin::startInlineParagraphEdit(pdf::PDFPageContentElement* element)
     const qreal lineHeight = paragraph.pitch * deviceScale;
     const qreal firstLineIndent = (firstLine.rect.left() - paragraph.bodyLeft) * deviceScale;
 
-    if (m_inlineEditor)
-    {
-        m_inlineEditor->finish();
-    }
-    if (m_inlineParagraphEditor)
-    {
-        m_inlineParagraphEditor->finish();
-    }
-
     QWidget* drawWidget = m_widget->getDrawWidget()->getWidget();
     pdf::PDFFireInlineParagraphEditor* editor = new pdf::PDFFireInlineParagraphEditor(drawWidget);
     m_inlineParagraphEditor = editor;
 
-    QStringList originalLines;
+    InlineEditSession session;
+    session.isParagraph = true;
+    session.paragraph = paragraph;
     for (const InlineLine& line : paragraph.lines)
     {
-        originalLines << line.text.trimmed();
+        session.originalLines << line.text.trimmed();
     }
+    session.editorFont = font;
+    session.deviceTextRect = deviceRect;
 
-    connect(editor, &pdf::PDFFireInlineParagraphEditor::committed, this, [this, editor, paragraph, originalLines](const QStringList& lines)
-    {
-        editor->hide();
-        editor->deleteLater();
-        if (lines != originalLines)
-        {
-            applyInlineParagraphEdit(paragraph, lines);
-        }
-    });
-    connect(editor, &pdf::PDFFireInlineParagraphEditor::cancelled, this, [editor]()
-    {
-        editor->hide();
-        editor->deleteLater();
-    });
+    editor->setPreviewMode(true);
+    editor->start(text, font, deviceRect, lineHeight, firstLineIndent, drawWidget->mapFromGlobal(QCursor::pos()));
+
+    connect(editor, &pdf::PDFFireInlineParagraphEditor::committed, this, &EditorPlugin::onInlineEditCommitted);
+    connect(editor, &pdf::PDFFireInlineParagraphEditor::cancelled, this, &EditorPlugin::endInlineEdit);
+    connect(editor, &QTextEdit::textChanged, &m_previewTimer, qOverload<>(&QTimer::start));
     connect(proxy, &pdf::PDFDrawWidgetProxy::drawSpaceChanged, editor, &pdf::PDFFireInlineParagraphEditor::finish);
 
-    editor->start(text, font, deviceRect, lineHeight, firstLineIndent, drawWidget->mapFromGlobal(QCursor::pos()));
+    beginInlineEdit(std::move(session), editor);
 
     if (QMainWindow* mainWindow = m_dataExchangeInterface->getMainWindow())
     {
-        mainWindow->statusBar()->showMessage(tr("Editing the paragraph: the lines are rewrapped as you type. Enter starts a new line; a click outside "
-                                                "or Ctrl+Enter keeps the change, Esc cancels. Shift + double-click edits one line in the dialog."), 20000);
+        mainWindow->statusBar()->showMessage(m_scene.isTextEditMode() ? tr("Editing the paragraph: the lines are rewrapped as you type. Enter starts a new line; a click outside "
+                                                                           "or Ctrl+Enter keeps the change, Esc cancels. Shift + click edits one line in the dialog.")
+                                                                        : tr("Editing the paragraph: the lines are rewrapped as you type. Enter starts a new line; a click outside "
+                                                                           "or Ctrl+Enter keeps the change, Esc cancels. Shift + double-click edits one line in the dialog."), 20000);
     }
     return true;
 }
 
-void EditorPlugin::applyInlineParagraphEdit(const Paragraph& paragraph, const QStringList& newLines)
+void EditorPlugin::beginInlineEdit(InlineEditSession session, QWidget* editor)
 {
-    // All the lines are changed as one step of undo
-    std::vector<pdf::PDFPageContentElement*> replacedElements;
-    std::vector<pdf::PDFPageContentElement*> addedElements;
-    std::vector<pdf::PDFInteger> removedElements;
-    bool isFailed = false;
+    Q_UNUSED(editor);
 
-    auto createChangedElement = [&](pdf::PDFInteger sourceId, const QString& text, QPointF offset) -> pdf::PDFPageContentElement*
+    m_inlineSession = std::move(session);
+    m_inlineSession.isActive = true;
+    m_changedLines.clear();
+
+    // The text under the editor is the preview from the beginning - the original glyphs
+    updateInlinePreview();
+}
+
+QStringList EditorPlugin::getInlineEditorLines() const
+{
+    if (m_inlineSession.isParagraph)
     {
-        const pdf::PDFPageContentElement* source = m_scene.getElementById(sourceId);
-        if (!source)
-        {
-            return nullptr;
-        }
+        return m_inlineParagraphEditor ? m_inlineParagraphEditor->getLines() : QStringList();
+    }
 
-        std::unique_ptr<pdf::PDFPageContentElement> element(source->clone());
-        pdf::PDFPageContentElementEdited* editedElement = dynamic_cast<pdf::PDFPageContentElementEdited*>(element.get());
-        pdf::PDFEditedPageContentElementText* textElement = editedElement ? editedElement->getElement()->asText() : nullptr;
-        if (!textElement)
-        {
-            return nullptr;
-        }
+    return m_inlineEditor ? QStringList{ m_inlineEditor->toPlainText() } : QStringList();
+}
 
+const EditorPlugin::ChangedLine* EditorPlugin::getChangedLine(const InlineLine& sourceLine, const QString& text, QPointF offset)
+{
+    const ChangedLineKey key(sourceLine.id, offset.x(), offset.y(), text);
+    auto it = m_changedLines.find(key);
+    if (it != m_changedLines.cend())
+    {
+        return &it->second;
+    }
+
+    if (m_changedLines.size() > 256)
+    {
+        // The lines of the previous keystrokes are not needed any more
+        m_changedLines.clear();
+    }
+
+    // PDF Fire: a line written as several texts is written as one text (its first element)
+    ChangedLine changedLine;
+    const pdf::PDFPageContentElement* source = sourceLine.joinedElement ? sourceLine.joinedElement.get() : m_scene.getElementById(sourceLine.id);
+    std::unique_ptr<pdf::PDFPageContentElement> element(source ? source->clone() : nullptr);
+    pdf::PDFPageContentElementEdited* editedElement = dynamic_cast<pdf::PDFPageContentElementEdited*>(element.get());
+    pdf::PDFEditedPageContentElementText* textElement = editedElement ? editedElement->getElement()->asText() : nullptr;
+    if (textElement && m_editedPageContent.count(element->getPageIndex()))
+    {
         if (!offset.isNull())
         {
             // A new line is a copy of a line of the paragraph, moved down
             textElement->setTransform(textElement->getTransform() * QTransform::fromTranslate(offset.x(), offset.y()));
         }
 
-        textElement->setItemsAsText(pdf::PDFEditedTextMarkup(textElement->getItemsAsText()).getMarkupWithPlainText(text));
-        if (!updateTextElement(editedElement))
+        if (qEnvironmentVariableIsSet("PDFFIRE_DEBUG_TEXT"))
         {
-            return nullptr;
+            // Development aid: the markup before and after the edit
+            qInfo().noquote() << "PDFFIRE_DEBUG_TEXT before:" << textElement->getItemsAsText();
+            qInfo().noquote() << "PDFFIRE_DEBUG_TEXT after: " << pdf::PDFEditedTextMarkup(textElement->getItemsAsText()).getMarkupWithPlainText(text);
         }
-        return element.release();
+
+        auto cms = m_widget->getDrawWidgetProxy()->getCMSManager()->getCurrentCMS();
+        if (pdf::PDFFireTextElementUpdater::setPlainText(m_document, element->getPageIndex(), m_editedPageContent.at(element->getPageIndex()),
+                                                         textElement, text, cms.data(), &changedLine.errors))
+        {
+            changedLine.element.reset(element.release());
+        }
+    }
+
+    return &m_changedLines.emplace(key, std::move(changedLine)).first->second;
+}
+
+EditorPlugin::TextEditResult EditorPlugin::createInlineEdit(const QStringList& newLines)
+{
+    TextEditResult result;
+    const Paragraph& paragraph = m_inlineSession.paragraph;
+    const QStringList& originalLines = m_inlineSession.originalLines;
+    if (paragraph.lines.empty())
+    {
+        result.isFailed = true;
+        return result;
+    }
+
+    auto addChangedLine = [&](const InlineLine& sourceLine, const QString& text, QPointF offset, bool isAdded)
+    {
+        const ChangedLine* changedLine = getChangedLine(sourceLine, text, offset);
+        if (!changedLine->element)
+        {
+            result.isFailed = true;
+            return;
+        }
+
+        (isAdded ? result.addedElements : result.replacedElements).push_back(changedLine->element);
+        result.errors << changedLine->errors;
+
+        // The other texts of a joined line are in the changed text now
+        if (!isAdded)
+        {
+            result.removedElementIds.insert(result.removedElementIds.end(), sourceLine.fragmentIds.cbegin(), sourceLine.fragmentIds.cend());
+        }
+    };
+    auto removeLine = [&](const InlineLine& line)
+    {
+        const std::vector<pdf::PDFInteger> ids = line.getElementIds();
+        result.removedElementIds.insert(result.removedElementIds.end(), ids.cbegin(), ids.cend());
     };
 
     const size_t oldCount = paragraph.lines.size();
@@ -1230,46 +1434,62 @@ void EditorPlugin::applyInlineParagraphEdit(const Paragraph& paragraph, const QS
     {
         if (i < oldCount && i < newCount)
         {
-            if (newLines[i] == paragraph.lines[i].text.trimmed())
+            if (newLines[i] == originalLines[i])
             {
                 continue;
             }
-            if (newLines[i].isEmpty())
+            if (newLines[i].trimmed().isEmpty())
             {
-                removedElements.push_back(paragraph.lines[i].id);
+                // An emptied line is removed (an empty text can't be written)
+                removeLine(paragraph.lines[i]);
                 continue;
             }
-            if (pdf::PDFPageContentElement* element = createChangedElement(paragraph.lines[i].id, newLines[i], QPointF()))
-            {
-                replacedElements.push_back(element);
-            }
-            else
-            {
-                isFailed = true;
-            }
+            addChangedLine(paragraph.lines[i], newLines[i], QPointF(), false);
         }
         else if (i < oldCount)
         {
-            removedElements.push_back(paragraph.lines[i].id);
+            removeLine(paragraph.lines[i]);
         }
-        else if (!newLines[i].isEmpty())
+        else if (!newLines[i].trimmed().isEmpty())
         {
             // A new line below the last line; it starts at the left margin of the paragraph
             const qreal dx = paragraph.bodyLeft - lastLine.rect.left();
             const qreal dy = -paragraph.pitch * qreal(i - (oldCount - 1));
-            if (pdf::PDFPageContentElement* element = createChangedElement(lastLine.id, newLines[i], QPointF(dx, dy)))
-            {
-                addedElements.push_back(element);
-            }
-            else
-            {
-                isFailed = true;
-            }
+            addChangedLine(lastLine, newLines[i], QPointF(dx, dy), true);
         }
     }
 
+    result.errors.removeDuplicates();
+    return result;
+}
+
+bool EditorPlugin::applyTextEditResult(const TextEditResult& result)
+{
+    if (result.isFailed)
+    {
+        return false;
+    }
+
+    if (!result.errors.isEmpty() && !confirmContentStreamErrors(result.errors, m_inlineSession.paragraph.lines.front().pageIndex))
+    {
+        return false;
+    }
+
+    std::vector<pdf::PDFPageContentElement*> replacedElements;
+    std::vector<pdf::PDFPageContentElement*> addedElements;
+    for (const auto& element : result.replacedElements)
+    {
+        replacedElements.push_back(element->clone());
+    }
+    for (const auto& element : result.addedElements)
+    {
+        addedElements.push_back(element->clone());
+    }
+
+    // All the lines are changed as one step of undo
     {
         pdf::PDFTemporaryValueChange guard(&m_isUndoRedoInProgress, true);
+        m_scene.clearTransientPreview();
         if (!replacedElements.empty())
         {
             m_scene.replaceElements(replacedElements);
@@ -1278,55 +1498,311 @@ void EditorPlugin::applyInlineParagraphEdit(const Paragraph& paragraph, const QS
         {
             m_scene.addElements(addedElements);
         }
-        if (!removedElements.empty())
+        if (!result.removedElementIds.empty())
         {
-            m_scene.removeElementsById(removedElements);
+            m_scene.removeElementsById(result.removedElementIds);
         }
     }
     createUndoStep();
     updateActions();
     updateGraphics();
+    return true;
+}
 
-    if (isFailed)
+void EditorPlugin::updateInlinePreview()
+{
+    m_previewTimer.stop();
+    if (!m_inlineSession.isActive)
     {
-        QMessageBox::warning(m_widget, tr("Edit Text"), tr("Some lines of the paragraph could not be changed."));
+        return;
+    }
+
+    const TextEditResult result = createInlineEdit(getInlineEditorLines());
+    const Paragraph& paragraph = m_inlineSession.paragraph;
+
+    if (result.isFailed)
+    {
+        // The text can't be written (so it can't be shown with the glyphs of the
+        // document) - the editor shows it in a font of the system, over the original
+        m_scene.clearTransientPreview();
+        if (m_inlineEditor)
+        {
+            m_inlineEditor->setPreviewMode(false);
+        }
+        if (m_inlineParagraphEditor)
+        {
+            m_inlineParagraphEditor->setPreviewMode(false);
+        }
+        updateTextOutlines();
+        updateGraphics();
+        return;
+    }
+
+    // The changed and the removed texts are hidden, the changed ones are shown as
+    // they will be written instead (the unchanged lines stay, as they are)
+    std::set<pdf::PDFInteger> hiddenElementIds(result.removedElementIds.cbegin(), result.removedElementIds.cend());
+    std::vector<std::unique_ptr<pdf::PDFPageContentElement>> previewElements;
+    for (const auto& element : result.replacedElements)
+    {
+        hiddenElementIds.insert(element->getElementId());
+        previewElements.emplace_back(element->clone());
+    }
+    for (const auto& element : result.addedElements)
+    {
+        previewElements.emplace_back(element->clone());
+    }
+
+    // The caret of the editor of one line follows the real glyphs: the letter spacing
+    // of the editor is set, so the text in the editor is as wide as the written text
+    // (the ink of both is compared, so a space at the end does not count)
+    if (!m_inlineSession.isParagraph && m_inlineEditor && !previewElements.empty())
+    {
+        const pdf::PDFWidgetSnapshot snapshot = m_widget->getDrawWidgetProxy()->getSnapshot();
+        const pdf::PDFWidgetSnapshot::SnapshotItem* pageSnapshot = snapshot.getPageSnapshot(paragraph.lines.front().pageIndex);
+        const QString text = m_inlineEditor->toPlainText();
+        const QFontMetricsF metrics(m_inlineSession.editorFont);
+        const qreal naturalWidth = metrics.tightBoundingRect(text).width();
+        const int gapCount = int(text.trimmed().size()) - 1;
+        if (pageSnapshot && naturalWidth > 0.0 && gapCount > 0)
+        {
+            const qreal previewWidth = pageSnapshot->pageToDeviceMatrix.mapRect(previewElements.front()->getBoundingBox()).width();
+            const qreal spacing = (previewWidth - naturalWidth) / gapCount;
+            if (qAbs(spacing) * gapCount < naturalWidth * 0.3)
+            {
+                QFont font = m_inlineSession.editorFont;
+                font.setLetterSpacing(QFont::AbsoluteSpacing, spacing);
+                if (font != m_inlineEditor->font())
+                {
+                    m_inlineEditor->setFont(font);
+                }
+            }
+        }
+    }
+
+    if (m_inlineEditor)
+    {
+        m_inlineEditor->setPreviewMode(true);
+    }
+    if (m_inlineParagraphEditor)
+    {
+        m_inlineParagraphEditor->setPreviewMode(true);
+    }
+    m_scene.setTransientPreview(std::move(hiddenElementIds), std::move(previewElements));
+    updateTextOutlines();
+    updateGraphics();
+}
+
+void EditorPlugin::onInlineEditCommitted(const QStringList& lines)
+{
+    if (!m_inlineSession.isActive || m_isCommittingInlineEdit)
+    {
+        return;
+    }
+
+    pdf::PDFTemporaryValueChange guard(&m_isCommittingInlineEdit, true);
+    m_previewTimer.stop();
+
+    bool isApplied = true;
+    if (lines != m_inlineSession.originalLines)
+    {
+        // Development aid: the failure of an edit (the typed text must not be lost)
+        const bool isFailureSimulated = qEnvironmentVariableIsSet("PDFFIRE_DEBUG_FAIL_TEXT_EDIT");
+        isApplied = !isFailureSimulated && applyTextEditResult(createInlineEdit(lines));
+    }
+
+    if (!isApplied)
+    {
+        // PDF Fire: the typed text is never lost - the editor stays open with it
+        updateInlinePreview();
+        QMessageBox::warning(m_widget, tr("Edit Text"), tr("The text could not be changed. Your text is kept in the editor - "
+                                                           "change it and try again, or press Esc to discard it."));
+        if (m_inlineEditor)
+        {
+            m_inlineEditor->resume();
+        }
+        if (m_inlineParagraphEditor)
+        {
+            m_inlineParagraphEditor->resume();
+        }
+        return;
+    }
+
+    endInlineEdit();
+}
+
+void EditorPlugin::endInlineEdit()
+{
+    m_previewTimer.stop();
+    m_inlineSession = InlineEditSession();
+    m_changedLines.clear();
+    m_scene.clearTransientPreview();
+
+    for (QWidget* editor : { static_cast<QWidget*>(m_inlineEditor.data()), static_cast<QWidget*>(m_inlineParagraphEditor.data()) })
+    {
+        if (editor)
+        {
+            editor->disconnect(this);
+            editor->hide();
+            editor->deleteLater();
+        }
+    }
+    m_inlineEditor = nullptr;
+    m_inlineParagraphEditor = nullptr;
+
+    updateTextOutlines();
+    updateGraphics();
+}
+
+bool EditorPlugin::finishInlineEdit()
+{
+    if (m_inlineEditor)
+    {
+        m_inlineEditor->finish();
+    }
+    if (m_inlineParagraphEditor)
+    {
+        m_inlineParagraphEditor->finish();
+    }
+    return !m_inlineSession.isActive;
+}
+
+void EditorPlugin::onEditTextTriggered(bool checked)
+{
+    if (checked && !m_scene.isActive())
+    {
+        // The Edit Text tool works on the content of the page - the page content
+        // editing is switched on silently
+        setActive(true);
+        if (!m_scene.isActive())
+        {
+            m_actions[EditText]->setChecked(false);
+            return;
+        }
+        m_isSceneActivatedByEditText = true;
+    }
+
+    if (!checked && m_isSceneActivatedByEditText && m_scene.isActive())
+    {
+        // The page content editing was switched on by the Edit Text tool, so it ends
+        // with it (the changes are written to the document, as when the page content
+        // editing is switched off)
+        setTextEditMode(false);
+        if (m_inlineSession.isActive)
+        {
+            // The text being edited can't be applied - the editing goes on
+            setTextEditMode(true);
+            return;
+        }
+
+        onSetActive(false);
+        if (m_scene.isActive())
+        {
+            // Cancelled by the user
+            setTextEditMode(true);
+        }
+        return;
+    }
+
+    setTextEditMode(checked);
+}
+
+void EditorPlugin::setTextEditMode(bool enabled)
+{
+    if (!enabled)
+    {
+        finishInlineEdit();
+    }
+    else if (m_widget->getToolManager()->getActiveTool())
+    {
+        // A click on the page edits the text, the tools are switched off
+        m_widget->getToolManager()->setActiveTool(nullptr);
+    }
+
+    m_scene.setTextEditMode(enabled);
+    m_actions[EditText]->setChecked(enabled);
+    m_hoveredTextElementId = pdf::PDFPageContentScene::INVALID_ELEMENT_ID;
+    updateTextOutlines();
+    updateGraphics();
+
+    if (enabled)
+    {
+        if (QMainWindow* mainWindow = m_dataExchangeInterface->getMainWindow())
+        {
+            mainWindow->statusBar()->showMessage(tr("Edit Text: click a text on the page to change it. The changes are written to the document when it is saved."), 15000);
+        }
     }
 }
 
-void EditorPlugin::applyInlineTextEdit(pdf::PDFInteger elementId, const QString& text)
+void EditorPlugin::onTextElementHovered(pdf::PDFInteger elementId)
 {
-    pdf::PDFPageContentElement* element = m_scene.getElementById(elementId);
-    if (!element)
-    {
-        return;
-    }
-
-    std::unique_ptr<pdf::PDFPageContentElement> clonedElement(element->clone());
-    pdf::PDFPageContentElementEdited* editedElement = dynamic_cast<pdf::PDFPageContentElementEdited*>(clonedElement.get());
-    pdf::PDFEditedPageContentElementText* textElement = editedElement ? editedElement->getElement()->asText() : nullptr;
-    if (!textElement)
-    {
-        return;
-    }
-
-    // The same conversion as in the edit dialog: the untouched characters keep their
-    // positions and kerning, the typed ones are written in the font of the text
-    const QString newMarkup = pdf::PDFEditedTextMarkup(textElement->getItemsAsText()).getMarkupWithPlainText(text);
-    if (qEnvironmentVariableIsSet("PDFFIRE_DEBUG_TEXT"))
-    {
-        // Development aid: the markup before and after the edit
-        qInfo().noquote() << "PDFFIRE_DEBUG_TEXT before:" << textElement->getItemsAsText();
-        qInfo().noquote() << "PDFFIRE_DEBUG_TEXT after: " << newMarkup;
-    }
-    textElement->setItemsAsText(newMarkup);
-    if (!updateTextElement(editedElement))
-    {
-        QMessageBox::warning(m_widget, tr("Edit Text"), tr("The text could not be changed."));
-        return;
-    }
-
-    m_scene.replaceElement(clonedElement.release());
+    m_hoveredTextElementId = elementId;
+    updateTextOutlines();
     updateGraphics();
+}
+
+void EditorPlugin::updateTextOutlines()
+{
+    std::vector<pdf::PDFPageContentScene::TextOutline> outlines;
+
+    if (m_inlineSession.isActive)
+    {
+        // The frame of the edited text: the original lines and the preview
+        const Paragraph& paragraph = m_inlineSession.paragraph;
+        QRectF rect;
+        for (const InlineLine& line : paragraph.lines)
+        {
+            rect = rect.united(line.rect);
+        }
+        rect.setLeft(qMin(rect.left(), paragraph.bodyLeft));
+        rect.setRight(qMax(rect.right(), paragraph.maxRight));
+        for (const auto& item : m_changedLines)
+        {
+            const ChangedLine& changedLine = item.second;
+            if (changedLine.element && getInlineEditorLines().contains(std::get<3>(item.first)))
+            {
+                rect = rect.united(changedLine.element->getBoundingBox().normalized());
+            }
+        }
+        outlines.push_back({ paragraph.lines.front().pageIndex, rect, true });
+    }
+
+    if (m_scene.isTextEditMode() && m_hoveredTextElementId != pdf::PDFPageContentScene::INVALID_ELEMENT_ID)
+    {
+        const bool isEdited = m_inlineSession.isActive &&
+                              std::any_of(m_inlineSession.paragraph.lines.cbegin(), m_inlineSession.paragraph.lines.cend(),
+                                          [this](const InlineLine& line) { return line.containsElement(m_hoveredTextElementId); });
+        const pdf::PDFPageContentElement* element = m_scene.getElementById(m_hoveredTextElementId);
+        if (element && !isEdited)
+        {
+            outlines.push_back({ element->getPageIndex(), getEditableTextRect(element), false });
+        }
+    }
+
+    m_scene.setTextOutlines(std::move(outlines));
+}
+
+QRectF EditorPlugin::getEditableTextRect(const pdf::PDFPageContentElement* element) const
+{
+    Paragraph paragraph;
+    if (findParagraph(element, &paragraph))
+    {
+        QRectF rect;
+        for (const InlineLine& line : paragraph.lines)
+        {
+            rect = rect.united(line.rect);
+        }
+        rect.setLeft(qMin(rect.left(), paragraph.bodyLeft));
+        rect.setRight(qMax(rect.right(), paragraph.maxRight));
+        return rect;
+    }
+
+    InlineLine line;
+    if (getJoinedInlineLine(element, &line))
+    {
+        return line.rect;
+    }
+
+    return element->getBoundingBox().normalized();
 }
 
 void EditorPlugin::onSceneEditSingleElement(pdf::PDFInteger elementId)
@@ -1381,6 +1857,12 @@ void EditorPlugin::setActive(bool active)
         // Abort active tool, if we are deactivating the plugin
         if (!active)
         {
+            // PDF Fire: the text edited in place and the Edit Text mode end with the editing
+            endInlineEdit();
+            m_scene.setTextEditMode(false);
+            m_actions[EditText]->setChecked(false);
+            m_isSceneActivatedByEditText = false;
+
             if (pdf::PDFWidgetTool* tool = m_widget->getToolManager()->getActiveTool())
             {
                 auto it = std::find(m_tools.cbegin(), m_tools.cend(), tool);
@@ -1473,7 +1955,7 @@ void EditorPlugin::updateActions()
         // of the creation tools, which can be changed at any time
         for (QAction* action : m_actions)
         {
-            if (action == m_actions[Activate])
+            if (action == m_actions[Activate] || action == m_actions[EditText])
             {
                 // PDF Fire: a protected or certified document can't be edited
                 const bool canModify = pdf::PDFFirePermissions::canModifyContent(m_document);
@@ -1507,6 +1989,7 @@ void EditorPlugin::updateActions()
 
     m_actions[Undo]->setEnabled(canUndo);
     m_actions[Redo]->setEnabled(canRedo);
+    m_actions[EditText]->setEnabled(true);
 
     // Clear action
     QAction* clearAction = m_actions[Clear];
@@ -1690,71 +2173,44 @@ void EditorPlugin::updateEditedPages()
 
 bool EditorPlugin::updateTextElement(pdf::PDFPageContentElementEdited* element)
 {
-    pdf::PDFPageContentElementEdited* elementEdited = dynamic_cast<pdf::PDFPageContentElementEdited*>(element);
-    if (!elementEdited)
+    QStringList errors;
+    if (!refreshTextElement(element, &errors))
     {
         return false;
     }
 
-    pdf::PDFEditedPageContentElementText* targetTextElement = elementEdited->getElement()->asText();
+    return confirmContentStreamErrors(errors, element->getPageIndex());
+}
 
-    if (!targetTextElement)
+bool EditorPlugin::refreshTextElement(pdf::PDFPageContentElementEdited* element, QStringList* errors)
+{
+    pdf::PDFEditedPageContentElementText* textElement = element ? element->getElement()->asText() : nullptr;
+    if (!textElement || !m_editedPageContent.count(element->getPageIndex()))
     {
         return false;
     }
 
-    pdf::PDFDocumentModifier modifier(m_document);
-    pdf::PDFDocumentBuilder* builder = modifier.getBuilder();
+    // PDF Fire: the element is written into a temporary document and read back - the
+    // same function makes the preview of the text edited in place
+    auto cms = m_widget->getDrawWidgetProxy()->getCMSManager()->getCurrentCMS();
+    return pdf::PDFFireTextElementUpdater::refresh(m_document, element->getPageIndex(), m_editedPageContent.at(element->getPageIndex()), textElement, cms.data(), errors);
+}
 
-    if (!updatePageContent(element->getPageIndex(), { element }, builder))
+bool EditorPlugin::confirmContentStreamErrors(QStringList errors, pdf::PDFInteger pageIndex)
+{
+    if (errors.empty())
     {
-        return false;
+        return true;
     }
 
-    if (modifier.finalize())
+    const int errorCount = errors.size();
+    if (errors.size() > 3)
     {
-        pdf::PDFDocument* document = modifier.getDocument().get();
-
-        const pdf::PDFPage* page = document->getCatalog()->getPage(element->getPageIndex());
-        auto cms = m_widget->getDrawWidgetProxy()->getCMSManager()->getCurrentCMS();
-        pdf::PDFFontCache fontCache(64, 64);
-        pdf::PDFOptionalContentActivity activity(document, pdf::OCUsage::View, nullptr);
-        fontCache.setDocument(pdf::PDFModifiedDocument(document, &activity));
-        pdf::PDFPageContentEditorProcessor processor(page, document, &fontCache, cms.data(), &activity, QTransform(), pdf::PDFMeshQualitySettings());
-
-        QList<pdf::PDFRenderError> errors = processor.processContents();
-        Q_UNUSED(errors);
-
-        pdf::PDFEditedPageContent content = processor.takeEditedPageContent();
-        if (content.getElementCount() == 1)
-        {
-            pdf::PDFEditedPageContentElement* sourceElement = content.getElement(0);
-            pdf::PDFEditedPageContentElementText* sourceElementText = sourceElement->asText();
-            if (!sourceElementText)
-            {
-                return false;
-            }
-            targetTextElement->setState(sourceElementText->getState());
-            targetTextElement->setTextPath(sourceElementText->getTextPath());
-            targetTextElement->setItems(sourceElementText->getItems());
-            targetTextElement->setTransform(sourceElementText->getTransform());
-            targetTextElement->setClipPath(sourceElementText->getClipPath());
-
-            // The font keys of the processed page can differ from the keys of the target
-            // element (fonts are written under the keys of the page resources), so the
-            // font resources and the text items as text must correspond to each other.
-            // The processed document is temporary - font objects created only in it
-            // (for example a fallback font) are not valid in the edited document.
-            targetTextElement->setFontResources(pdf::PDFEditedPageContentElementText::getFontResourcesValidInDocument(sourceElementText->getFontResources(), document, m_document));
-            targetTextElement->setItemsAsText(sourceElementText->getItemsAsText());
-        }
-        else
-        {
-            return false;
-        }
+        errors.resize(3);
     }
 
-    return true;
+    QString message = tr("Errors (%2) occured while creating content stream on page %3.<br>%1").arg(errors.join("<br>")).arg(errorCount).arg(pageIndex + 1);
+    return QMessageBox::question(m_dataExchangeInterface->getMainWindow(), tr("Error"), message, QMessageBox::Abort, QMessageBox::Ignore) != QMessageBox::Abort;
 }
 
 void EditorPlugin::onDrawSpaceChanged()

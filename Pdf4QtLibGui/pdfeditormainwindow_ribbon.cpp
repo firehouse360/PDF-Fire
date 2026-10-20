@@ -737,8 +737,15 @@ void PDFEditorMainWindow::setupRibbon()
     // ---- Edit -----------------------------------------------------------------
     PDFFireRibbonPage* editPage = m_ribbon->addPage(tr("Edit"));
 
-    // PDF Fire: text typed anywhere on the page (a typewriter text, as Acrobat's Add Text)
-    PDFFireRibbonGroup* addTextGroup = editPage->addGroup(tr("Add"));
+    // PDF Fire: Edit Text - a click on a text of the page changes it in place (the
+    // line or the paragraph under the mouse is outlined); Add Text - text typed
+    // anywhere on the page (a typewriter text, as Acrobat's Add Text)
+    PDFFireRibbonGroup* addTextGroup = editPage->addGroup(tr("Text"));
+    if (QAction* editTextAction = findMenuAction(editorMenu, "editortool_editTextAction"))
+    {
+        editTextAction->setIconText(tr("Edit Text"));
+        addTextGroup->addLargeAction(editTextAction);
+    }
     addTextGroup->addLargeAction(ui->actionAddText);
     if (editorMenu)
     {
@@ -760,7 +767,7 @@ void PDFEditorMainWindow::setupRibbon()
         }
 
         fillGroupFromMenu(editPage->addGroup(tr("Page Content")), editorMenu, 100, true,
-                          { "editortool_createAcceptMarkAction", "editortool_createRejectMarkAction" });
+                          { "editortool_createAcceptMarkAction", "editortool_createRejectMarkAction", "editortool_editTextAction" });
     }
 
     // ---- Pages ----------------------------------------------------------------

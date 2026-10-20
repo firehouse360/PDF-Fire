@@ -671,6 +671,43 @@ public:
 
     void setIsPageContentDrawSuppressed(bool newIsPageContentDrawSuppressed);
 
+    /// PDF Fire: a frame around a text on the page - the text under the mouse in
+    /// the Edit Text mode, or the text, which is being edited in place
+    struct TextOutline
+    {
+        PDFInteger pageIndex = -1;
+        QRectF rect;            ///< Rectangle in the page coordinates
+        bool isEdited = false;  ///< The text is being edited (a stronger frame)
+    };
+
+    /// PDF Fire: sets the frames drawn around texts (replaces the previous ones)
+    void setTextOutlines(std::vector<TextOutline> outlines);
+
+    /// PDF Fire: shows the elements \p previewElements instead of the elements
+    /// \p hiddenElementIds, until the preview is cleared. The preview is not a part
+    /// of the scene (it is not selectable, it is not written, it is not in the undo
+    /// history) - it shows the text being edited in place as it will be written.
+    void setTransientPreview(std::set<PDFInteger> hiddenElementIds, std::vector<std::unique_ptr<PDFPageContentElement>> previewElements);
+
+    /// PDF Fire: removes the preview, the hidden elements are shown again
+    void clearTransientPreview();
+
+    /// PDF Fire: in the Edit Text mode, a single click on a text requests its editing
+    /// (signal editElementRequest), and the text under the mouse is reported by the
+    /// signal textElementHovered. Elements are not selected or moved by the mouse.
+    bool isTextEditMode() const { return m_isTextEditMode; }
+    void setTextEditMode(bool textEditMode);
+
+    /// PDF Fire: returns the text element under the point of the page (the smallest one,
+    /// if several texts overlap), or INVALID_ELEMENT_ID
+    PDFInteger getTextElementUnderPoint(PDFInteger pageIndex, QPointF pagePoint, PDFReal tolerance) const;
+
+private:
+    /// PDF Fire: the Edit Text mode gets the mouse (no other tool is active)
+    bool isTextEditInputActive() const;
+
+public:
+
 signals:
     /// This signal is emitted when scene has changed (including graphics)
     void sceneChanged(bool graphicsOnly);
@@ -681,6 +718,10 @@ signals:
     void editElementRequest(const std::set<PDFInteger>& elements);
 
     void sceneActiveStateChanged(bool activated);
+
+    /// PDF Fire: the text element under the mouse has changed in the Edit Text
+    /// mode (INVALID_ELEMENT_ID - no text is under the mouse)
+    void textElementHovered(PDFInteger elementId);
 
 private:
 
@@ -737,6 +778,13 @@ private:
     std::optional<QCursor> m_cursor;
     PDFPageContentElementManipulator m_manipulator;
     MouseGrabInfo m_mouseGrabInfo;
+
+    // PDF Fire: the in-place editing of the text
+    bool m_isTextEditMode = false;
+    PDFInteger m_hoveredTextElementId = INVALID_ELEMENT_ID;
+    std::set<PDFInteger> m_hiddenElementIds;
+    std::vector<std::unique_ptr<PDFPageContentElement>> m_previewElements;
+    std::vector<TextOutline> m_textOutlines;
 };
 
 }   // namespace pdf
