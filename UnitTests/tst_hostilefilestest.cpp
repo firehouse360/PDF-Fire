@@ -482,7 +482,7 @@ void HostileFilesTest::type3GlyphDrawsItself()
                                                    makeStream("", "1000 0 d0 0 0 500 500 re f BT /F1 1000 Tf 0 0 Td (A) Tj ET") }));
 
     const QList<PDFRenderError> errors = renderFirstPage(document);
-    QVERIFY(!errors.isEmpty());
+    QVERIFY(std::any_of(errors.cbegin(), errors.cend(), [](const PDFRenderError& error) { return error.message.contains("nested too deep"); }));
 }
 
 void HostileFilesTest::tilingPatternPaintsItself()
@@ -497,7 +497,8 @@ void HostileFilesTest::tilingPatternPaintsItself()
 
     QElapsedTimer timer;
     timer.start();
-    renderFirstPage(document);
+    const QList<PDFRenderError> errors = renderFirstPage(document);
+    QVERIFY(std::any_of(errors.cbegin(), errors.cend(), [](const PDFRenderError& error) { return error.message.contains("nested too deep"); }));
     QVERIFY(timer.elapsed() < 30000);
 }
 
