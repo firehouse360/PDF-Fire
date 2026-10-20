@@ -521,6 +521,11 @@ PDFOperationResult PDFDocumentWriter::writeIncrementalUpdate(QIODevice* device, 
     // compared with what is really stored in the data.
     PDFDocumentReader reader(nullptr, nullptr, false, false);
     const PDFDocument originalDocument = reader.readFromBuffer(originalData);
+    if (reader.getReadingResult() == PDFDocumentReader::Result::Cancelled)
+    {
+        // PDF Fire: there is no password callback here (it crashed the application before)
+        return tr("Original document needs a password to open, so it cannot be updated incrementally.");
+    }
     if (reader.getReadingResult() != PDFDocumentReader::Result::OK)
     {
         return tr("Original document cannot be read, so it cannot be updated incrementally.");

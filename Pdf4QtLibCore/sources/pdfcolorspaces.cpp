@@ -278,6 +278,11 @@ QImage PDFAbstractColorSpace::getImage(const PDFImageData& imageData,
             case PDFImageData::MaskingType::None:
             {
                 QImage image(imageData.getWidth(), imageData.getHeight(), QImage::Format_RGB888);
+                if (image.isNull())
+                {
+                    // PDF Fire: allocation failed (huge image) - scanLine() would return nullptr
+                    throw PDFException(PDFTranslationContext::tr("Not enough memory for the image."));
+                }
                 image.fill(QColor(Qt::white));
 
                 unsigned int componentCount = imageData.getComponents();
@@ -369,6 +374,11 @@ QImage PDFAbstractColorSpace::getImage(const PDFImageData& imageData,
             {
                 const bool hasMatte = !softMask.getMatte().empty();
                 QImage image(imageData.getWidth(), imageData.getHeight(), hasMatte ? QImage::Format_RGBA8888_Premultiplied : QImage::Format_RGBA8888);
+                if (image.isNull())
+                {
+                    // PDF Fire: allocation failed (huge image) - scanLine() would return nullptr
+                    throw PDFException(PDFTranslationContext::tr("Not enough memory for the image."));
+                }
                 image.fill(QColor(Qt::white));
 
                 unsigned int componentCount = imageData.getComponents();
@@ -481,6 +491,11 @@ QImage PDFAbstractColorSpace::getImage(const PDFImageData& imageData,
             case PDFImageData::MaskingType::ColorKeyMasking:
             {
                 QImage image(imageData.getWidth(), imageData.getHeight(), QImage::Format_RGBA8888);
+                if (image.isNull())
+                {
+                    // PDF Fire: allocation failed (huge image) - scanLine() would return nullptr
+                    throw PDFException(PDFTranslationContext::tr("Not enough memory for the image."));
+                }
                 image.fill(QColor(Qt::transparent));
 
                 unsigned int componentCount = imageData.getComponents();
@@ -653,7 +668,18 @@ QImage PDFAbstractColorSpace::createAlphaMask(const PDFImageData& softMask)
         throw PDFException(PDFTranslationContext::tr("Invalid size of soft mask."));
     }
 
+    // PDF Fire: rows are read directly from the data (getRow) - a short soft mask was read past its end
+    if (softMask.getData().size() < qint64(softMask.getStride()) * qint64(softMask.getHeight()))
+    {
+        throw PDFException(PDFTranslationContext::tr("Not enough data in the soft mask."));
+    }
+
     QImage image(softMask.getWidth(), softMask.getHeight(), QImage::Format_Alpha8);
+    if (image.isNull())
+    {
+        // PDF Fire: allocation failed (huge image) - scanLine() would return nullptr
+        throw PDFException(PDFTranslationContext::tr("Not enough memory for the image."));
+    }
 
     unsigned int componentCount = softMask.getComponents();
     if (componentCount != 1)
@@ -2237,6 +2263,11 @@ QImage PDFIndexedColorSpace::getImage(const PDFImageData& imageData,
             case PDFImageData::MaskingType::None:
             {
                 QImage image(imageData.getWidth(), imageData.getHeight(), QImage::Format_RGB888);
+                if (image.isNull())
+                {
+                    // PDF Fire: allocation failed (huge image) - scanLine() would return nullptr
+                    throw PDFException(PDFTranslationContext::tr("Not enough memory for the image."));
+                }
                 image.fill(QColor(Qt::white));
 
                 unsigned int componentCount = imageData.getComponents();
@@ -2281,6 +2312,11 @@ QImage PDFIndexedColorSpace::getImage(const PDFImageData& imageData,
             {
                 const bool hasMatte = !softMask.getMatte().empty();
                 QImage image(imageData.getWidth(), imageData.getHeight(), hasMatte ? QImage::Format_RGBA8888_Premultiplied : QImage::Format_RGBA8888);
+                if (image.isNull())
+                {
+                    // PDF Fire: allocation failed (huge image) - scanLine() would return nullptr
+                    throw PDFException(PDFTranslationContext::tr("Not enough memory for the image."));
+                }
 
                 unsigned int componentCount = imageData.getComponents();
                 PDFBitReader reader(&imageData.getData(), imageData.getBitsPerComponent());
@@ -2339,6 +2375,11 @@ QImage PDFIndexedColorSpace::getImage(const PDFImageData& imageData,
             case PDFImageData::MaskingType::ColorKeyMasking:
             {
                 QImage image(imageData.getWidth(), imageData.getHeight(), QImage::Format_RGBA8888);
+                if (image.isNull())
+                {
+                    // PDF Fire: allocation failed (huge image) - scanLine() would return nullptr
+                    throw PDFException(PDFTranslationContext::tr("Not enough memory for the image."));
+                }
                 image.fill(QColor(Qt::transparent));
 
                 unsigned int componentCount = imageData.getComponents();

@@ -165,6 +165,126 @@ void PDFCertificateManager::createCertificate(const NewCertificateInfo& info)
     }
 }
 
+/// PDF Fire: iteration count of the password based algorithm \p algorithm (PKCS#5 v1, PKCS#12
+/// PBE, PBES2/PBKDF2, PBMAC1). Returns 0 for other algorithms, -1 if it cannot be read.
+static long getPasswordBasedIterationCount(const X509_ALGOR* algorithm)
+{
+    if (!algorithm)
+    {
+        return 0;
+    }
+
+    const ASN1_OBJECT* object = nullptr;
+    int parameterType = 0;
+    const void* parameterValue = nullptr;
+    X509_ALGOR_get0(&object, &parameterType, &parameterValue, algorithm);
+    if (parameterType != V_ASN1_SEQUENCE || !parameterValue)
+    {
+        return 0;
+    }
+
+    ASN1_TYPE parameter = { };
+    parameter.type = V_ASN1_SEQUENCE;
+    parameter.value.sequence = const_cast<ASN1_STRING*>(static_cast<const ASN1_STRING*>(parameterValue));
+
+    auto getPBKDF2IterationCount = [](const X509_ALGOR* keyDerivation) -> long
+    {
+        if (!keyDerivation || OBJ_obj2nid(keyDerivation->algorithm) != NID_id_pbkdf2)
+        {
+            return 0; // scrypt is limited by OpenSSL itself (memory limit)
+        }
+
+        openssl_ptr<PBKDF2PARAM> kdf(static_cast<PBKDF2PARAM*>(ASN1_TYPE_unpack_sequence(ASN1_ITEM_rptr(PBKDF2PARAM), keyDerivation->parameter)), &PBKDF2PARAM_free);
+        return kdf && kdf->iter ? ASN1_INTEGER_get(kdf->iter) : -1;
+    };
+
+    const int nid = OBJ_obj2nid(object);
+    if (nid == NID_pbes2)
+    {
+        openssl_ptr<PBE2PARAM> pbe2(static_cast<PBE2PARAM*>(ASN1_TYPE_unpack_sequence(ASN1_ITEM_rptr(PBE2PARAM), &parameter)), &PBE2PARAM_free);
+        return pbe2 ? getPBKDF2IterationCount(pbe2->keyfunc) : -1;
+    }
+#if OPENSSL_VERSION_NUMBER >= 0x30400000L
+    if (nid == NID_pbmac1)
+    {
+        openssl_ptr<PBMAC1PARAM> pbmac1(static_cast<PBMAC1PARAM*>(ASN1_TYPE_unpack_sequence(ASN1_ITEM_rptr(PBMAC1PARAM), &parameter)), &PBMAC1PARAM_free);
+        return pbmac1 ? getPBKDF2IterationCount(pbmac1->keyDerivationFunc) : -1;
+    }
+#endif
+    if (EVP_PBE_find(EVP_PBE_TYPE_OUTER, nid, nullptr, nullptr, nullptr))
+    {
+        openssl_ptr<PBEPARAM> pbe(static_cast<PBEPARAM*>(ASN1_TYPE_unpack_sequence(ASN1_ITEM_rptr(PBEPARAM), &parameter)), &PBEPARAM_free);
+        return pbe && pbe->iter ? ASN1_INTEGER_get(pbe->iter) : -1;
+    }
+
+    return 0;
+}
+
+bool PDFCertificateManager::isPKCS12IterationCountAcceptable(const QByteArray& pkcs12Data)
+{
+    openssl_ptr<BIO> buffer(BIO_new_mem_buf(pkcs12Data.constData(), int(pkcs12Data.size())), &BIO_free_all);
+    openssl_ptr<PKCS12> pkcs12(d2i_PKCS12_bio(buffer.get(), nullptr), &PKCS12_free);
+    if (!pkcs12)
+    {
+        // Not a PKCS#12 file - nothing is derived from a password
+        return true;
+    }
+
+    auto isAcceptable = [](long iterations)
+    {
+        return iterations >= 0 && iterations <= MAXIMAL_PKCS12_ITERATIONS;
+    };
+
+    // MAC of the whole file (verified before anything is decrypted)
+    const ASN1_INTEGER* macIterations = nullptr;
+    const X509_ALGOR* macAlgorithm = nullptr;
+    PKCS12_get0_mac(nullptr, &macAlgorithm, nullptr, &macIterations, pkcs12.get());
+    if ((macIterations && !isAcceptable(ASN1_INTEGER_get(macIterations))) || !isAcceptable(getPasswordBasedIterationCount(macAlgorithm)))
+    {
+        return false;
+    }
+
+    // Encrypted parts and shrouded keys visible without the password
+    openssl_ptr<STACK_OF(PKCS7)> authSafes(PKCS12_unpack_authsafes(pkcs12.get()), [](STACK_OF(PKCS7)* stack) { sk_PKCS7_pop_free(stack, PKCS7_free); });
+    if (!authSafes)
+    {
+        return true;
+    }
+
+    for (int i = 0; i < sk_PKCS7_num(authSafes.get()); ++i)
+    {
+        PKCS7* authSafe = sk_PKCS7_value(authSafes.get(), i);
+        const int nid = OBJ_obj2nid(authSafe->type);
+        if (nid == NID_pkcs7_encrypted)
+        {
+            if (authSafe->d.encrypted && authSafe->d.encrypted->enc_data &&
+                !isAcceptable(getPasswordBasedIterationCount(authSafe->d.encrypted->enc_data->algorithm)))
+            {
+                return false;
+            }
+        }
+        else if (nid == NID_pkcs7_data)
+        {
+            openssl_ptr<STACK_OF(PKCS12_SAFEBAG)> bags(PKCS12_unpack_p7data(authSafe), [](STACK_OF(PKCS12_SAFEBAG)* stack) { sk_PKCS12_SAFEBAG_pop_free(stack, PKCS12_SAFEBAG_free); });
+            for (int j = 0; bags && j < sk_PKCS12_SAFEBAG_num(bags.get()); ++j)
+            {
+                const PKCS12_SAFEBAG* bag = sk_PKCS12_SAFEBAG_value(bags.get(), j);
+                if (PKCS12_SAFEBAG_get_nid(bag) == NID_pkcs8ShroudedKeyBag)
+                {
+                    const X509_ALGOR* keyAlgorithm = nullptr;
+                    X509_SIG_get0(PKCS12_SAFEBAG_get0_pkcs8(bag), &keyAlgorithm, nullptr);
+                    if (!isAcceptable(getPasswordBasedIterationCount(keyAlgorithm)))
+                    {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+
+    return true;
+}
+
 PDFCertificateEntries PDFCertificateManager::getCertificates(PDFCertificateUsageFilter filter)
 {
     PDFCertificateEntries entries = PDFCertificateStore::getPersonalCertificates(filter);
@@ -178,6 +298,12 @@ PDFCertificateEntries PDFCertificateManager::getCertificates(PDFCertificateUsage
         if (file.open(QFile::ReadOnly))
         {
             QByteArray data = file.readAll();
+
+            // PDF Fire: a hostile iteration count hung every start of the application
+            if (!isPKCS12IterationCountAcceptable(data))
+            {
+                continue;
+            }
 
             openssl_ptr<BIO> pksBuffer(BIO_new(BIO_s_mem()), &BIO_free_all);
             BIO_write(pksBuffer.get(), data.constData(), data.length());
@@ -259,6 +385,12 @@ bool PDFCertificateManager::isCertificateValid(const PDFCertificateEntry& certif
 {
     QByteArray pkcs12data = certificateEntry.pkcs12;
 
+    // PDF Fire: refuse a hostile iteration count (it would hang the application)
+    if (!isPKCS12IterationCountAcceptable(pkcs12data))
+    {
+        return false;
+    }
+
     openssl_ptr<BIO> pksBuffer(BIO_new(BIO_s_mem()), &BIO_free_all);
     BIO_write(pksBuffer.get(), pkcs12data.constData(), pkcs12data.length());
 
@@ -281,7 +413,7 @@ bool PDFCertificateManager::isCertificateValid(const PDFCertificateEntry& certif
 QString PDFCertificateManager::getCertificateOwnerName(const PDFCertificateEntry& certificateEntry, QString password)
 {
     QString name = certificateEntry.info.getName(PDFCertificateInfo::CommonName);
-    if (!name.isEmpty() || certificateEntry.pkcs12.isEmpty())
+    if (!name.isEmpty() || certificateEntry.pkcs12.isEmpty() || !isPKCS12IterationCountAcceptable(certificateEntry.pkcs12))
     {
         return name;
     }
@@ -314,6 +446,12 @@ bool PDFSignatureFactory::sign(const PDFCertificateEntry& certificateEntry,
                                QByteArray& result)
 {
     QByteArray pkcs12Data = certificateEntry.pkcs12;
+
+    // PDF Fire: refuse a hostile iteration count (it would hang the application)
+    if (!pkcs12Data.isEmpty() && !PDFCertificateManager::isPKCS12IterationCountAcceptable(pkcs12Data))
+    {
+        return false;
+    }
 
     if (!pkcs12Data.isEmpty())
     {

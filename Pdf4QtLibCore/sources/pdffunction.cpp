@@ -32,6 +32,8 @@
 
 #include "pdfdbgheap.h"
 
+#include <cmath>
+#include <limits>
 #include <stack>
 #include <iterator>
 #include <type_traits>
@@ -142,6 +144,12 @@ PDFFunctionPtr PDFFunction::createFunctionImpl(const PDFDocument* document, cons
                 throw PDFException(PDFParsingContext::tr("Sampled function hasn't any output."));
             }
 
+            // PDF Fire: the interpolation uses 2^m hypercube nodes
+            if (m > 16)
+            {
+                throw PDFException(PDFParsingContext::tr("Sampled function has too many inputs."));
+            }
+
             if (domain.size() != encode.size())
             {
                 throw PDFException(PDFParsingContext::tr("Sampled function has invalid encode array."));
@@ -156,7 +164,23 @@ PDFFunctionPtr PDFFunction::createFunctionImpl(const PDFDocument* document, cons
             const PDFReal sampleMaxValue = sampleMaxValueInteger;
 
             // Load samples - first see, how much of them will be needed.
-            const PDFInteger sampleCount = std::accumulate(size.cbegin(), size.cend(), 1, [](PDFInteger a, PDFInteger b) { return a * b; } ) * n;
+            // PDF Fire: count in 64 bits without overflow (the accumulator was an int) and check
+            // against the stream length before allocating - a hostile /Size allocated gigabytes.
+            const PDFInteger availableSamples = PDFInteger(streamData.size()) * 8 / PDFInteger(bitsPerSample);
+            PDFInteger sampleCount = PDFInteger(n);
+            for (const PDFInteger dimensionSize : size)
+            {
+                if (dimensionSize > availableSamples || sampleCount > availableSamples / dimensionSize)
+                {
+                    throw PDFException(PDFParsingContext::tr("Not enough samples for sampled function."));
+                }
+                sampleCount *= dimensionSize;
+            }
+            if (sampleCount > availableSamples)
+            {
+                throw PDFException(PDFParsingContext::tr("Not enough samples for sampled function."));
+            }
+
             std::vector<PDFReal> samples;
             samples.resize(sampleCount, 0.0);
 
@@ -809,7 +833,16 @@ void PDFPostScriptFunctionExecutor::execute()
                 {
                     const PDFInteger b = m_stack.popInteger();
                     const PDFInteger a = m_stack.popInteger();
-                    m_stack.pushInteger(a + b);
+
+                    // PDF Fire: integer overflow gives a real result (as in PostScript), not undefined behaviour
+                    if ((b > 0 && a > std::numeric_limits<PDFInteger>::max() - b) || (b < 0 && a < std::numeric_limits<PDFInteger>::min() - b))
+                    {
+                        m_stack.pushReal(PDFReal(a) + PDFReal(b));
+                    }
+                    else
+                    {
+                        m_stack.pushInteger(a + b);
+                    }
                 }
                 else
                 {
@@ -826,7 +859,16 @@ void PDFPostScriptFunctionExecutor::execute()
                 {
                     const PDFInteger b = m_stack.popInteger();
                     const PDFInteger a = m_stack.popInteger();
-                    m_stack.pushInteger(a - b);
+
+                    // PDF Fire: integer overflow gives a real result (as in PostScript), not undefined behaviour
+                    if ((b < 0 && a > std::numeric_limits<PDFInteger>::max() + b) || (b > 0 && a < std::numeric_limits<PDFInteger>::min() + b))
+                    {
+                        m_stack.pushReal(PDFReal(a) - PDFReal(b));
+                    }
+                    else
+                    {
+                        m_stack.pushInteger(a - b);
+                    }
                 }
                 else
                 {
@@ -843,7 +885,17 @@ void PDFPostScriptFunctionExecutor::execute()
                 {
                     const PDFInteger b = m_stack.popInteger();
                     const PDFInteger a = m_stack.popInteger();
-                    m_stack.pushInteger(a * b);
+
+                    // PDF Fire: integer overflow gives a real result (as in PostScript), not undefined behaviour
+                    const PDFReal realResult = PDFReal(a) * PDFReal(b);
+                    if (realResult >= 9223372036854775808.0 || realResult < -9223372036854775808.0)
+                    {
+                        m_stack.pushReal(realResult);
+                    }
+                    else
+                    {
+                        m_stack.pushInteger(a * b);
+                    }
                 }
                 else
                 {
@@ -878,6 +930,13 @@ void PDFPostScriptFunctionExecutor::execute()
                     throw PDFPostScriptFunction::PDFPostScriptFunctionException(PDFTranslationContext::tr("Division by zero (PostScript engine)."));
                 }
 
+                // PDF Fire: INT64_MIN / -1 raised SIGFPE and killed the application
+                if (b == -1)
+                {
+                    m_stack.pushInteger(a == std::numeric_limits<PDFInteger>::min() ? a : -a);
+                    break;
+                }
+
                 m_stack.pushInteger(a / b);
                 break;
             }
@@ -892,7 +951,8 @@ void PDFPostScriptFunctionExecutor::execute()
                     throw PDFPostScriptFunction::PDFPostScriptFunctionException(PDFTranslationContext::tr("Division by zero (PostScript engine)."));
                 }
 
-                m_stack.pushInteger(a % b);
+                // PDF Fire: INT64_MIN % -1 raised SIGFPE and killed the application
+                m_stack.pushInteger(b == -1 ? 0 : a % b);
                 break;
             }
 
@@ -900,7 +960,16 @@ void PDFPostScriptFunctionExecutor::execute()
             {
                 if (m_stack.isInteger())
                 {
-                    m_stack.pushInteger(-m_stack.popInteger());
+                    // PDF Fire: -INT64_MIN is not an integer
+                    const PDFInteger value = m_stack.popInteger();
+                    if (value == std::numeric_limits<PDFInteger>::min())
+                    {
+                        m_stack.pushReal(-PDFReal(value));
+                    }
+                    else
+                    {
+                        m_stack.pushInteger(-value);
+                    }
                 }
                 else
                 {
@@ -913,7 +982,16 @@ void PDFPostScriptFunctionExecutor::execute()
             {
                 if (m_stack.isInteger())
                 {
-                    m_stack.pushInteger(qAbs(m_stack.popInteger()));
+                    // PDF Fire: |INT64_MIN| is not an integer
+                    const PDFInteger value = m_stack.popInteger();
+                    if (value == std::numeric_limits<PDFInteger>::min())
+                    {
+                        m_stack.pushReal(-PDFReal(value));
+                    }
+                    else
+                    {
+                        m_stack.pushInteger(qAbs(value));
+                    }
                 }
                 else
                 {
@@ -1047,7 +1125,13 @@ void PDFPostScriptFunctionExecutor::execute()
             {
                 if (m_stack.isReal())
                 {
-                    m_stack.pushInteger(static_cast<PDFInteger>(m_stack.popReal()));
+                    // PDF Fire: NaN or a value out of the integer range is undefined behaviour
+                    const PDFReal value = m_stack.popReal();
+                    if (!std::isfinite(value) || value >= 9223372036854775808.0 || value < -9223372036854775808.0)
+                    {
+                        throw PDFPostScriptFunction::PDFPostScriptFunctionException(PDFTranslationContext::tr("Value out of range for conversion to integer (PostScript engine)."));
+                    }
+                    m_stack.pushInteger(static_cast<PDFInteger>(value));
                 }
                 else if (!m_stack.isInteger())
                 {
@@ -1215,7 +1299,12 @@ void PDFPostScriptFunctionExecutor::execute()
                 const PDFIntegerUnsigned value = static_cast<PDFIntegerUnsigned>(m_stack.popInteger());
                 PDFIntegerUnsigned shiftedValue = value;
 
-                if (shift > 0)
+                if (shift >= 64 || shift <= -64)
+                {
+                    // PDF Fire: shifting by the width of the type (or more) is undefined behaviour
+                    shiftedValue = 0;
+                }
+                else if (shift > 0)
                 {
                     // Positive is left
                     shiftedValue = value << shift;

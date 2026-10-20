@@ -48,6 +48,35 @@
 namespace pdf
 {
 
+/// PDF Fire: checks the declared size of a raw (Flate/LZW/uncompressed) image against
+/// sane limits and its data, and returns the row stride. Data shorter than the declared
+/// size is completed with zeros (as other readers do) - rows were read past its end.
+static unsigned int validateRawImageData(PDFInteger width, PDFInteger height, unsigned int components, unsigned int bitsPerComponent, QByteArray& data)
+{
+    constexpr PDFInteger MAX_IMAGE_SIDE = PDFInteger(1) << 24;
+    constexpr PDFInteger MAX_IMAGE_PIXELS = PDFInteger(1) << 30;
+    constexpr PDFInteger MAX_IMAGE_DATA = PDFInteger(1024) * 1024 * 1024;
+
+    if (width <= 0 || height <= 0 || width > MAX_IMAGE_SIDE || height > MAX_IMAGE_SIDE || width * height > MAX_IMAGE_PIXELS || components == 0)
+    {
+        throw PDFRendererException(RenderErrorType::Error, PDFTranslationContext::tr("Invalid size of image (%1x%2)").arg(width).arg(height));
+    }
+
+    const PDFInteger stride = (PDFInteger(components) * PDFInteger(bitsPerComponent) * width + 7) / 8;
+    const PDFInteger dataSize = stride * height;
+    if (dataSize > MAX_IMAGE_DATA)
+    {
+        throw PDFRendererException(RenderErrorType::Error, PDFTranslationContext::tr("Image is too large (%1x%2)").arg(width).arg(height));
+    }
+
+    if (data.size() < dataSize)
+    {
+        data.append(dataSize - data.size(), static_cast<char>(0));
+    }
+
+    return static_cast<unsigned int>(stride);
+}
+
 namespace image
 {
 
@@ -1415,24 +1444,18 @@ PDFImage PDFImage::createImage(const PDFDocument* document,
         // We treat data as binary maybe compressed stream (for example by Flate/LZW method), but data can also be not compressed.
         const unsigned int components = static_cast<unsigned int>(colorSpace->getColorComponentCount());
         const unsigned int bitsPerComponent = static_cast<unsigned int>(loader.readIntegerFromDictionary(dictionary, "BitsPerComponent", 8));
-        const unsigned int width = static_cast<unsigned int>(loader.readIntegerFromDictionary(dictionary, "Width", 0));
-        const unsigned int height = static_cast<unsigned int>(loader.readIntegerFromDictionary(dictionary, "Height", 0));
+        const PDFInteger width = loader.readIntegerFromDictionary(dictionary, "Width", 0);
+        const PDFInteger height = loader.readIntegerFromDictionary(dictionary, "Height", 0);
 
         if (bitsPerComponent < 1 || bitsPerComponent > 32)
         {
             throw PDFRendererException(RenderErrorType::Error, PDFTranslationContext::tr("Invalid number of bits per component (%1).").arg(bitsPerComponent));
         }
 
-        if (width == 0 || height == 0)
-        {
-            throw PDFRendererException(RenderErrorType::Error, PDFTranslationContext::tr("Invalid size of image (%1x%2)").arg(width).arg(height));
-        }
-
-        // Calculate stride
-        const unsigned int stride = (components * bitsPerComponent * width + 7) / 8;
-
+        // PDF Fire: size checked in 64 bits against limits and the data (stride was 32-bit)
         QByteArray imageDataBuffer = document->getDecodedStream(stream);
-        image.m_imageData = PDFImageData(components, bitsPerComponent, width, height, stride, maskingType, qMove(imageDataBuffer), qMove(mask), qMove(decode), qMove(matte));
+        const unsigned int stride = validateRawImageData(width, height, components, bitsPerComponent, imageDataBuffer);
+        image.m_imageData = PDFImageData(components, bitsPerComponent, static_cast<unsigned int>(width), static_cast<unsigned int>(height), stride, maskingType, qMove(imageDataBuffer), qMove(mask), qMove(decode), qMove(matte));
     }
     else if (imageMask)
     {
@@ -1445,19 +1468,13 @@ PDFImage PDFImage::createImage(const PDFDocument* document,
             throw PDFRendererException(RenderErrorType::Error, PDFTranslationContext::tr("Invalid number bits of image mask (should be 1 bit instead of %1 bits).").arg(bitsPerComponent));
         }
 
-        const unsigned int width = static_cast<unsigned int>(loader.readIntegerFromDictionary(dictionary, "Width", 0));
-        const unsigned int height = static_cast<unsigned int>(loader.readIntegerFromDictionary(dictionary, "Height", 0));
+        const PDFInteger width = loader.readIntegerFromDictionary(dictionary, "Width", 0);
+        const PDFInteger height = loader.readIntegerFromDictionary(dictionary, "Height", 0);
 
-        if (width == 0 || height == 0)
-        {
-            throw PDFRendererException(RenderErrorType::Error, PDFTranslationContext::tr("Invalid size of image (%1x%2)").arg(width).arg(height));
-        }
-
-        // Calculate stride
-        const unsigned int stride = (width + 7) / 8;
-
+        // PDF Fire: size checked in 64 bits against limits and the data
         QByteArray imageDataBuffer = document->getDecodedStream(stream);
-        image.m_imageData = PDFImageData(1, bitsPerComponent, width, height, stride, maskingType, qMove(imageDataBuffer), qMove(mask), qMove(decode), qMove(matte));
+        const unsigned int stride = validateRawImageData(width, height, 1, bitsPerComponent, imageDataBuffer);
+        image.m_imageData = PDFImageData(1, bitsPerComponent, static_cast<unsigned int>(width), static_cast<unsigned int>(height), stride, maskingType, qMove(imageDataBuffer), qMove(mask), qMove(decode), qMove(matte));
     }
 
     return image;
@@ -1644,6 +1661,11 @@ QImage PDFImage::getImage(const PDFCMS* cms,
         }
 
         QImage image(m_imageData.getWidth(), m_imageData.getHeight(), QImage::Format_Alpha8);
+        if (image.isNull())
+        {
+            // PDF Fire: allocation failed (huge image) - scanLine() would return nullptr
+            throw PDFException(PDFTranslationContext::tr("Not enough memory for the image."));
+        }
 
         const bool flip01 = !m_imageData.getDecode().empty() && qFuzzyCompare(m_imageData.getDecode().front(), 1.0);
         PDFBitReader reader(&m_imageData.getData(), m_imageData.getBitsPerComponent());

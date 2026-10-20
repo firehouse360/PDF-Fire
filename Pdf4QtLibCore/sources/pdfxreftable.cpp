@@ -36,6 +36,14 @@
 namespace pdf
 {
 
+void PDFXRefTable::checkSubsection(PDFInteger firstObjectNumber, PDFInteger count)
+{
+    if (firstObjectNumber < 0 || count < 0 || firstObjectNumber > MAX_OBJECT_NUMBER + 1 - count)
+    {
+        throw PDFException(tr("Invalid object numbers in the reference table."));
+    }
+}
+
 void PDFXRefTable::readXRefTable(PDFParsingContext* context, const QByteArray& byteArray, PDFInteger startTableOffset)
 {
     PDFParser parser(byteArray, context, PDFParser::AllowStreams);
@@ -80,6 +88,7 @@ void PDFXRefTable::readXRefTable(PDFParsingContext* context, const QByteArray& b
 
                 PDFInteger firstObjectNumber = firstObject.getInteger();
                 PDFInteger count = countObject.getInteger();
+                checkSubsection(firstObjectNumber, count);
 
                 const PDFInteger lastObjectIndex = firstObjectNumber + count - 1;
                 const PDFInteger desiredSize = lastObjectIndex + 1;
@@ -191,7 +200,7 @@ void PDFXRefTable::readXRefTable(PDFParsingContext* context, const QByteArray& b
                 if (typeObject.isName() && typeObject.getString() == "XRef")
                 {
                     PDFObject sizeObject = crossReferenceStreamDictionary->get("Size");
-                    if (!sizeObject.isInt() || sizeObject.getInteger() < 0)
+                    if (!sizeObject.isInt() || sizeObject.getInteger() < 0 || sizeObject.getInteger() > MAX_OBJECT_NUMBER + 1)
                     {
                         throw PDFException(tr("Invalid format of cross-reference stream."));
                     }
@@ -253,6 +262,15 @@ void PDFXRefTable::readXRefTable(PDFParsingContext* context, const QByteArray& b
                         throw PDFException(tr("Invalid format of cross-reference stream."));
                     }
 
+                    // PDF Fire: field widths 0..8 bytes (a number has 64 bits)
+                    for (const PDFInteger width : wArray)
+                    {
+                        if (width < 0 || width > 8)
+                        {
+                            throw PDFException(tr("Invalid format of cross-reference stream."));
+                        }
+                    }
+
                     const int columnTypeBytes = wArray[0];
                     const int columnObjectNumberOrByteOffsetBytes = wArray[1];
                     const int columnGenerationNumberOrObjectIndexBytes = wArray[2];
@@ -292,6 +310,9 @@ void PDFXRefTable::readXRefTable(PDFParsingContext* context, const QByteArray& b
                         PDFInteger firstObjectNumber = indexArray[2 * i];
                         PDFInteger count = indexArray[2 * i + 1];
 
+                        // PDF Fire: a negative /Index wrote before the table (heap overflow)
+                        checkSubsection(firstObjectNumber, count);
+
                         const PDFInteger lastObjectIndex = firstObjectNumber + count - 1;
                         const PDFInteger currentDesiredSize = lastObjectIndex + 1;
 
@@ -302,9 +323,10 @@ void PDFXRefTable::readXRefTable(PDFParsingContext* context, const QByteArray& b
 
                         for (PDFInteger objectNumber = firstObjectNumber; objectNumber <= lastObjectIndex; ++ objectNumber)
                         {
-                            int itemType = readNumber(columnTypeBytes, 1);
-                            int itemObjectNumberOfObjectStreamOrByteOffset = readNumber(columnObjectNumberOrByteOffsetBytes, 0);
-                            int itemGenerationNumberOrObjectIndex = readNumber(columnGenerationNumberOrObjectIndexBytes, 0);
+                            // PDF Fire: 64-bit fields (the offset was truncated to int)
+                            PDFInteger itemType = readNumber(columnTypeBytes, 1);
+                            PDFInteger itemObjectNumberOfObjectStreamOrByteOffset = readNumber(columnObjectNumberOrByteOffsetBytes, 0);
+                            PDFInteger itemGenerationNumberOrObjectIndex = readNumber(columnGenerationNumberOrObjectIndexBytes, 0);
 
                             switch (itemType)
                             {

@@ -50,6 +50,14 @@ public:
     inline PDFXRefTable& operator=(const PDFXRefTable&) = default;
     inline PDFXRefTable& operator=(PDFXRefTable&&) = default;
 
+    /// PDF Fire: largest object number accepted from a file (the limit of ISO 32000-1, Annex C).
+    /// A hostile /Size or /Index otherwise allocated gigabytes or wrote before the table.
+    static constexpr PDFInteger MAX_OBJECT_NUMBER = 8388607;
+
+    /// PDF Fire: throws PDFException, if the subsection [first, first + count) is not
+    /// within 0..MAX_OBJECT_NUMBER
+    static void checkSubsection(PDFInteger firstObjectNumber, PDFInteger count);
+
     enum class EntryType
     {
         Free,           ///< Entry represents a free item (no object)

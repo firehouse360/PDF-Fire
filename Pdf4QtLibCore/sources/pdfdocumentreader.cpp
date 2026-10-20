@@ -628,6 +628,19 @@ PDFDocument PDFDocumentReader::readFromBuffer(const QByteArray& buffer)
         m_errorMessage = parserException.getMessage();
         m_warnings << m_errorMessage;
     }
+    catch (const std::bad_alloc&)
+    {
+        // PDF Fire: a hostile size must fail the open, not terminate the application
+        m_result = Result::Failed;
+        m_errorMessage = tr("Not enough memory to read the document.");
+        m_warnings << m_errorMessage;
+    }
+    catch (const std::length_error&)
+    {
+        m_result = Result::Failed;
+        m_errorMessage = tr("Not enough memory to read the document.");
+        m_warnings << m_errorMessage;
+    }
 
     if (m_result == Result::Failed && m_permissive && shouldTryPermissiveReading)
     {
@@ -744,7 +757,8 @@ bool PDFDocumentReader::restoreObjects(std::map<PDFObjectReference, PDFObject>& 
             if (objectNumberObject.isInt() && objectGenerationObject.isInt() && !object.isNull())
             {
                 PDFObjectReference reference(objectNumberObject.getInteger(), objectGenerationObject.getInteger());
-                if (reference.isValid())
+                // PDF Fire: a huge object number would size the object table to gigabytes
+                if (reference.isValid() && reference.objectNumber <= PDFXRefTable::MAX_OBJECT_NUMBER)
                 {
                     QMutexLocker lock(&restoredObjectsMutex);
                     if (!restoredObjects.count(reference))
@@ -816,6 +830,12 @@ PDFDocument PDFDocumentReader::readDamagedDocumentFromBuffer(const QByteArray& b
     {
         m_result = Result::Failed;
         m_warnings << parserException.getMessage();
+    }
+    catch (const std::bad_alloc&)
+    {
+        // PDF Fire: a hostile size must fail the open, not terminate the application
+        m_result = Result::Failed;
+        m_warnings << tr("Not enough memory to read the document.");
     }
 
     return PDFDocument();

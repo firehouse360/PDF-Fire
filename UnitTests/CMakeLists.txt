@@ -327,6 +327,17 @@ set_target_properties(UnitTestsTimestamp PROPERTIES
 )
 add_test(UnitTestsTimestamp "${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}/UnitTestsTimestamp")
 
+# PDF Fire: hostile (damaged or malicious) PDF files
+add_executable(UnitTestsHostileFiles tst_hostilefilestest.cpp)
+target_link_libraries(UnitTestsHostileFiles PRIVATE Pdf4QtLibCore Qt6::Core Qt6::Gui Qt6::Test OpenSSL::Crypto ZLIB::ZLIB)
+set_target_properties(UnitTestsHostileFiles PROPERTIES
+    WIN32_EXECUTABLE OFF
+    MACOSX_BUNDLE OFF
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}
+)
+add_test(UnitTestsHostileFiles "${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}/UnitTestsHostileFiles")
+set_tests_properties(UnitTestsHostileFiles PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(UnitTestsAnnotationManipulator tst_annotationmanipulatortest.cpp)
 target_link_libraries(UnitTestsAnnotationManipulator PRIVATE Pdf4QtLibCore Qt6::Core Qt6::Gui Qt6::Test)
 set_target_properties(UnitTestsAnnotationManipulator PROPERTIES

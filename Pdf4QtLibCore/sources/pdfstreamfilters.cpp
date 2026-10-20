@@ -36,6 +36,22 @@
 namespace pdf
 {
 
+// PDF Fire: decoded-size limit of the stream currently decoded by this thread
+static thread_local PDFInteger s_maxDecodedSize = PDFStreamFilter::DEFAULT_MAX_DECODED_SIZE;
+
+PDFInteger PDFStreamFilter::getMaxDecodedSize()
+{
+    return s_maxDecodedSize;
+}
+
+void PDFStreamFilter::checkDecodedSize(PDFInteger size)
+{
+    if (size > s_maxDecodedSize)
+    {
+        throw PDFException(PDFTranslationContext::tr("Decoded stream is too large (more than %1 MB).").arg(s_maxDecodedSize / (1024 * 1024)));
+    }
+}
+
 QByteArray PDFAsciiHexDecodeFilter::apply(const QByteArray& data,
                                           const PDFObjectFetcher& objectFetcher,
                                           const PDFObject& parameters,
@@ -109,6 +125,9 @@ QByteArray PDFAscii85DecodeFilter::apply(const QByteArray& data,
         else if (scannedChar == 'z')
         {
             result.append(4, static_cast<char>(0));
+
+            // PDF Fire: 'z' expands 1:4, chained after Flate it is a decompression bomb
+            checkDecodedSize(result.size());
         }
         else
         {
@@ -153,6 +172,7 @@ QByteArray PDFAscii85DecodeFilter::apply(const QByteArray& data,
         }
     }
 
+    checkDecodedSize(result.size());
     return result;
 }
 
@@ -312,6 +332,9 @@ QByteArray PDFLzwStreamDecoder::decompress()
 
         // Copy the input array to the buffer
         std::copy(m_sequence.begin(), m_currentSequenceEnd, std::back_inserter(result));
+
+        // PDF Fire: LZW can expand a few kilobytes to gigabytes
+        PDFStreamFilter::checkDecodedSize(result.size());
     }
 
     result.shrink_to_fit();
@@ -512,6 +535,13 @@ QByteArray PDFFlateDecodeFilter::uncompress(const QByteArray& data)
 
         int bytesWritten = int(outputBuffer.size()) - stream.avail_out;
         result.append(reinterpret_cast<const char*>(outputBuffer.data()), bytesWritten);
+
+        // PDF Fire: stop a decompression bomb (deflate expands up to 1:1032)
+        if (result.size() > getMaxDecodedSize())
+        {
+            inflateEnd(&stream);
+            checkDecodedSize(result.size());
+        }
     } while (error == Z_OK);
 
     QString errorMessage;
@@ -575,17 +605,27 @@ QByteArray PDFRunLengthDecodeFilter::apply(const QByteArray& data,
         else if (current < 128)
         {
             // Copy n + 1 characters from the input array literally (and advance iterators)
-            const int count = static_cast<int>(current) + 1;
-            std::copy(it, std::next(it, count), std::back_inserter(result));
+            // PDF Fire: never past the end of the input - a truncated run read heap memory
+            const int count = static_cast<int>(qMin<qsizetype>(static_cast<qsizetype>(current) + 1, std::distance(it, itEnd)));
+            result.append(it, count);
             std::advance(it, count);
         }
         else if (current > 128)
         {
+            // PDF Fire: a repeat run without its character (truncated input) ends the stream
+            if (it == itEnd)
+            {
+                break;
+            }
+
             // Copy 257 - n copies of single character
             const int count = 257 - current;
             const char toBeCopied = *it++;
             std::fill_n(std::back_inserter(result), count, toBeCopied);
         }
+
+        // PDF Fire: run-length expands up to 1:64
+        checkDecodedSize(result.size());
     }
 
     return result;
@@ -694,6 +734,31 @@ QByteArray PDFStreamFilterStorage::getDecodedStream(const PDFStream* stream, con
         return QByteArray();
     }
 
+    // PDF Fire: every decoded stream (and every step of a filter chain) is limited to
+    // DEFAULT_MAX_DECODED_SIZE; an image may be larger, up to what its declared size needs
+    // (8 bytes per pixel covers 4 components of 16 bits), capped at 1 GB.
+    PDFInteger maxDecodedSize = PDFStreamFilter::DEFAULT_MAX_DECODED_SIZE;
+    if (const PDFDictionary* dictionary = stream->getDictionary())
+    {
+        const PDFObject& widthObject = objectFetcher(dictionary->get("Width"));
+        const PDFObject& heightObject = objectFetcher(dictionary->get("Height"));
+        if (widthObject.isInt() && heightObject.isInt())
+        {
+            constexpr PDFInteger MAX_IMAGE_DECODED_SIZE = PDFInteger(1024) * 1024 * 1024;
+            const PDFInteger width = qBound<PDFInteger>(0, widthObject.getInteger(), MAX_IMAGE_DECODED_SIZE);
+            const PDFInteger height = qBound<PDFInteger>(0, heightObject.getInteger(), MAX_IMAGE_DECODED_SIZE);
+            const double imageSize = double(width) * double(height) * 8.0 + 65536.0;
+            maxDecodedSize = qBound<PDFInteger>(maxDecodedSize, static_cast<PDFInteger>(qMin(imageSize, double(MAX_IMAGE_DECODED_SIZE))), MAX_IMAGE_DECODED_SIZE);
+        }
+    }
+
+    struct MaxDecodedSizeScope
+    {
+        explicit MaxDecodedSizeScope(PDFInteger value) : m_saved(s_maxDecodedSize) { s_maxDecodedSize = value; }
+        ~MaxDecodedSizeScope() { s_maxDecodedSize = m_saved; }
+        PDFInteger m_saved;
+    } maxDecodedSizeScope(maxDecodedSize);
+
     for (size_t i = 0, count = streamFilters.filterObjects.size(); i < count; ++i)
     {
         const PDFStreamFilter* streamFilter = streamFilters.filterObjects[i];
@@ -780,7 +845,12 @@ PDFStreamPredictor PDFStreamPredictor::createPredictor(const PDFObjectFetcher& o
         int predictor = getInteger("Predictor", 1, 15, 1);
         int components = getInteger("Colors", 1, PDF_MAX_COLOR_COMPONENTS, 1);
         int bitsPerComponent = getInteger("BitsPerComponent", 1, 16, 8);
+        // PDF Fire: a row may not be larger than the decoded-size limit (hostile /Columns)
         int columns = getInteger("Columns", 1, std::numeric_limits<int>::max(), 1);
+        if ((PDFInteger(columns) * components * bitsPerComponent + 7) / 8 > PDFStreamFilter::getMaxDecodedSize())
+        {
+            throw PDFException(PDFTranslationContext::tr("Property 'Columns' of the stream predictor is too large."));
+        }
 
         return PDFStreamPredictor(static_cast<Predictor>(predictor), components, bitsPerComponent, columns);
     }
@@ -833,8 +903,16 @@ QByteArray PDFStreamPredictor::applyPNGPredictor(const QByteArray& data) const
         return 0;
     };
 
+    // PDF Fire: an incomplete last row is completed with zeros only if it is not longer than
+    // the whole input - a one-byte stream with huge /Columns produced hundreds of megabytes.
+    if (m_stride <= 0 || m_stride > PDFStreamFilter::getMaxDecodedSize())
+    {
+        throw PDFException(PDFTranslationContext::tr("Invalid row size of the stream predictor."));
+    }
+    const bool padIncompleteRow = m_stride <= data.size();
+
     // Idea: to avoid using if for many cases, we use larger buffer filled with zeros
-    const int totalBytes = m_stride + pixelBytes;
+    const PDFInteger totalBytes = m_stride + pixelBytes;
     std::vector<uint8_t> line(totalBytes, 0);
     std::vector<uint8_t> lineOld(totalBytes, 0);
 
@@ -844,11 +922,17 @@ QByteArray PDFStreamPredictor::applyPNGPredictor(const QByteArray& data) const
         // First, read the predictor data for current line
         currentPredictor = static_cast<Predictor>(readByte() + 10);
 
-        for (int i = 0; i < m_stride; ++i)
+        PDFStreamFilter::checkDecodedSize(outputData.size() + m_stride);
+        for (PDFInteger i = 0; i < m_stride; ++i)
         {
+            if (it == itEnd && !padIncompleteRow)
+            {
+                break;
+            }
+
             uint8_t currentByte = readByte();
 
-            int lineIndex = i + pixelBytes;
+            const PDFInteger lineIndex = i + pixelBytes;
             switch (currentPredictor)
             {
                 case PNG_Sub:

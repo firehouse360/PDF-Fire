@@ -1167,7 +1167,7 @@ private:
 
     /// Active structural parent key
     PDFInteger m_structuralParentKey;
-    int m_formNestingLevel = 0; ///< PDF Fire: depth of the nested forms (a form can draw itself)
+    int m_formNestingLevel = 0; ///< PDF Fire: depth of the nested content streams - forms, Type 3 glyphs and tiling patterns (each can draw itself)
 };
 
 template<>

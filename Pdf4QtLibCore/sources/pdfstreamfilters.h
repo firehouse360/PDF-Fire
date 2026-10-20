@@ -126,7 +126,8 @@ private:
         m_columns(columns),
         m_stride(0)
     {
-        m_stride = (m_columns * m_components * m_bitsPerComponent + 7) / 8;
+        // PDF Fire: compute in 64 bits, a hostile /Columns overflowed the int (undefined behaviour)
+        m_stride = (PDFInteger(m_columns) * m_components * m_bitsPerComponent + 7) / 8;
     }
 
     /// Applies PNG predictor
@@ -139,7 +140,7 @@ private:
     int m_components = 0;
     int m_bitsPerComponent = 0;
     int m_columns = 0;
-    int m_stride = 0;
+    PDFInteger m_stride = 0;
 };
 
 class PDF4QTLIBCORESHARED_EXPORT PDFStreamFilter
@@ -147,6 +148,17 @@ class PDF4QTLIBCORESHARED_EXPORT PDFStreamFilter
 public:
     explicit PDFStreamFilter() = default;
     virtual ~PDFStreamFilter() = default;
+
+    /// PDF Fire: default upper bound of the decoded size of one stream. A few kilobytes of
+    /// a hostile file can otherwise inflate to gigabytes ("decompression bomb").
+    static constexpr PDFInteger DEFAULT_MAX_DECODED_SIZE = PDFInteger(256) * 1024 * 1024;
+
+    /// PDF Fire: largest decoded size allowed for the stream decoded in this thread
+    /// (DEFAULT_MAX_DECODED_SIZE, or more for a large image, see getDecodedStream).
+    static PDFInteger getMaxDecodedSize();
+
+    /// PDF Fire: throws PDFException, if \p size exceeds getMaxDecodedSize()
+    static void checkDecodedSize(PDFInteger size);
 
     /// Apply with object fetcher
     /// \param data Stream data to be decoded

@@ -1299,6 +1299,15 @@ PDFSecurityHandler::AuthorizationResult PDFStandardSecurityHandler::authenticate
     QByteArray password;
     bool passwordObtained = true;
 
+    // PDF Fire: a document can be read again without anyone to ask for the password (signing,
+    // incremental save). Calling the empty callback threw std::bad_function_call, which
+    // terminated the application. Without a callback, no password is obtained.
+    std::function<QString(bool*)> getPasswordCallbackChecked = getPasswordCallback;
+    if (!getPasswordCallbackChecked)
+    {
+        getPasswordCallbackChecked = [](bool* ok) { *ok = false; return QString(); };
+    }
+
     // Clear the authorization data
     m_authorizationData = AuthorizationData();
 
@@ -1452,7 +1461,7 @@ PDFSecurityHandler::AuthorizationResult PDFStandardSecurityHandler::authenticate
                 return AuthorizationResult::Failed;
         }
 
-        password = adjustPassword(getPasswordCallback(&passwordObtained), m_R);
+        password = adjustPassword(getPasswordCallbackChecked(&passwordObtained), m_R);
     }
 
     return AuthorizationResult::Cancelled;
@@ -2022,7 +2031,8 @@ PDFSecurityHandlerPointer PDFSecurityHandlerFactory::createSecurityHandler(const
         openssl_ptr<BIO> pksBuffer(BIO_new(BIO_s_mem()), &BIO_free_all);
         BIO_write(pksBuffer.get(), data.constData(), data.length());
 
-        openssl_ptr<PKCS12> pkcs12(d2i_PKCS12_bio(pksBuffer.get(), nullptr), &PKCS12_free);
+        // PDF Fire: a hostile iteration count is refused (it would hang the application)
+        openssl_ptr<PKCS12> pkcs12(PDFCertificateManager::isPKCS12IterationCountAcceptable(data) ? d2i_PKCS12_bio(pksBuffer.get(), nullptr) : nullptr, &PKCS12_free);
         if (pkcs12)
         {
             QByteArray password = PDFStandardOrPublicSecurityHandler::adjustPassword(settings.userPassword, 0);
@@ -2462,6 +2472,12 @@ PDFSecurityHandler::AuthorizationResult PDFPublicKeySecurityHandler::authenticat
 
         default:
             return AuthorizationResult::Failed;
+    }
+
+    // PDF Fire: no callback (document read again by signing or incremental save) - nobody to ask
+    if (!getPasswordCallback)
+    {
+        return AuthorizationResult::Cancelled;
     }
 
     bool passwordObtained = true;
