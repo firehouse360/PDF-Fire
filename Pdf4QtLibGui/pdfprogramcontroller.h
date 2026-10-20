@@ -331,6 +331,27 @@ public:
     bool canModifyPages() const;
     pdf::PDFInteger getCurrentPageIndex() const;
 
+    // PDF Fire: organizing the pages (pdfprogramcontroller_pages.cpp). Each change is one
+    // step of the undo; the functions return true, when the document was changed.
+    bool movePagesTo(const std::vector<pdf::PDFInteger>& pages, pdf::PDFInteger position);
+    bool copyPagesTo(const std::vector<pdf::PDFInteger>& pages, pdf::PDFInteger position);
+    bool duplicatePages(const std::vector<pdf::PDFInteger>& pages);
+    bool reversePages(const std::vector<pdf::PDFInteger>& pages);
+    /// Copy or Cut pages - they are remembered, until they are pasted. Cut pages move,
+    /// when they are pasted into the same document (nothing is removed before that).
+    void copyPagesToClipboard(const std::vector<pdf::PDFInteger>& pages, bool cut);
+    bool canPastePages() const;
+    /// Pastes the copied (cut) pages in front of the page \p position; \p pastedPages
+    /// gets the indices of the pasted pages in the changed document
+    bool pastePages(pdf::PDFInteger position, std::vector<pdf::PDFInteger>* pastedPages = nullptr);
+    bool replacePages(const std::vector<pdf::PDFInteger>& pages);
+    void splitDocument();
+    /// Inserts PDF files and pictures (one picture per page, fitted into the size of
+    /// the page next to them) in front of the page \p position
+    bool insertFiles(const QStringList& fileNames, pdf::PDFInteger position);
+    bool insertImagesFromFile(pdf::PDFInteger position);
+    void createDocumentFromImages();
+
     void initialize(Features features,
                     QMainWindow* mainWindow,
                     IMainWindow* mainWindowInterface,
@@ -568,6 +589,24 @@ private:
 
     /// Prepares a new tab for a document being opened or created
     void prepareNewDocumentTab();
+
+    /// PDF Fire: reads a PDF file, whose pages are inserted into the document (asks for
+    /// its password; checks, that it allows it); shows the error, returns false on failure
+    bool readDocumentForInsert(const QString& fileName, pdf::PDFDocument* document);
+
+    /// PDF Fire: shows a new document (not saved yet) in a new tab
+    void showNewDocument(pdf::PDFDocument&& document);
+
+    /// PDF Fire: the pages copied (or cut) by copyPagesToClipboard
+    struct PageClipboard
+    {
+        pdf::PDFDocumentPointer document;               ///< The document, when the pages were copied
+        std::vector<pdf::PDFObjectReference> pages;     ///< The copied pages
+        bool isCut = false;
+        int tab = -1;                                   ///< The tab of the document
+        QString fileName;                               ///< The file of the document
+    };
+    PageClipboard m_pageClipboard;
 
     std::vector<DocumentTab> m_tabs;
     int m_currentTab = -1;

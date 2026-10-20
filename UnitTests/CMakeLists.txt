@@ -418,6 +418,15 @@ set_target_properties(UnitTestsPageOperations PROPERTIES
 )
 add_test(UnitTestsPageOperations "${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}/UnitTestsPageOperations")
 
+add_executable(UnitTestsPageOrganizer tst_pageorganizertest.cpp)
+target_link_libraries(UnitTestsPageOrganizer PRIVATE Pdf4QtLibCore Qt6::Core Qt6::Gui Qt6::Test)
+set_target_properties(UnitTestsPageOrganizer PROPERTIES
+    WIN32_EXECUTABLE OFF
+    MACOSX_BUNDLE OFF
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}
+)
+add_test(UnitTestsPageOrganizer "${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}/UnitTestsPageOrganizer")
+
 add_executable(UnitTestsFormFields tst_formfieldstest.cpp)
 target_link_libraries(UnitTestsFormFields PRIVATE Pdf4QtLibCore Qt6::Core Qt6::Gui Qt6::Test)
 set_target_properties(UnitTestsFormFields PROPERTIES

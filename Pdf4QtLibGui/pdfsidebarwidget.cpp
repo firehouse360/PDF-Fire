@@ -33,6 +33,7 @@
 
 #include "pdfdocument.h"
 #include "pdfitemmodels.h"
+#include "pdffirepageorganizer.h"
 #include "pdfexception.h"
 #include "pdfsignaturehandler.h"
 #include "pdfdrawspacecontroller.h"
@@ -63,6 +64,11 @@
 #include <QStandardItemModel>
 #include <QSortFilterProxyModel>
 #include <QUrl>
+#include <QMimeData>
+#include <QDragMoveEvent>
+#include <QDropEvent>
+#include <QListView>
+#include <map>
 #include <QUuid>
 #include <cmath>
 #include <functional>
@@ -157,7 +163,8 @@ PDFSidebarWidget::PDFSidebarWidget(pdf::PDFDrawWidgetProxy* proxy,
     m_thumbnailsSelectButton->setCheckable(true);
     m_thumbnailsSelectButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
     m_thumbnailsSelectButton->setToolTip(tr("Pick several pages: every click adds a page or removes it again. Then right-click a picked page "
-                                            "to rotate, move, extract or delete them all (or press Delete). Ctrl + click and Shift + click work too."));
+                                            "to rotate, move, copy, extract or delete them all (or press Delete). Ctrl + click and Shift + click work too. "
+                                            "Drag pages to move them; hold Ctrl while dropping to copy them."));
     ui->thumbnailsToolbarLayout->insertWidget(1, m_thumbnailsSelectButton);
     connect(m_thumbnailsSelectButton, &QToolButton::toggled, this, &PDFSidebarWidget::setThumbnailSelectMode);
 
@@ -167,6 +174,24 @@ PDFSidebarWidget::PDFSidebarWidget(pdf::PDFDrawWidgetProxy* proxy,
     m_thumbnailsHintLabel->setVisible(false);
     ui->thumbnailsLayout->insertWidget(ui->thumbnailsLayout->indexOf(ui->thumbnailsToolbarWidget) + 1, m_thumbnailsHintLabel);
     connect(ui->thumbnailsListView->selectionModel(), &QItemSelectionModel::selectionChanged, this, &PDFSidebarWidget::updateThumbnailsHint);
+
+    // PDF Fire: organizing the pages - thumbnails are dragged to another place (Ctrl copies
+    // them), PDF files and pictures are dropped between them. The drops are handled by
+    // eventFilter, an orange bar shows where the pages go.
+    ui->thumbnailsListView->setDragEnabled(true);
+    ui->thumbnailsListView->setDragDropMode(QAbstractItemView::DragDrop);
+    ui->thumbnailsListView->setDefaultDropAction(Qt::MoveAction);
+    ui->thumbnailsListView->setDropIndicatorShown(false);
+    ui->thumbnailsListView->viewport()->setAcceptDrops(true);
+    ui->thumbnailsListView->viewport()->installEventFilter(this);
+    m_thumbnailsDropIndicator = new QWidget(ui->thumbnailsListView->viewport());
+    m_thumbnailsDropIndicator->setObjectName("thumbnailsDropIndicator");
+    m_thumbnailsDropIndicator->setAttribute(Qt::WA_TransparentForMouseEvents);
+    // The accent orange of PDF Fire - it is seen on the dark and on the light theme (a style
+    // sheet, the theme's style sheet would paint over a palette colour)
+    m_thumbnailsDropIndicator->setAttribute(Qt::WA_StyledBackground);
+    m_thumbnailsDropIndicator->setStyleSheet(QStringLiteral("QWidget#thumbnailsDropIndicator { background-color: #f2561d; border-radius: 2px; }"));
+    m_thumbnailsDropIndicator->hide();
 
     // Optional content
     ui->optionalContentTreeView->header()->hide();
@@ -507,6 +532,21 @@ void PDFSidebarWidget::setThumbnailActions(const QList<QAction*>& actions)
             deleteShortcut->setContext(Qt::WidgetShortcut);
             connect(deleteShortcut, &QShortcut::activated, action, &QAction::trigger);
         }
+
+        // PDF Fire: Ctrl+C / Ctrl+X / Ctrl+V / Ctrl+D work with the pages, while the thumbnails have the focus
+        static const std::map<QString, QKeySequence> pageShortcuts = {
+            { QStringLiteral("actionCopyPages"), QKeySequence(QKeySequence::Copy) },
+            { QStringLiteral("actionCutPages"), QKeySequence(QKeySequence::Cut) },
+            { QStringLiteral("actionPastePages"), QKeySequence(QKeySequence::Paste) },
+            { QStringLiteral("actionDuplicatePages"), QKeySequence(Qt::CTRL | Qt::Key_D) },
+        };
+        auto it = action ? pageShortcuts.find(action->objectName()) : pageShortcuts.cend();
+        if (it != pageShortcuts.cend())
+        {
+            QShortcut* shortcut = new QShortcut(it->second, ui->thumbnailsListView);
+            shortcut->setContext(Qt::WidgetShortcut);
+            connect(shortcut, &QShortcut::activated, action, &QAction::trigger);
+        }
     }
 }
 
@@ -593,8 +633,8 @@ void PDFSidebarWidget::updateThumbnailsHint()
     QString hint;
     if (count > 1 || (isSelectMode && count == 1))
     {
-        hint = count == 1 ? tr("1 page selected - right-click it to rotate, move, extract or delete it.")
-                          : tr("%1 pages selected - right-click one of them to rotate, move, extract or delete them all.").arg(count);
+        hint = count == 1 ? tr("1 page selected - right-click it to rotate, copy, extract or delete it, or drag it to another place.")
+                          : tr("%1 pages selected - right-click one of them to rotate, copy, extract or delete them all, or drag them to another place (Ctrl copies).").arg(count);
     }
     else if (isSelectMode)
     {
@@ -603,6 +643,194 @@ void PDFSidebarWidget::updateThumbnailsHint()
 
     m_thumbnailsHintLabel->setText(hint);
     m_thumbnailsHintLabel->setVisible(!hint.isEmpty());
+}
+
+QStringList PDFSidebarWidget::getDroppedFiles(const QMimeData* mimeData)
+{
+    QStringList fileNames;
+    if (!mimeData || !mimeData->hasUrls())
+    {
+        return fileNames;
+    }
+
+    for (const QUrl& url : mimeData->urls())
+    {
+        const QString fileName = url.toLocalFile();
+        if (fileName.isEmpty())
+        {
+            continue;
+        }
+
+        if (pdf::PDFFirePageOrganizer::isSupportedImageFile(fileName) || QFileInfo(fileName).suffix().compare("pdf", Qt::CaseInsensitive) == 0)
+        {
+            fileNames << fileName;
+        }
+    }
+
+    return fileNames;
+}
+
+pdf::PDFInteger PDFSidebarWidget::getThumbnailDropPosition(const QPoint& point, QRect* indicatorRect) const
+{
+    *indicatorRect = QRect();
+    const int count = m_thumbnailsModel->rowCount(QModelIndex());
+    if (count == 0)
+    {
+        return 0;
+    }
+
+    // The thumbnail under the point, or the nearest one
+    QListView* view = ui->thumbnailsListView;
+    int row = -1;
+    QRect rect;
+    const QModelIndex indexAtPoint = view->indexAt(point);
+    if (indexAtPoint.isValid())
+    {
+        row = indexAtPoint.row();
+        rect = view->visualRect(indexAtPoint);
+    }
+    else
+    {
+        qint64 bestDistance = std::numeric_limits<qint64>::max();
+        for (int i = 0; i < count; ++i)
+        {
+            const QRect itemRect = view->visualRect(m_thumbnailsModel->index(i, 0, QModelIndex()));
+            if (!itemRect.isValid())
+            {
+                continue;
+            }
+
+            const int dx = qMax(0, qMax(itemRect.left() - point.x(), point.x() - itemRect.right()));
+            const int dy = qMax(0, qMax(itemRect.top() - point.y(), point.y() - itemRect.bottom()));
+            const qint64 distance = qint64(dx) * dx + qint64(dy) * dy;
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                row = i;
+                rect = itemRect;
+            }
+        }
+    }
+
+    if (row < 0)
+    {
+        return count;
+    }
+
+    // Several thumbnails in a row - in front of or after the thumbnail by the left/right
+    // half (a vertical bar); one thumbnail in a row - by the upper/lower half (a horizontal bar)
+    const int thickness = qMax(3, pdf::PDFWidgetUtils::scaleDPI_x(view, 4));
+    const bool isGrid = rect.width() * 2 <= view->viewport()->width();
+    bool isAfter = false;
+    if (isGrid)
+    {
+        isAfter = point.x() > rect.center().x();
+        const int x = isAfter ? rect.right() + 1 : rect.left() - thickness;
+        *indicatorRect = QRect(x, rect.top(), thickness, rect.height());
+    }
+    else
+    {
+        isAfter = point.y() > rect.center().y();
+        const int y = isAfter ? rect.bottom() + 1 : rect.top() - thickness;
+        *indicatorRect = QRect(rect.left(), y, rect.width(), thickness);
+    }
+
+    *indicatorRect = indicatorRect->intersected(view->viewport()->rect().adjusted(0, 0, 0, 0));
+    return isAfter ? row + 1 : row;
+}
+
+bool PDFSidebarWidget::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched != ui->thumbnailsListView->viewport())
+    {
+        return QWidget::eventFilter(watched, event);
+    }
+
+    switch (event->type())
+    {
+        case QEvent::DragEnter:
+        case QEvent::DragMove:
+        {
+            QDragMoveEvent* dragEvent = static_cast<QDragMoveEvent*>(event);
+            const bool canModify = m_document && pdf::PDFFirePermissions::canAssemblePages(m_document);
+            const bool hasPages = !pdf::PDFThumbnailsItemModel::getDraggedPages(dragEvent->mimeData(), m_document).empty();
+            const bool hasFiles = !hasPages && !getDroppedFiles(dragEvent->mimeData()).isEmpty();
+            if (!canModify || (!hasPages && !hasFiles))
+            {
+                m_thumbnailsDropIndicator->hide();
+                dragEvent->ignore();
+                return true;
+            }
+
+            const QPoint point = dragEvent->position().toPoint();
+            QRect indicatorRect;
+            getThumbnailDropPosition(point, &indicatorRect);
+            m_thumbnailsDropIndicator->setGeometry(indicatorRect);
+            m_thumbnailsDropIndicator->setVisible(indicatorRect.isValid());
+            m_thumbnailsDropIndicator->raise();
+
+            // Near the top or the bottom edge the thumbnails scroll
+            const int edge = pdf::PDFWidgetUtils::scaleDPI_y(ui->thumbnailsListView, 24);
+            QScrollBar* scrollBar = ui->thumbnailsListView->verticalScrollBar();
+            if (point.y() < edge)
+            {
+                scrollBar->setValue(scrollBar->value() - scrollBar->singleStep());
+            }
+            else if (point.y() > ui->thumbnailsListView->viewport()->height() - edge)
+            {
+                scrollBar->setValue(scrollBar->value() + scrollBar->singleStep());
+            }
+
+            const bool copy = hasFiles || dragEvent->modifiers().testFlag(Qt::ControlModifier);
+            dragEvent->setDropAction(copy ? Qt::CopyAction : Qt::MoveAction);
+            dragEvent->accept();
+            return true;
+        }
+
+        case QEvent::DragLeave:
+            m_thumbnailsDropIndicator->hide();
+            return true;
+
+        case QEvent::Drop:
+        {
+            QDropEvent* dropEvent = static_cast<QDropEvent*>(event);
+            m_thumbnailsDropIndicator->hide();
+
+            QRect indicatorRect;
+            const pdf::PDFInteger position = getThumbnailDropPosition(dropEvent->position().toPoint(), &indicatorRect);
+            const std::vector<pdf::PDFInteger> pages = pdf::PDFThumbnailsItemModel::getDraggedPages(dropEvent->mimeData(), m_document);
+            const QStringList fileNames = pages.empty() ? getDroppedFiles(dropEvent->mimeData()) : QStringList();
+            if (pages.empty() && fileNames.isEmpty())
+            {
+                dropEvent->ignore();
+                return true;
+            }
+
+            const bool copy = !fileNames.isEmpty() || dropEvent->modifiers().testFlag(Qt::ControlModifier);
+            dropEvent->setDropAction(copy ? Qt::CopyAction : Qt::MoveAction);
+            dropEvent->accept();
+
+            // The document is changed after the drag is finished - the thumbnails are
+            // rebuilt by the change, the view must not be in the middle of its drag then
+            QMetaObject::invokeMethod(this, [this, pages, fileNames, position, copy]()
+            {
+                if (!pages.empty())
+                {
+                    Q_EMIT thumbnailPagesDropped(pages, position, copy);
+                }
+                else
+                {
+                    Q_EMIT thumbnailFilesDropped(fileNames, position);
+                }
+            }, Qt::QueuedConnection);
+            return true;
+        }
+
+        default:
+            break;
+    }
+
+    return QWidget::eventFilter(watched, event);
 }
 
 void PDFSidebarWidget::setCurrentPages(const std::vector<pdf::PDFInteger>& currentPages)

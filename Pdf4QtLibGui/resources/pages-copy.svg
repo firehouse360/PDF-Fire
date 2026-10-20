@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- PDF Fire: page organizing icon (MIT, PDF Fire contributors) -->
+<svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="24px" height="24px" viewBox="0 0 24 24">
+<g fill="none" stroke="#292D32" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+<rect x="8" y="7" width="12" height="14" rx="1.2"/><path d="M16 4.5V4c0-0.7-0.5-1.2-1.2-1.2H5.2C4.5 2.8 4 3.3 4 4v12.8c0 0.7 0.5 1.2 1.2 1.2H6"/>
+</g>
+</svg>

@@ -44,9 +44,18 @@
 //       shot:<file.png>                save a picture of the window
 //       wheel:<x>,<y>,<delta>          turn the mouse wheel
 //       exit                           leave at once, without the question about saving
+//       dnd:<x1>,<y1>,<x2>,<y2>[,ctrl]   drag the selected items of the view at x1,y1 over x2,y2 (not dropped yet;
+//                                      a real drag would wait for the mouse in its own loop)
+//       dndfiles:<x>,<y>,<file|file>   drag files over x,y (not dropped yet)
+//       dnddrop:<x>,<y>[,ctrl]         drop the dragged data at x,y
 
 #include <QAction>
 #include <QAbstractButton>
+#include <QAbstractItemView>
+#include <QDragMoveEvent>
+#include <QDropEvent>
+#include <QMimeData>
+#include <QUrl>
 #include <QApplication>
 #include <QComboBox>
 #include <QMenu>
@@ -384,6 +393,66 @@ private:
                 }
             }
         }
+        else if (command == "dnd" || command == "dndfiles")
+        {
+            QPoint to;
+            m_dragData.reset(new QMimeData());
+            if (command == "dnd")
+            {
+                const QPoint from = parsePoint(argument, 0);
+                to = parsePoint(argument, 2);
+                m_dragModifiers = argument.section(',', 4, 4) == "ctrl" ? Qt::ControlModifier : Qt::NoModifier;
+                QAbstractItemView* view = nullptr;
+                for (QWidget* widget = m_window->childAt(from); widget && !view; widget = widget->parentWidget())
+                {
+                    view = qobject_cast<QAbstractItemView*>(widget);
+                }
+                if (view && view->model())
+                {
+                    QModelIndexList indexes = view->selectionModel() ? view->selectionModel()->selectedIndexes() : QModelIndexList();
+                    if (indexes.isEmpty())
+                    {
+                        indexes << view->indexAt(view->viewport()->mapFrom(m_window, from));
+                    }
+                    m_dragData.reset(view->model()->mimeData(indexes));
+                }
+            }
+            else
+            {
+                to = parsePoint(argument, 0);
+                m_dragModifiers = Qt::NoModifier;
+                QList<QUrl> urls;
+                for (const QString& fileName : argument.section(',', 2).split('|', Qt::SkipEmptyParts))
+                {
+                    urls << QUrl::fromLocalFile(fileName);
+                }
+                m_dragData->setUrls(urls);
+            }
+
+            if (m_dragData)
+            {
+                QWidget* widget = m_window->childAt(to);
+                const QPointF localPoint = widget ? widget->mapFrom(m_window, to) : QPointF();
+                if (widget)
+                {
+                    QDragEnterEvent enterEvent(localPoint.toPoint(), Qt::CopyAction | Qt::MoveAction, m_dragData.data(), Qt::LeftButton, m_dragModifiers);
+                    QApplication::sendEvent(widget, &enterEvent);
+                    QDragMoveEvent moveEvent(localPoint.toPoint(), Qt::CopyAction | Qt::MoveAction, m_dragData.data(), Qt::LeftButton, m_dragModifiers);
+                    QApplication::sendEvent(widget, &moveEvent);
+                }
+            }
+        }
+        else if (command == "dnddrop")
+        {
+            const QPoint to = parsePoint(argument, 0);
+            const Qt::KeyboardModifiers modifiers = argument.section(',', 2, 2) == "ctrl" ? Qt::ControlModifier : m_dragModifiers;
+            QWidget* widget = m_window->childAt(to);
+            if (widget && m_dragData)
+            {
+                QDropEvent dropEvent(widget->mapFrom(m_window, QPointF(to)), Qt::CopyAction | Qt::MoveAction, m_dragData.data(), Qt::LeftButton, modifiers);
+                QApplication::sendEvent(widget, &dropEvent);
+            }
+        }
         else if (command == "exit")
         {
             // Leaves immediately, without the question about the unsaved document
@@ -429,6 +498,8 @@ private:
 
     QMainWindow* m_window;
     QStringList m_steps;
+    QScopedPointer<QMimeData> m_dragData;
+    Qt::KeyboardModifiers m_dragModifiers = Qt::NoModifier;
 };
 
 }   // namespace
