@@ -69,6 +69,10 @@ private slots:
     void decompressionBombFlate();
     void decompressionBombAscii85();
     void predictorHugeColumns();
+    void xrefStreamNegativeIndex();
+    void xrefStreamHugeSize();
+    void xrefTableHugeCount();
+    void recoveryHugeObjectNumber();
 
 private:
     /// Builds a PDF file from the bodies of objects 1..n (object 1 is the catalog)
@@ -260,6 +264,104 @@ void HostileFilesTest::predictorHugeColumns()
 
     // A well-formed PNG predictor (None, then Up) is unchanged
     QCOMPARE(decodeStream(document, 5), QByteArray("abcd" "bcde"));
+}
+
+void HostileFilesTest::xrefStreamNegativeIndex()
+{
+    // A cross-reference stream with /Index [-10 20] wrote 10 entries before the start
+    // of the table (heap buffer overflow at open)
+    QByteArray pdf = "%PDF-1.7\n";
+    const qsizetype object1 = pdf.size();
+    pdf += "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n";
+    const qsizetype object2 = pdf.size();
+    pdf += "2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n";
+    const qsizetype object3 = pdf.size();
+
+    QByteArray entries;
+    auto addEntry = [&entries](int type, quint32 offset, quint16 generation)
+    {
+        entries.append(char(type));
+        entries.append(char(offset >> 24)).append(char(offset >> 16)).append(char(offset >> 8)).append(char(offset));
+        entries.append(char(generation >> 8)).append(char(generation));
+    };
+    for (int i = 0; i < 20; ++i)
+    {
+        addEntry(1, quint32(i % 2 ? object1 : object2), 0);
+    }
+
+    pdf += "3 0 obj\n" + makeStream("/Type /XRef /Size 4 /W [1 4 2] /Index [-10 20] /Root 1 0 R", entries) + "\nendobj\n";
+    pdf += "startxref\n" + QByteArray::number(object3) + "\n%%EOF\n";
+
+    PDFDocumentReader::Result result = PDFDocumentReader::Result::OK;
+    readPdf(pdf, &result, false);
+    QCOMPARE(result, PDFDocumentReader::Result::Failed);
+
+    // Also the permissive reading (recovery of a damaged file) must not crash
+    readPdf(pdf, &result, true);
+}
+
+void HostileFilesTest::xrefStreamHugeSize()
+{
+    // /Size 2147483647 sized the table to about 100 GB (std::bad_alloc terminated the application)
+    QByteArray pdf = "%PDF-1.7\n";
+    pdf += "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n";
+    pdf += "2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n";
+    const qsizetype object3 = pdf.size();
+    pdf += "3 0 obj\n" + makeStream("/Type /XRef /Size 2147483647 /W [1 4 2] /Index [0 1] /Root 1 0 R", QByteArray(7, 0)) + "\nendobj\n";
+    pdf += "startxref\n" + QByteArray::number(object3) + "\n%%EOF\n";
+
+    QElapsedTimer timer;
+    timer.start();
+    PDFDocumentReader::Result result = PDFDocumentReader::Result::OK;
+    readPdf(pdf, &result, false);
+    QCOMPARE(result, PDFDocumentReader::Result::Failed);
+
+    // A field wider than 8 bytes is invalid
+    QByteArray widePdf = pdf;
+    widePdf.replace("/Size 2147483647 /W [1 4 2]", QByteArray("/Size 3 /W [1 40 2]").leftJustified(27, ' '));
+    readPdf(widePdf, &result, false);
+    QCOMPARE(result, PDFDocumentReader::Result::Failed);
+    QVERIFY(timer.elapsed() < 5000);
+}
+
+void HostileFilesTest::xrefTableHugeCount()
+{
+    // A classic table "0 2147483647" was allocated before its entries were read
+    QByteArray pdf = makePdf({ "<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>" });
+    const qsizetype index = pdf.indexOf("xref\n0 3\n");
+    QVERIFY(index > 0);
+    pdf.replace(index, 9, "xref\n0 2147483647\n");
+
+    QElapsedTimer timer;
+    timer.start();
+    PDFDocumentReader::Result result = PDFDocumentReader::Result::OK;
+    readPdf(pdf, &result, false);
+    QCOMPARE(result, PDFDocumentReader::Result::Failed);
+    QVERIFY(timer.elapsed() < 5000);
+
+    // Negative first object number
+    pdf.replace("xref\n0 2147483647\n", "xref\n-5 3\n");
+    readPdf(pdf, &result, false);
+    QCOMPARE(result, PDFDocumentReader::Result::Failed);
+}
+
+void HostileFilesTest::recoveryHugeObjectNumber()
+{
+    // A damaged file (no valid cross-reference table) is recovered by scanning for
+    // objects - an object number of 100 million sized the object table to gigabytes
+    QByteArray pdf = "%PDF-1.7\n";
+    pdf += "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n";
+    pdf += "2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n";
+    pdf += "100000000 0 obj\n<< /Hostile true >>\nendobj\n";
+    pdf += "trailer\n<< /Size 3 /Root 1 0 R >>\nstartxref\n999999\n%%EOF\n";
+
+    QElapsedTimer timer;
+    timer.start();
+    PDFDocumentReader::Result result = PDFDocumentReader::Result::Failed;
+    const PDFDocument document = readPdf(pdf, &result, true);
+    QCOMPARE(result, PDFDocumentReader::Result::OK);
+    QVERIFY(document.getStorage().getObjects().size() < 1000);
+    QVERIFY(timer.elapsed() < 5000);
 }
 
 QTEST_GUILESS_MAIN(HostileFilesTest)
