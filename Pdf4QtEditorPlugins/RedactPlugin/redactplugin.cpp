@@ -28,11 +28,21 @@
 #include "pdfadvancedtools.h"
 #include "pdfdocumentbuilder.h"
 #include "pdfredact.h"
+#include "pdffirecovercheck.h"
+#include "pdfwidgetutils.h"
 #include "pdfdocumentwriter.h"
 #include "pdfselectpagesdialog.h"
 #include "pdfcompiler.h"
 
 #include <QAction>
+#include <QApplication>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QHeaderView>
+#include <QLabel>
+#include <QPushButton>
+#include <QTableWidget>
+#include <QVBoxLayout>
 #include <QFileInfo>
 #include <QMessageBox>
 
@@ -45,7 +55,8 @@ RedactPlugin::RedactPlugin() :
     m_actionRedactText(nullptr),
     m_actionRedactTextSelection(nullptr),
     m_actionRedactPage(nullptr),
-    m_actionCreateRedactedDocument(nullptr)
+    m_actionCreateRedactedDocument(nullptr),
+    m_actionCheckHiddenText(nullptr)
 {
 
 }
@@ -68,6 +79,13 @@ void RedactPlugin::setWidget(pdf::PDFWidget* widget)
     m_actionRedactPage->setObjectName("redactplugin_RedactPage");
     m_actionCreateRedactedDocument->setObjectName("redactplugin_CreateRedactedDocument");
 
+    // PDF Fire: finds black boxes, which only cover the text (the text is still there)
+    m_actionCheckHiddenText = new QAction(QIcon(":/pdfplugins/redactplugin/redact-check-hidden.svg"), tr("Check for &Hidden Text..."), this);
+    m_actionCheckHiddenText->setObjectName("redactplugin_CheckHiddenText");
+    m_actionCheckHiddenText->setIconText(tr("Check Hidden Text"));
+    m_actionCheckHiddenText->setToolTip(tr("Check for hidden text under black boxes - a box drawn over text only hides it, the text can still be copied or found. "
+                                           "The boxes found are listed, so they can be redacted for real."));
+
     m_actionRedactRectangle->setCheckable(true);
     m_actionRedactText->setCheckable(true);
 
@@ -81,6 +99,7 @@ void RedactPlugin::setWidget(pdf::PDFWidget* widget)
     connect(m_actionRedactTextSelection, &QAction::triggered, this, &RedactPlugin::onRedactTextSelectionTriggered);
     connect(m_actionRedactPage, &QAction::triggered, this, &RedactPlugin::onRedactPageTriggered);
     connect(m_actionCreateRedactedDocument, &QAction::triggered, this, &RedactPlugin::onCreateRedactedDocumentTriggered);
+    connect(m_actionCheckHiddenText, &QAction::triggered, this, &RedactPlugin::onCheckHiddenTextTriggered);
 
     updateActions();
 }
@@ -97,7 +116,7 @@ void RedactPlugin::setDocument(const pdf::PDFModifiedDocument& document)
 
 std::vector<QAction*> RedactPlugin::getActions() const
 {
-    return { m_actionRedactRectangle, m_actionRedactText, m_actionRedactTextSelection, m_actionRedactPage, m_actionCreateRedactedDocument };
+    return { m_actionRedactRectangle, m_actionRedactText, m_actionRedactTextSelection, m_actionRedactPage, m_actionCreateRedactedDocument, m_actionCheckHiddenText };
 }
 
 QString RedactPlugin::getPluginMenuName() const
@@ -112,6 +131,7 @@ void RedactPlugin::updateActions()
     m_actionRedactTextSelection->setEnabled(canModify);
     m_actionRedactPage->setEnabled(canModify);
     m_actionCreateRedactedDocument->setEnabled(canModify);
+    m_actionCheckHiddenText->setEnabled(m_document != nullptr);
 }
 
 void RedactPlugin::onRedactTextSelectionTriggered()
@@ -244,6 +264,117 @@ QString RedactPlugin::getRedactedFileName() const
     QFileInfo fileInfo(m_dataExchangeInterface->getOriginalFileName());
 
     return fileInfo.path() + "/" + fileInfo.baseName() + "_REDACTED.pdf";
+}
+
+void RedactPlugin::onCheckHiddenTextTriggered()
+{
+    if (!m_document)
+    {
+        return;
+    }
+
+    std::vector<pdf::PDFFireCoverCheck::Finding> findings;
+    {
+        QApplication::setOverrideCursor(Qt::WaitCursor);
+        pdf::PDFCMSPointer cms = m_widget->getCMSManager()->getCurrentCMS();
+        findings = pdf::PDFFireCoverCheck::check(m_document,
+                                                 m_widget->getDrawWidgetProxy()->getFontCache(),
+                                                 cms.data(),
+                                                 m_widget->getDrawWidgetProxy()->getOptionalContentActivity(),
+                                                 m_widget->getDrawWidgetProxy()->getMeshQualitySettings());
+        QApplication::restoreOverrideCursor();
+    }
+
+    if (findings.empty())
+    {
+        QMessageBox::information(m_widget, tr("Check for Hidden Text"),
+                                 tr("No hidden text was found under black boxes.\n\n"
+                                    "Boxes drawn over text were checked on every page: none of them hides text, which is still in the document."));
+        return;
+    }
+
+    QDialog dialog(m_widget);
+    dialog.setObjectName("hiddenTextDialog");
+    dialog.setWindowTitle(tr("Hidden Text Under Boxes"));
+    dialog.resize(pdf::PDFWidgetUtils::scaleDPI(m_widget, QSize(640, 400)));
+    QVBoxLayout* layout = new QVBoxLayout(&dialog);
+
+    QLabel* label = new QLabel(tr("%n box(es) only cover text: the text is still in the document under them, and anyone can copy it, "
+                                  "search for it, or remove the box. Mark them for redaction, then use Apply Redactions to remove the text for real.", nullptr, int(findings.size())), &dialog);
+    label->setWordWrap(true);
+    layout->addWidget(label);
+
+    QTableWidget* table = new QTableWidget(int(findings.size()), 3, &dialog);
+    table->setObjectName("hiddenTextTable");
+    table->setHorizontalHeaderLabels({ tr("Page"), tr("Box"), tr("Hidden text") });
+    table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    table->verticalHeader()->hide();
+    table->horizontalHeader()->setStretchLastSection(true);
+    for (int row = 0; row < int(findings.size()); ++row)
+    {
+        const pdf::PDFFireCoverCheck::Finding& finding = findings[row];
+        table->setItem(row, 0, new QTableWidgetItem(QString::number(finding.pageIndex + 1)));
+        table->setItem(row, 1, new QTableWidgetItem(finding.kind == pdf::PDFFireCoverCheck::CoverKind::Comment ? tr("Box comment") : tr("Drawn box")));
+        table->setItem(row, 2, new QTableWidgetItem(finding.coveredText));
+    }
+    table->resizeColumnsToContents();
+    table->selectAll();
+    layout->addWidget(table);
+
+    QDialogButtonBox* buttonBox = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+    QPushButton* markButton = buttonBox->addButton(tr("Mark Selected for Redaction"), QDialogButtonBox::AcceptRole);
+    markButton->setObjectName("hiddenTextMarkButton");
+    markButton->setEnabled(pdf::PDFFirePermissions::canModifyContent(m_document));
+    connect(buttonBox, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttonBox, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    connect(table, &QTableWidget::itemSelectionChanged, &dialog, [&]()
+    {
+        markButton->setEnabled(pdf::PDFFirePermissions::canModifyContent(m_document) && !table->selectionModel()->selectedRows().isEmpty());
+    });
+    connect(table, &QTableWidget::cellDoubleClicked, &dialog, [&](int row, int)
+    {
+        m_widget->getDrawWidgetProxy()->goToPage(findings[row].pageIndex);
+    });
+    layout->addWidget(buttonBox);
+
+    QLabel* hintLabel = new QLabel(tr("Double-click a row to go to its page."), &dialog);
+    layout->insertWidget(2, hintLabel);
+
+    if (dialog.exec() != QDialog::Accepted)
+    {
+        return;
+    }
+
+    // The boxes are marked - the redaction itself removes the text under them
+    const QColor redactColor = pdf::PDFCreateRedactRectangleTool::getRedactColor();
+    pdf::PDFDocumentModifier modifier(m_document);
+    int markCount = 0;
+    for (const QModelIndex& index : table->selectionModel()->selectedRows())
+    {
+        const pdf::PDFFireCoverCheck::Finding& finding = findings[index.row()];
+        const pdf::PDFPage* page = m_document->getCatalog()->getPage(finding.pageIndex);
+        if (!page)
+        {
+            continue;
+        }
+
+        const pdf::PDFObjectReference annotation = modifier.getBuilder()->createAnnotationRedact(page->getPageReference(), finding.rect, redactColor, redactColor);
+        modifier.getBuilder()->updateAnnotationAppearanceStreams(annotation);
+        ++markCount;
+    }
+
+    if (markCount > 0)
+    {
+        modifier.markAnnotationsChanged();
+        if (modifier.finalize())
+        {
+            Q_EMIT m_widget->getToolManager()->documentModified(pdf::PDFModifiedDocument(modifier.getDocument(), nullptr, modifier.getFlags()));
+        }
+
+        QMessageBox::information(m_widget, tr("Check for Hidden Text"),
+                                 tr("%n box(es) were marked for redaction. Use Apply Redactions to remove the text under them for good.", nullptr, markCount));
+    }
 }
 
 }

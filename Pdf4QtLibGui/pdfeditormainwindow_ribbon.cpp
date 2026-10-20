@@ -691,6 +691,13 @@ void PDFEditorMainWindow::setupRibbon()
         redactApplyGroup->addLargeAction(action);
     }
 
+    // PDF Fire: a check of a document received from someone else (or of our own one)
+    PDFFireRibbonGroup* redactCheckGroup = protectPage->addGroup(tr("Check"));
+    if (QAction* action = findMenuAction(redactMenu, "redactplugin_CheckHiddenText"))
+    {
+        redactCheckGroup->addLargeAction(action);
+    }
+
     // ---- Sign -----------------------------------------------------------------
     PDFFireRibbonPage* signPage = m_ribbon->addPage(tr("Sign"));
 

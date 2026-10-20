@@ -52,6 +52,7 @@ private:
     void onRedactTextSelectionTriggered();
     void onRedactPageTriggered();
     void onCreateRedactedDocumentTriggered();
+    void onCheckHiddenTextTriggered();
 
     QString getRedactedFileName() const;
 
@@ -60,6 +61,7 @@ private:
     QAction* m_actionRedactTextSelection;
     QAction* m_actionRedactPage;
     QAction* m_actionCreateRedactedDocument;
+    QAction* m_actionCheckHiddenText;
 };
 
 }   // namespace pdfplugin

@@ -133,6 +133,8 @@ add_library(Pdf4QtLibCore SHARED
     sources/pdffireflatten.h
     sources/pdffirepiipatterns.cpp
     sources/pdffirepiipatterns.h
+    sources/pdffirecovercheck.cpp
+    sources/pdffirecovercheck.h
     sources/pdfredact.cpp
     sources/pdfredact.h
     sources/pdfsecurityhandler.cpp
