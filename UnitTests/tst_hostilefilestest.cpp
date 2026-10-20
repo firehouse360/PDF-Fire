@@ -75,6 +75,8 @@ private slots:
     void recoveryHugeObjectNumber();
     void postScriptIntegerEdgeCases();
     void sampledFunctionHugeSize();
+    void imageShortSoftMask();
+    void imageHugeSize();
 
 private:
     /// Builds a PDF file from the bodies of objects 1..n (object 1 is the catalog)
@@ -424,6 +426,40 @@ void HostileFilesTest::sampledFunctionHugeSize()
     PDFReal output = 0.0;
     QVERIFY(function->apply(&input, &input + 1, &output, &output + 1).evaluated);
     QCOMPARE(output, 1.0);
+}
+
+void HostileFilesTest::imageShortSoftMask()
+{
+    // A soft mask of 1000x1000 pixels with 10 bytes of data: its rows were read
+    // directly from the data, far past its end
+    const QByteArray imageData = deflate(QByteArray(1000 * 1000, char(0x80)));
+    const PDFDocument document = readPdf(makePdf({ "<< /Type /Catalog /Pages 2 0 R >>",
+                                                   "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                                                   "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /XObject << /Im1 5 0 R >> >> /Contents 4 0 R >>",
+                                                   makeStream("", "q 100 0 0 100 0 0 cm /Im1 Do Q"),
+                                                   makeStream("/Type /XObject /Subtype /Image /Width 1000 /Height 1000 /ColorSpace /DeviceGray /BitsPerComponent 8 /SMask 6 0 R /Filter /FlateDecode", imageData),
+                                                   makeStream("/Type /XObject /Subtype /Image /Width 1000 /Height 1000 /ColorSpace /DeviceGray /BitsPerComponent 8", QByteArray(10, char(0xff))) }));
+    QCOMPARE(document.getCatalog()->getPageCount(), size_t(1));
+    renderFirstPage(document);
+}
+
+void HostileFilesTest::imageHugeSize()
+{
+    // /Width 4294967295 wrapped the 32-bit stride; 100000 x 100000 pixels allocated
+    // an image of 10 GB (or got a null image, then wrote through a null scan line)
+    const PDFDocument document = readPdf(makePdf({ "<< /Type /Catalog /Pages 2 0 R >>",
+                                                   "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                                                   "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /XObject << /Im1 5 0 R /Im2 6 0 R /Im3 7 0 R >> >> /Contents 4 0 R >>",
+                                                   makeStream("", "q 100 0 0 100 0 0 cm /Im1 Do /Im2 Do /Im3 Do Q"),
+                                                   makeStream("/Type /XObject /Subtype /Image /Width 4294967295 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", QByteArray(16, 'x')),
+                                                   makeStream("/Type /XObject /Subtype /Image /Width 100000 /Height 100000 /ColorSpace /DeviceGray /BitsPerComponent 8", QByteArray(16, 'x')),
+                                                   makeStream("/Type /XObject /Subtype /Image /Width 100000 /Height 100000 /ImageMask true", QByteArray(16, 'x')) }));
+
+    QElapsedTimer timer;
+    timer.start();
+    const QList<PDFRenderError> errors = renderFirstPage(document);
+    QVERIFY(!errors.isEmpty());
+    QVERIFY(timer.elapsed() < 10000);
 }
 
 QTEST_GUILESS_MAIN(HostileFilesTest)
