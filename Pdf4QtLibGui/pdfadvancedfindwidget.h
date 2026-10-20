@@ -29,6 +29,8 @@
 
 #include <QWidget>
 
+class QGroupBox;
+
 namespace Ui
 {
 class PDFAdvancedFindWidget;
@@ -100,9 +102,14 @@ private:
         bool isMultiline = false;
         bool isSearchFinished = false;
         bool isSoftHyphenRemoved = false;
+        int pattern = -1;   ///< PDF Fire: a pattern of personal information (PDFFirePiiPatterns::Pattern), or -1
     };
 
+    /// PDF Fire: searches for a pattern of personal information (phone numbers...)
+    void searchPattern(int pattern);
+
     Ui::PDFAdvancedFindWidget* ui;
+    QGroupBox* m_patternsGroupBox = nullptr;
 
     pdf::PDFDrawWidgetProxy* m_proxy;
     const pdf::PDFDocument* m_document;

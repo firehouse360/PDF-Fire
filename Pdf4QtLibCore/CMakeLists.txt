@@ -131,6 +131,8 @@ add_library(Pdf4QtLibCore SHARED
     sources/pdffirepageoperations.h
     sources/pdffireflatten.cpp
     sources/pdffireflatten.h
+    sources/pdffirepiipatterns.cpp
+    sources/pdffirepiipatterns.h
     sources/pdfredact.cpp
     sources/pdfredact.h
     sources/pdfsecurityhandler.cpp
