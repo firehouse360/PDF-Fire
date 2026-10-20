@@ -73,6 +73,8 @@ private slots:
     void xrefStreamHugeSize();
     void xrefTableHugeCount();
     void recoveryHugeObjectNumber();
+    void postScriptIntegerEdgeCases();
+    void sampledFunctionHugeSize();
 
 private:
     /// Builds a PDF file from the bodies of objects 1..n (object 1 is the catalog)
@@ -362,6 +364,66 @@ void HostileFilesTest::recoveryHugeObjectNumber()
     QCOMPARE(result, PDFDocumentReader::Result::OK);
     QVERIFY(document.getStorage().getObjects().size() < 1000);
     QVERIFY(timer.elapsed() < 5000);
+}
+
+void HostileFilesTest::postScriptIntegerEdgeCases()
+{
+    // INT64_MIN idiv -1 raised SIGFPE (the application was killed), INT64_MIN mod -1
+    // too; shifts by 64 bits or more and integer overflow were undefined behaviour
+    // (the lexer reads 32-bit integers, INT64_MIN = -(2^31)^2 * 2 is computed; the results
+    // are divided by 2^64 - itself an integer overflow to a real number - to fit the range)
+    const QByteArray program = "{ pop -2147483648 dup mul neg 2 mul dup -1 idiv 65536 dup mul dup mul div exch -1 mod "
+                               "1 100 bitshift 1 -100 bitshift -2147483648 dup mul dup add 65536 dup mul dup mul div }";
+    const PDFDocument document = readPdf(makePdf({ "<< /Type /Catalog /Pages 2 0 R >>",
+                                                   "<< /Type /Pages /Kids [] /Count 0 >>",
+                                                   makeStream("/FunctionType 4 /Domain [0 1] /Range [-1 1 -1 1 -1 1 -1 1 -1 1]", program) }));
+
+    PDFFunctionPtr function;
+    try
+    {
+        function = PDFFunction::createFunction(&document, document.getStorage().getObject(PDFObjectReference(3, 0)));
+    }
+    catch (const PDFException& exception)
+    {
+        QFAIL(qPrintable(exception.getMessage()));
+    }
+    QVERIFY(function);
+
+    const PDFReal input = 0.5;
+    std::array<PDFReal, 5> output = { };
+    PDFFunction::FunctionResult result = function->apply(&input, &input + 1, output.data(), output.data() + output.size());
+    QVERIFY2(result.evaluated, qPrintable(result.errorMessage));
+    QCOMPARE(output[0], -0.5);
+    QCOMPARE(output[1], 0.0);
+    QCOMPARE(output[2], 0.0);
+    QCOMPARE(output[3], 0.0);
+    QCOMPARE(output[4], 0.5);
+}
+
+void HostileFilesTest::sampledFunctionHugeSize()
+{
+    // /Size [100000 100000] allocated 10^10 samples (80 GB) before the data were
+    // checked; the sample count was multiplied in an int
+    const PDFDocument document = readPdf(makePdf({ "<< /Type /Catalog /Pages 2 0 R >>",
+                                                   "<< /Type /Pages /Kids [] /Count 0 >>",
+                                                   makeStream("/FunctionType 0 /Domain [0 1 0 1] /Range [0 1] /Size [100000 100000] /BitsPerSample 8", QByteArray(10, 'x')),
+                                                   makeStream("/FunctionType 0 /Domain [0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1] /Range [0 1] "
+                                                              "/Size [1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1] /BitsPerSample 8", QByteArray(10, 'x')),
+                                                   makeStream("/FunctionType 0 /Domain [0 1] /Range [0 1] /Size [2] /BitsPerSample 8", QByteArray("\x00\xff", 2)) }));
+
+    QElapsedTimer timer;
+    timer.start();
+    QVERIFY_THROWS_EXCEPTION(PDFException, PDFFunction::createFunction(&document, document.getStorage().getObject(PDFObjectReference(3, 0))));
+    QVERIFY_THROWS_EXCEPTION(PDFException, PDFFunction::createFunction(&document, document.getStorage().getObject(PDFObjectReference(4, 0))));
+    QVERIFY(timer.elapsed() < 2000);
+
+    // A well-formed sampled function still works
+    PDFFunctionPtr function = PDFFunction::createFunction(&document, document.getStorage().getObject(PDFObjectReference(5, 0)));
+    QVERIFY(function);
+    const PDFReal input = 1.0;
+    PDFReal output = 0.0;
+    QVERIFY(function->apply(&input, &input + 1, &output, &output + 1).evaluated);
+    QCOMPARE(output, 1.0);
 }
 
 QTEST_GUILESS_MAIN(HostileFilesTest)
