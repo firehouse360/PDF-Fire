@@ -122,6 +122,9 @@ private:
     // PDF Fire: the shell of the window, see pdfeditormainwindow_ribbon.cpp
     void setupRibbon();
     void setupStatusBarControls();
+    void updatePageSizeLabel();
+    void showWordCount();
+    void compareFiles();
     void applyDefaultDocumentView();
     void updateWelcomePage(bool hasDocument);
     void updatePageActions();
@@ -147,6 +150,7 @@ private:
     void setDockTitleBar(QDockWidget* dockWidget);
     QSpinBox* m_pageNumberSpinBox;
     QLabel* m_pageNumberLabel;
+    QLabel* m_pageSizeLabel = nullptr;     ///< PDF Fire: the size of the current page, in the status bar
     QDoubleSpinBox* m_pageZoomSpinBox;
     bool m_isLoadingUI;
     pdf::PDFProgress* m_progress;

@@ -24,6 +24,10 @@
 #include <QVBoxLayout>
 #include <QShortcut>
 #include <QTabBar>
+#include <QMouseEvent>
+#include <QTimer>
+
+#include <functional>
 #include "ui_pdfeditormainwindow.h"
 
 #include "pdfaboutdialog.h"
@@ -92,6 +96,91 @@
 
 namespace pdfviewer
 {
+
+namespace
+{
+
+/// PDF Fire: a click with the middle mouse button closes the tab under the mouse
+class PDFFireTabMiddleClickFilter : public QObject
+{
+public:
+    explicit PDFFireTabMiddleClickFilter(QTabBar* tabBar, std::function<void(int)> closeTab) :
+        QObject(tabBar),
+        m_tabBar(tabBar),
+        m_closeTab(std::move(closeTab))
+    {
+
+    }
+
+    virtual bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        if (watched == m_tabBar && event->type() == QEvent::MouseButtonRelease)
+        {
+            QMouseEvent* mouseEvent = static_cast<QMouseEvent*>(event);
+            if (mouseEvent->button() == Qt::MiddleButton)
+            {
+                const int index = m_tabBar->tabAt(mouseEvent->position().toPoint());
+                if (index >= 0)
+                {
+                    m_closeTab(index);
+                    return true;
+                }
+            }
+        }
+        return QObject::eventFilter(watched, event);
+    }
+
+private:
+    QTabBar* m_tabBar;
+    std::function<void(int)> m_closeTab;
+};
+
+/// PDF Fire: the size of the page in inches and millimeters, with the name of
+/// a standard paper size it matches (Letter, A4...)
+QString describePageSize(const pdf::PDFPage* page, bool isLong)
+{
+    const QRectF box = page->getRotatedCropBox();
+    const pdf::PDFReal width = box.width();
+    const pdf::PDFReal height = box.height();
+
+    QString name;
+    static const std::tuple<const char*, pdf::PDFReal, pdf::PDFReal> paperSizes[] = {
+        { QT_TRANSLATE_NOOP("pdfviewer::PDFEditorMainWindow", "Letter"), 612.0, 792.0 },
+        { QT_TRANSLATE_NOOP("pdfviewer::PDFEditorMainWindow", "Legal"), 612.0, 1008.0 },
+        { QT_TRANSLATE_NOOP("pdfviewer::PDFEditorMainWindow", "Tabloid"), 792.0, 1224.0 },
+        { QT_TRANSLATE_NOOP("pdfviewer::PDFEditorMainWindow", "Executive"), 522.0, 756.0 },
+        { QT_TRANSLATE_NOOP("pdfviewer::PDFEditorMainWindow", "A3"), 841.89, 1190.55 },
+        { QT_TRANSLATE_NOOP("pdfviewer::PDFEditorMainWindow", "A4"), 595.28, 841.89 },
+        { QT_TRANSLATE_NOOP("pdfviewer::PDFEditorMainWindow", "A5"), 419.53, 595.28 },
+    };
+    for (const auto& [paperName, paperWidth, paperHeight] : paperSizes)
+    {
+        const bool portrait = qAbs(width - paperWidth) < 2.0 && qAbs(height - paperHeight) < 2.0;
+        const bool landscape = qAbs(width - paperHeight) < 2.0 && qAbs(height - paperWidth) < 2.0;
+        if (portrait || landscape)
+        {
+            name = QCoreApplication::translate("pdfviewer::PDFEditorMainWindow", paperName);
+            break;
+        }
+    }
+
+    const QString inches = PDFEditorMainWindow::tr("%1 × %2 in").arg(width / 72.0, 0, 'f', 2).arg(height / 72.0, 0, 'f', 2);
+    if (!isLong)
+    {
+        return name.isEmpty() ? inches : PDFEditorMainWindow::tr("%1 (%2)").arg(inches, name);
+    }
+
+    const QString millimeters = PDFEditorMainWindow::tr("%1 × %2 mm").arg(width / 72.0 * 25.4, 0, 'f', 1).arg(height / 72.0 * 25.4, 0, 'f', 1);
+    const QString orientation = width > height ? PDFEditorMainWindow::tr("landscape") : PDFEditorMainWindow::tr("portrait");
+    QString text = PDFEditorMainWindow::tr("Page size: %1 (%2), %3").arg(inches, millimeters, orientation);
+    if (!name.isEmpty())
+    {
+        text += PDFEditorMainWindow::tr(", %1").arg(name);
+    }
+    return text;
+}
+
+}   // namespace
 
 PDFEditorMainWindow::PDFEditorMainWindow(QWidget* parent) :
     QMainWindow(parent),
@@ -374,6 +463,21 @@ PDFEditorMainWindow::PDFEditorMainWindow(QWidget* parent) :
         }
     });
     connect(m_documentTabBar, &QTabBar::tabCloseRequested, this, [this](int index) { m_programController->closeDocumentTab(index); });
+
+    // PDF Fire: the tabs can be dragged to another place, and closed by the middle mouse button
+    m_documentTabBar->setMovable(true);
+    connect(m_documentTabBar, &QTabBar::tabMoved, this, [this](int from, int to)
+    {
+        if (!m_isUpdatingDocumentTabs)
+        {
+            m_programController->moveDocumentTab(from, to);
+        }
+    });
+    m_documentTabBar->installEventFilter(new PDFFireTabMiddleClickFilter(m_documentTabBar, [this](int index)
+    {
+        // Deferred: closing the tab destroys nothing of the tab bar, but the event is finished first
+        QTimer::singleShot(0, this, [this, index]() { m_programController->closeDocumentTab(index); });
+    }));
 
     // Ctrl+Tab and Ctrl+Shift+Tab go through the tabs
     QShortcut* nextTabShortcut = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Tab), this);
@@ -676,6 +780,35 @@ void PDFEditorMainWindow::updateUI(bool fullUpdate)
     }
 
     m_pageZoomSpinBox->setValue(m_programController->getPdfWidget()->getDrawWidgetProxy()->getZoom() * 100);
+
+    // PDF Fire: the size of the current page, the details are shown when the mouse is over it
+    updatePageSizeLabel();
+}
+
+void PDFEditorMainWindow::updatePageSizeLabel()
+{
+    if (!m_pageSizeLabel)
+    {
+        return;
+    }
+
+    const pdf::PDFDocument* document = m_programController->getDocument();
+    const pdf::PDFInteger pageIndex = document ? m_programController->getCurrentPageIndex() : -1;
+    const pdf::PDFPage* page = (document && pageIndex >= 0) ? document->getCatalog()->getPage(pageIndex) : nullptr;
+    if (!page)
+    {
+        m_pageSizeLabel->clear();
+        m_pageSizeLabel->setToolTip(QString());
+        m_pageNumberLabel->setToolTip(QString());
+        return;
+    }
+
+    const QString shortText = describePageSize(page, false);
+    const QString longText = tr("Page %1 of %2\n%3").arg(pageIndex + 1).arg(document->getCatalog()->getPageCount()).arg(describePageSize(page, true));
+    m_pageSizeLabel->setText(shortText);
+    m_pageSizeLabel->setToolTip(longText);
+    m_pageNumberLabel->setToolTip(longText);
+    m_pageNumberSpinBox->setToolTip(longText);
 }
 
 QMenu* PDFEditorMainWindow::addToolMenu(QString name, pdf::PDFPlugin::PluginMenuLocation location)

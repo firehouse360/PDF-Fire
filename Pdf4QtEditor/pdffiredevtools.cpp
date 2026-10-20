@@ -35,6 +35,7 @@
 //       action:<objectName>            trigger an action
 //       click:<x>,<y>                  click the left mouse button (window coordinates)
 //       rclick:<x>,<y>                 click the right mouse button
+//       mclick:<x>,<y>                 click the middle mouse button
 //       dclick:<x>,<y>                 double click the left mouse button
 //       accept / reject                close the opened dialog by OK / Cancel
 //       menu:<x>,<y>                   open the context menu
@@ -138,10 +139,10 @@ private:
                 qWarning("PDFFIRE_SCRIPT: action '%s' not found", qPrintable(argument));
             }
         }
-        else if (command == "click" || command == "rclick")
+        else if (command == "click" || command == "rclick" || command == "mclick")
         {
             const QPoint point = parsePoint(argument, 0);
-            const Qt::MouseButton button = command == "click" ? Qt::LeftButton : Qt::RightButton;
+            const Qt::MouseButton button = command == "click" ? Qt::LeftButton : (command == "mclick" ? Qt::MiddleButton : Qt::RightButton);
 
             // The tools track the mouse (snapping to points), a real click is preceded by moves
             sendMouse(QEvent::MouseMove, point - QPoint(1, 1), Qt::NoButton, Qt::NoButton);
