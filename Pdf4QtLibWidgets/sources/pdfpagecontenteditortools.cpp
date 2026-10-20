@@ -675,9 +675,8 @@ PDFCreatePCElementFreehandCurveTool::PDFCreatePCElementFreehandCurveTool(PDFDraw
     m_element->setBrush(Qt::NoBrush);
     m_element->setPen(std::move(pen));
 
-    // Jakub Melka: the tool draws the same large cross as the tools which pick points,
-    // so the user aims the curve the same way as the rest of the creation tools.
-    setCursor(Qt::BlankCursor);
+    // PDF Fire: the mouse is a pencil (as the freehand annotation), no lines across the view
+    setCursor(createPencilCursor());
 }
 
 PDFCreatePCElementFreehandCurveTool::~PDFCreatePCElementFreehandCurveTool()
@@ -768,12 +767,9 @@ void PDFCreatePCElementFreehandCurveTool::mouseReleaseEvent(QWidget* widget, QMo
 
 void PDFCreatePCElementFreehandCurveTool::drawPostRendering(QPainter* painter, QRect rect) const
 {
-    if (!isActive())
-    {
-        return;
-    }
-
-    drawCross(painter, rect, m_mousePosition, std::nullopt);
+    // PDF Fire: the pencil pointer marks the point, nothing is drawn over the view
+    Q_UNUSED(painter);
+    Q_UNUSED(rect);
 }
 
 void PDFCreatePCElementFreehandCurveTool::mouseMoveEvent(QWidget* widget, QMouseEvent* event)

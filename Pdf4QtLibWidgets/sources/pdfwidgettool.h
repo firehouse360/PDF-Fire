@@ -148,6 +148,9 @@ protected:
     ///        widget, when no size is given
     static void drawCross(QPainter* painter, QRect rect, QPoint point, std::optional<int> markSize);
 
+    /// PDF Fire: the mouse pointer of the tools which draw by hand (a pencil)
+    static QCursor createPencilCursor();
+
     void addTool(PDFWidgetTool* tool);
 
     /// PDF Fire: the tool stays active, when the document is reset by an edit,

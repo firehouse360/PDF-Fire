@@ -265,6 +265,39 @@ void PDFWidgetTool::drawCross(QPainter* painter, QRect rect, QPoint point, std::
     painter->restore();
 }
 
+QCursor PDFWidgetTool::createPencilCursor()
+{
+    const qreal ratio = qApp ? qApp->devicePixelRatio() : 1.0;
+    const int size = 32;
+    QPixmap pixmap(QSize(size, size) * ratio);
+    pixmap.setDevicePixelRatio(ratio);
+    pixmap.fill(Qt::transparent);
+    {
+        QPainter painter(&pixmap);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.translate(2, size - 2);
+        painter.rotate(-45);
+
+        // Body of the pencil (along the x axis from the tip)
+        QPen outline(QColor(20, 20, 20), 1.6);
+        outline.setJoinStyle(Qt::RoundJoin);
+        painter.setPen(outline);
+        QPolygonF tip;
+        tip << QPointF(0, 0) << QPointF(9, -4) << QPointF(9, 4);
+        painter.setBrush(QColor(245, 222, 179));
+        painter.drawPolygon(tip);
+        painter.setBrush(QColor(40, 40, 40));
+        QPolygonF lead;
+        lead << QPointF(0, 0) << QPointF(3.2, -1.4) << QPointF(3.2, 1.4);
+        painter.drawPolygon(lead);
+        painter.setBrush(QColor(255, 196, 0));
+        painter.drawRect(QRectF(9, -4, 22, 8));
+        painter.setBrush(QColor(232, 89, 12));
+        painter.drawRoundedRect(QRectF(31, -4, 6, 8), 1.5, 1.5);
+    }
+    return QCursor(pixmap, 1, size - 2);
+}
+
 void PDFWidgetTool::addTool(PDFWidgetTool* tool)
 {
     tool->setActive(isActive());
@@ -1364,7 +1397,7 @@ PDFPickTool::PDFPickTool(PDFDrawWidgetProxy* proxy, PDFPickTool::Mode mode, QObj
     m_drawSelectionRectangle(true),
     m_selectionRectangleColor(Qt::blue),
     m_isSelectionRectangleAnnotationColor(false),
-    m_hideLargeCross(false),
+    m_hideLargeCross(true),
     m_snapToAnnotations(false)
 {
     switch (m_mode)
@@ -1375,7 +1408,9 @@ PDFPickTool::PDFPickTool(PDFDrawWidgetProxy* proxy, PDFPickTool::Mode mode, QObj
 
     case pdf::PDFPickTool::Mode::Points:
     case pdf::PDFPickTool::Mode::Rectangles:
-        setCursor(Qt::BlankCursor);
+        // PDF Fire: the small crosshair pointer, not the lines across the whole
+        // view (the C key still switches those on, for precise aiming)
+        setCursor(Qt::CrossCursor);
         break;
 
     case pdf::PDFPickTool::Mode::Images:
@@ -1449,13 +1484,15 @@ void PDFPickTool::drawPostRendering(QPainter* painter, QRect rect) const
     {
         m_snapper.drawSnapPoints(painter);
 
-        std::optional<int> markSize;
-        if (m_hideLargeCross)
+        if (!m_hideLargeCross)
         {
-            markSize = PDFWidgetUtils::scaleDPI_x(getProxy()->getWidget(), 4);
+            drawCross(painter, rect, m_snapper.getSnappedPoint().toPoint(), std::nullopt);
         }
-
-        drawCross(painter, rect, m_snapper.getSnappedPoint().toPoint(), markSize);
+        else if (m_snapper.isSnapped())
+        {
+            // The mouse pointer is not exactly at the point, which will be used
+            drawCross(painter, rect, m_snapper.getSnappedPoint().toPoint(), PDFWidgetUtils::scaleDPI_x(getProxy()->getWidget(), 5));
+        }
     }
 
     if (m_mode == Mode::Pages && m_pageIndex != -1)
@@ -1883,7 +1920,7 @@ PDFSelectTableTool::PDFSelectTableTool(PDFDrawWidgetProxy* proxy, QAction* actio
     m_pickTool = new PDFPickTool(proxy, PDFPickTool::Mode::Rectangles, this);
     connect(m_pickTool, &PDFPickTool::rectanglePicked, this, &PDFSelectTableTool::onRectanglePicked);
 
-    setCursor(Qt::CrossCursor);
+    setCursor(Qt::ArrowCursor);
     updateActions();
 }
 

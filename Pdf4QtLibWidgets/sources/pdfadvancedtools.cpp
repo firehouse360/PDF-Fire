@@ -1167,39 +1167,6 @@ void PDFCreateEllipseTool::onRectanglePicked(PDFInteger pageIndex, QRectF pageRe
 
 /// PDF Fire: a pencil cursor, its tip (the hot spot) is the point, where the line is drawn.
 /// It is drawn, not loaded - a white pencil with a dark outline is seen on any page.
-static QCursor createPencilCursor()
-{
-    const qreal ratio = qApp ? qApp->devicePixelRatio() : 1.0;
-    const int size = 32;
-    QPixmap pixmap(QSize(size, size) * ratio);
-    pixmap.setDevicePixelRatio(ratio);
-    pixmap.fill(Qt::transparent);
-    {
-        QPainter painter(&pixmap);
-        painter.setRenderHint(QPainter::Antialiasing);
-        painter.translate(2, size - 2);
-        painter.rotate(-45);
-
-        // Body of the pencil (along the x axis from the tip)
-        QPen outline(QColor(20, 20, 20), 1.6);
-        outline.setJoinStyle(Qt::RoundJoin);
-        painter.setPen(outline);
-        QPolygonF tip;
-        tip << QPointF(0, 0) << QPointF(9, -4) << QPointF(9, 4);
-        painter.setBrush(QColor(245, 222, 179));
-        painter.drawPolygon(tip);
-        painter.setBrush(QColor(40, 40, 40));
-        QPolygonF lead;
-        lead << QPointF(0, 0) << QPointF(3.2, -1.4) << QPointF(3.2, 1.4);
-        painter.drawPolygon(lead);
-        painter.setBrush(QColor(255, 196, 0));
-        painter.drawRect(QRectF(9, -4, 22, 8));
-        painter.setBrush(QColor(232, 89, 12));
-        painter.drawRoundedRect(QRectF(31, -4, 6, 8), 1.5, 1.5);
-    }
-    return QCursor(pixmap, 1, size - 2);
-}
-
 PDFCreateFreehandCurveTool::PDFCreateFreehandCurveTool(PDFDrawWidgetProxy* proxy, PDFToolManager* toolManager, QAction* action, QObject* parent) :
     BaseClass(proxy, action, parent),
     m_toolManager(toolManager),
