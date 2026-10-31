@@ -4,14 +4,14 @@
 # against Fedora's own Qt and libraries, stages `cmake --install` under /opt/pdf-fire, and then
 # runs rpmbuild on this spec in the same container with the stage passed in:
 #
-#   rpmbuild -bb pdf-fire.spec --define "pdffire_stage <dir>" --define "pdffire_version 0.1.14" \
+#   rpmbuild -bb pdf-fire.spec --define "pdffire_stage <dir>" --define "pdffire_version 0.1.15" \
 #            --define "pdffire_engine 1.6.0.0" --define "pdffire_private_libs <regex>"
 #
 # Everything private lives in /opt/pdf-fire (the programs carry RPATH $ORIGIN/../lib), the same
 # layout as the .deb from scripts/make-deb.sh, so nothing collides with a Fedora pdf4qt package.
 # The package is left UNSIGNED on purpose — signing is a separate step.
 
-%{!?pdffire_version: %global pdffire_version 0.1.14}
+%{!?pdffire_version: %global pdffire_version 0.1.15}
 %{!?pdffire_engine: %global pdffire_engine 1.6.0.0}
 %{!?pdffire_stage: %{error:pdffire_stage is not set - build with scripts/make-rpm.sh}}
 
@@ -109,6 +109,15 @@ exit 0
 %{_datadir}/icons/hicolor/*/apps/pdf-fire.*
 
 %changelog
+* Sat Oct 31 2026 PDF Fire <pdffire.constant740@passmail.net> - 0.1.15-1
+- Right click on a page: rotate that page (saved) or the view, insert a blank page, a PDF or pictures
+  after it, duplicate, extract or delete it, zoom, find, print and the document info - like Acrobat.
+- TIFF files (scans and faxes, every page) open as a new PDF, which is not saved yet; Save suggests
+  the same name with .pdf beside the TIFF. The TIFF itself is never changed.
+- The image format plugins of Qt are now required (qt6-qtimageformats) - without them no TIFF
+  could be read, not even by Create PDF from Pictures.
+- Fixed: a damaged form (fields listing each other as kids) crashed PDF Fire; searching with a
+  regular expression which matches empty text read past the end of the text.
 * Tue Oct 20 2026 PDF Fire <pdffire.constant740@passmail.net> - 0.1.14-1
 - Edit Text: a new button next to Add Text - point at a line or paragraph, click, and type. While you
   type you see the document's own font in place (no white box); Esc cancels, Enter / Ctrl+Enter or a
