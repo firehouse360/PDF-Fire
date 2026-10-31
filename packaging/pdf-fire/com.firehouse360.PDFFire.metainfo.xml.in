@@ -36,6 +36,7 @@
   <provides>
     <binary>pdf-fire</binary>
     <mediatype>application/pdf</mediatype>
+    <mediatype>image/tiff</mediatype>
   </provides>
   <content_rating type="oars-1.1"/>
   <releases>

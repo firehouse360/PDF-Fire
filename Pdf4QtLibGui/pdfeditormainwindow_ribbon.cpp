@@ -566,6 +566,67 @@ void PDFEditorMainWindow::setupRibbon()
                       movePagesUpAction, movePagesDownAction, extractPagesAction,
                       duplicatePagesAction, reversePagesAction, cutPagesAction, pastePagesAction, replacePagesAction, insertImagesAction };
 
+    // PDF Fire: right click on a page (like Acrobat) - the operations with the page under the
+    // cursor, the view, and the document
+    connect(m_programController->getPdfWidget(), &pdf::PDFWidget::pageContextMenuRequested, this,
+            [=, this](QMenu* menu, pdf::PDFInteger pageIndex, QPoint)
+    {
+        if (!m_programController->getDocument())
+        {
+            return;
+        }
+
+        m_contextMenuPage = pageIndex;
+        const size_t targetPageCount = pageIndex >= 0 ? getTargetPages().size() : 0;
+        m_contextMenuPage = -1;
+        const bool isSinglePage = targetPageCount <= 1;
+
+        // A copy of the action, which works with the page of the right click
+        auto addPageAction = [this, menu, pageIndex](QAction* action, const QString& text)
+        {
+            QAction* menuAction = menu->addAction(action->icon(), text);
+            menuAction->setEnabled(action->isEnabled() && pageIndex >= 0);
+            connect(menuAction, &QAction::triggered, this, [this, action, pageIndex]()
+            {
+                m_contextMenuPage = pageIndex;
+                action->trigger();
+                m_contextMenuPage = -1;
+            });
+        };
+
+        if (ui->actionCopyText->isEnabled())
+        {
+            menu->addAction(ui->actionCopyText);
+        }
+        menu->addAction(ui->actionSelectTextAll);
+        menu->addSeparator();
+
+        addPageAction(rotatePagesRightAction, isSinglePage ? tr("Rotate Page Right") : tr("Rotate %1 Pages Right").arg(targetPageCount));
+        addPageAction(rotatePagesLeftAction, isSinglePage ? tr("Rotate Page Left") : tr("Rotate %1 Pages Left").arg(targetPageCount));
+        QMenu* rotateViewMenu = menu->addMenu(tr("Rotate View (not saved)"));
+        rotateViewMenu->addAction(ui->actionRotateRight);
+        rotateViewMenu->addAction(ui->actionRotateLeft);
+        menu->addSeparator();
+
+        addPageAction(insertBlankPageAction, tr("Insert Blank Page After"));
+        addPageAction(insertPagesFromFileAction, tr("Insert PDF After..."));
+        addPageAction(insertImagesAction, tr("Insert Pictures After..."));
+        addPageAction(duplicatePagesAction, isSinglePage ? tr("Duplicate Page") : tr("Duplicate %1 Pages").arg(targetPageCount));
+        addPageAction(extractPagesAction, isSinglePage ? tr("Extract Page...") : tr("Extract %1 Pages...").arg(targetPageCount));
+        addPageAction(deletePagesAction, isSinglePage ? tr("Delete Page") : tr("Delete %1 Pages").arg(targetPageCount));
+        menu->addSeparator();
+
+        menu->addAction(ui->actionZoom_In);
+        menu->addAction(ui->actionZoom_Out);
+        menu->addAction(ui->actionFitPage);
+        menu->addAction(ui->actionFitWidth);
+        menu->addSeparator();
+
+        menu->addAction(ui->actionFind);
+        menu->addAction(ui->actionPrint);
+        menu->addAction(ui->actionProperties);
+    });
+
     // The same operations are offered by the context menu of the thumbnails, where several pages can be selected
     QAction* thumbnailSeparator1 = new QAction(this);
     thumbnailSeparator1->setSeparator(true);
@@ -1403,6 +1464,13 @@ std::vector<pdf::PDFInteger> PDFEditorMainWindow::getTargetPages() const
 {
     // The pages selected in the thumbnails, if they are displayed; otherwise the current page
     std::vector<pdf::PDFInteger> pages = m_sidebarWidget->isCollapsed() ? std::vector<pdf::PDFInteger>() : m_sidebarWidget->getSelectedThumbnailPages();
+
+    // An action of the menu of a page (right click on the page) works with that page, or with
+    // the pages selected in the thumbnails, if the page is one of them
+    if (m_contextMenuPage >= 0 && std::find(pages.cbegin(), pages.cend(), m_contextMenuPage) == pages.cend())
+    {
+        return { m_contextMenuPage };
+    }
 
     if (pages.empty())
     {

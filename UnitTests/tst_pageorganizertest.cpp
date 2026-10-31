@@ -33,6 +33,7 @@
 #include <QtTest>
 #include <QBuffer>
 #include <QImage>
+#include <QImageReader>
 #include <QTemporaryDir>
 
 using namespace pdf;
@@ -58,6 +59,8 @@ private slots:
     void documentFromImages();
     void documentFromJpegKeepsTheFile();
     void notAPictureIsRefused();
+    void tiffKinds_data();
+    void tiffKinds();
 
 private:
     /// The page i (from 1) is 100 * i points wide and its content contains PAGE-<prefix>i-MARKER
@@ -570,5 +573,102 @@ void PageOrganizerTest::notAPictureIsRefused()
 }
 
 QTEST_MAIN(PageOrganizerTest)
+
+void PageOrganizerTest::tiffKinds_data()
+{
+    // The samples (UnitTests/tiffsamples, 50 dpi Letter pages) are written as scanners and fax
+    // programs write them. The page sizes are in points; a colour sample has a red square
+    // in its lower right quarter.
+    QTest::addColumn<QString>("fileName");
+    QTest::addColumn<QList<QSizeF>>("pageSizes");
+    QTest::addColumn<bool>("hasRed");
+
+    const QSizeF letter(612, 792);
+    const QSizeF landscape(792, 612);
+    QTest::newRow("fax G4 (1-bit)") << "bw-fax-g4.tif" << QList<QSizeF>{ letter } << false;
+    QTest::newRow("fax G3 (1-bit)") << "bw-fax-g3.tif" << QList<QSizeF>{ letter } << false;
+    QTest::newRow("fax 204 x 98 dpi") << "bw-fax-204x98.tif" << QList<QSizeF>{ letter } << false;
+    QTest::newRow("PackBits (1-bit)") << "bw-packbits.tif" << QList<QSizeF>{ letter } << false;
+    QTest::newRow("uncompressed (1-bit)") << "bw-uncompressed.tif" << QList<QSizeF>{ letter } << false;
+    QTest::newRow("gray LZW") << "gray-lzw.tif" << QList<QSizeF>{ letter } << false;
+    QTest::newRow("gray Deflate") << "gray-deflate.tif" << QList<QSizeF>{ letter } << false;
+    QTest::newRow("gray 16-bit") << "gray16-deflate.tif" << QList<QSizeF>{ letter } << false;
+    QTest::newRow("colour JPEG") << "color-jpeg.tif" << QList<QSizeF>{ letter } << true;
+    QTest::newRow("colour LZW") << "color-lzw.tif" << QList<QSizeF>{ letter } << true;
+    QTest::newRow("colour + alpha") << "color-alpha.tif" << QList<QSizeF>{ letter } << true;
+    QTest::newRow("CMYK") << "color-cmyk.tif" << QList<QSizeF>{ letter } << true;
+    QTest::newRow("palette") << "color-palette.tif" << QList<QSizeF>{ letter } << true;
+    QTest::newRow("multi-page fax") << "multipage-fax-g4.tif" << QList<QSizeF>{ letter, letter, letter } << false;
+    QTest::newRow("multi-page mixed") << "multipage-mixed.tif" << QList<QSizeF>{ letter, landscape, letter } << false;
+    QTest::newRow("orientation tag 6") << "orientation-6.tif" << QList<QSizeF>{ letter } << false;
+    // No resolution: Qt gives the picture its default (96 dpi), or 72 dpi is used - the size
+    // is between them (an empty size marks it), the shape is the shape of the picture
+    QTest::newRow("no resolution") << "no-dpi.tif" << QList<QSizeF>{ QSizeF() } << false;
+}
+
+void PageOrganizerTest::tiffKinds()
+{
+    QFETCH(QString, fileName);
+    QFETCH(QList<QSizeF>, pageSizes);
+    QFETCH(bool, hasRed);
+
+    // Without the TIFF plugin of Qt (package qt6-image-formats-plugins / qt6-qtimageformats,
+    // module qtimageformats on Windows) no TIFF can be opened at all
+    QVERIFY2(QImageReader::supportedImageFormats().contains("tiff"), "Qt has no TIFF image plugin - install the Qt image formats plugins");
+
+    const QString filePath = QStringLiteral(PDF4QT_TIFF_TEST_DIRECTORY) + QLatin1Char('/') + fileName;
+    QVERIFY(PDFFirePageOrganizer::isSupportedImageFile(filePath));
+
+    std::vector<PDFFirePageOrganizer::ImageSource> images;
+    const PDFOperationResult readResult = PDFFirePageOrganizer::readImageFile(filePath, &images);
+    QVERIFY2(readResult, qPrintable(readResult.getErrorMessage()));
+    QCOMPARE(images.size(), size_t(pageSizes.size()));
+
+    for (const PDFFirePageOrganizer::ImageSource& source : images)
+    {
+        // The page is drawn: the border and the text are black, the paper is white
+        const QImage gray = source.image.convertToFormat(QImage::Format_Grayscale8);
+        int darkest = 255;
+        int lightest = 0;
+        for (int y = 0; y < gray.height(); y += 3)
+        {
+            const uchar* line = gray.constScanLine(y);
+            for (int x = 0; x < gray.width(); x += 3)
+            {
+                darkest = qMin(darkest, int(line[x]));
+                lightest = qMax(lightest, int(line[x]));
+            }
+        }
+        QVERIFY2(darkest < 80 && lightest > 200, qPrintable(QString("darkest %1, lightest %2").arg(darkest).arg(lightest)));
+    }
+
+    if (hasRed)
+    {
+        const QImage& image = images.front().image;
+        const QColor color = image.pixelColor(image.width() * 3 / 4, image.height() * 3 / 4);
+        QVERIFY2(color.red() > 150 && color.green() < 110 && color.blue() < 110, qPrintable(color.name()));
+    }
+
+    // The PDF document (as opened from the file), saved and read again
+    PDFDocument document;
+    const PDFOperationResult result = PDFFirePageOrganizer::createDocumentFromImageFiles({ filePath }, PDFFirePageOrganizer::ImagePageSize::Image, &document);
+    QVERIFY2(result, qPrintable(result.getErrorMessage()));
+
+    const PDFDocument savedDocument = read(write(document));
+    QCOMPARE(savedDocument.getCatalog()->getPageCount(), size_t(pageSizes.size()));
+    for (qsizetype i = 0; i < pageSizes.size(); ++i)
+    {
+        const QSizeF size = savedDocument.getCatalog()->getPage(size_t(i))->getMediaBox().size();
+        if (pageSizes[i].isEmpty())
+        {
+            // 425 x 550 pixels at 72 ... 96 dpi
+            QVERIFY2(size.width() > 318.0 && size.width() < 426.0 && qAbs(size.height() / size.width() - 550.0 / 425.0) < 0.01,
+                     qPrintable(QString("page %1: %2 x %3").arg(i + 1).arg(size.width()).arg(size.height())));
+            continue;
+        }
+        QVERIFY2(qAbs(size.width() - pageSizes[i].width()) < 2.0 && qAbs(size.height() - pageSizes[i].height()) < 2.0,
+                 qPrintable(QString("page %1: %2 x %3").arg(i + 1).arg(size.width()).arg(size.height())));
+    }
+}
 
 #include "tst_pageorganizertest.moc"

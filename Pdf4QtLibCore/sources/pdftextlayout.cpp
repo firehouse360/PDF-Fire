@@ -1401,6 +1401,12 @@ PDFFindResults PDFTextFlow::find(const QString& text, Qt::CaseSensitivity caseSe
 {
     PDFFindResults results;
 
+    // An empty text matches everywhere and has no characters
+    if (text.isEmpty())
+    {
+        return results;
+    }
+
     int index = m_text.indexOf(text, 0, caseSensitivity);
     while (index != -1)
     {
@@ -1432,6 +1438,14 @@ PDFFindResults PDFTextFlow::find(const QRegularExpression& expression) const
         Q_ASSERT(match.hasMatch());
         const int index = match.capturedStart();
         const int length = match.capturedLength();
+
+        // An empty match (an expression, which matches the empty text, for example "x*")
+        // has no characters - it is skipped; at the end of the text it would be read
+        // past the end (from upstream PDF4QT 2.0, 2026-10)
+        if (index < 0 || length <= 0 || index + length > m_text.size() || size_t(index + length) > m_characterPointers.size())
+        {
+            continue;
+        }
 
         PDFFindResult result;
         result.matched = match.captured();
@@ -1626,15 +1640,18 @@ QString PDFTextFlow::getContext(size_t index, size_t length) const
 {
     Q_ASSERT(length > 0);
 
+    // The line around the occurrence, at most MAXIMUM_CONTEXT_LENGTH characters on
+    // each side (the walk itself is bounded, a line may have millions of characters)
+    const size_t minimumIndex = index > MAXIMUM_CONTEXT_LENGTH ? index - MAXIMUM_CONTEXT_LENGTH : 0;
     const PDFCharacterPointer& frontComparatorItem = m_characterPointers[index];
-    while (index > 0 && (m_characterPointers[index - 1].hasSameLine(frontComparatorItem) || !m_characterPointers[index - 1].isValid()))
+    while (index > minimumIndex && (m_characterPointers[index - 1].hasSameLine(frontComparatorItem) || !m_characterPointers[index - 1].isValid()))
     {
         --index;
         ++length;
     }
 
     size_t currentEnd = index + length - 1;
-    size_t last = m_characterPointers.size() - 1;
+    const size_t last = std::min(m_characterPointers.size() - 1, currentEnd + MAXIMUM_CONTEXT_LENGTH);
     const PDFCharacterPointer& backComparatorItem = m_characterPointers[currentEnd];
     while (currentEnd < last && (m_characterPointers[currentEnd + 1].hasSameLine(backComparatorItem) || !m_characterPointers[currentEnd + 1].isValid()))
     {

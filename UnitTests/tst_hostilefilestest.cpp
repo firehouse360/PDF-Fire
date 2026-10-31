@@ -34,6 +34,7 @@
 #include "pdfdocumentsigner.h"
 #include "pdfdocumentwriter.h"
 #include "pdfexception.h"
+#include "pdfform.h"
 #include "pdffont.h"
 #include "pdffunction.h"
 #include "pdfmeshqualitysettings.h"
@@ -81,6 +82,7 @@ private slots:
     void tilingPatternPaintsItself();
     void parserNestingDepth();
     void pageTreeDepth();
+    void formFieldCycle();
     void cidFontHugeWidthRange();
     void passwordProtectedSignAndIncrementalSave();
     void pkcs12HugeIterationCount();
@@ -522,6 +524,48 @@ void HostileFilesTest::parserNestingDepth()
     const QByteArray shallow = QByteArray(100, '[') + "1" + QByteArray(100, ']');
     PDFParser shallowParser(shallow, nullptr, PDFParser::None);
     QVERIFY(shallowParser.getObject().isArray());
+}
+
+void HostileFilesTest::formFieldCycle()
+{
+    // Two form fields, each the parent and the kid of the other - the parser recursed
+    // until the stack overflowed (from upstream PDF4QT 2.0, 2026-10)
+    QList<QByteArray> objects;
+    objects << "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>";
+    objects << "<< /Type /Pages /Kids [3 0 R] /Count 1 >>";
+    objects << "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >>";
+    objects << "<< /T (a) /FT /Tx /Parent 5 0 R /Kids [5 0 R] >>";
+    objects << "<< /T (b) /FT /Tx /Parent 4 0 R /Kids [4 0 R] >>";
+
+    PDFDocumentReader::Result result = PDFDocumentReader::Result::OK;
+    const PDFDocument document = readPdf(makePdf(objects), &result, false);
+    QCOMPARE(result, PDFDocumentReader::Result::OK);
+
+    const PDFForm form = PDFForm::parse(&document, document.getCatalog()->getFormObject());
+    QCOMPARE(form.getFormFields().size(), size_t(1));
+    QCOMPARE(form.getFormFields().front()->getChildFields().size(), size_t(1));
+    QVERIFY(form.getFormFields().front()->getChildFields().front()->getChildFields().empty());
+
+    // A very deep chain of fields stops at the maximal depth
+    QList<QByteArray> deepObjects;
+    deepObjects << "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>";
+    deepObjects << "<< /Type /Pages /Kids [3 0 R] /Count 1 >>";
+    deepObjects << "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >>";
+    constexpr int depth = 50000;
+    for (int i = 0; i < depth; ++i)
+    {
+        const int number = 4 + i;
+        QByteArray field = "<< /T (f) /FT /Tx /Parent " + QByteArray::number(i == 0 ? 3 : number - 1) + " 0 R";
+        if (i + 1 < depth)
+        {
+            field += " /Kids [" + QByteArray::number(number + 1) + " 0 R]";
+        }
+        deepObjects << field + " >>";
+    }
+    const PDFDocument deepDocument = readPdf(makePdf(deepObjects), &result, false);
+    QCOMPARE(result, PDFDocumentReader::Result::OK);
+    const PDFForm deepForm = PDFForm::parse(&deepDocument, deepDocument.getCatalog()->getFormObject());
+    QCOMPARE(deepForm.getFormFields().size(), size_t(1));
 }
 
 void HostileFilesTest::pageTreeDepth()

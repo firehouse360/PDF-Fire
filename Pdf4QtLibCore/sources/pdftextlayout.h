@@ -371,6 +371,9 @@ private:
     /// \param length Length of text selection
     QString getContext(size_t index, size_t length) const;
 
+    /// Maximal number of characters of the context on each side of the occurrence
+    static constexpr size_t MAXIMUM_CONTEXT_LENGTH = 256;
+
     QString m_text;
     QRectF m_boundingBox;
     std::vector<PDFCharacterPointer> m_characterPointers;

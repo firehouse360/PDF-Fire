@@ -318,9 +318,10 @@ private:
         else if (command == "press")
         {
             // press:<key> - a key by its name (Return, Escape, Tab, Delete, Ctrl+Z...), sent to
-            // the active window, which can be a dialog opened by a previous step
+            // the active window, which can be a dialog (or a menu) opened by a previous step
             const QKeyCombination combination = QKeySequence::fromString(argument)[0];
-            QWidget* target = QApplication::activeModalWidget() ? QApplication::activeModalWidget() : static_cast<QWidget*>(m_window);
+            QWidget* target = QApplication::activePopupWidget() ? QApplication::activePopupWidget()
+                                                                : (QApplication::activeModalWidget() ? QApplication::activeModalWidget() : static_cast<QWidget*>(m_window));
             if (QWidget* focusWidget = target->focusWidget())
             {
                 target = focusWidget;

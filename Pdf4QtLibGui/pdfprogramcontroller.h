@@ -600,6 +600,11 @@ private:
     /// PDF Fire: shows a new document (not saved yet) in a new tab
     void showNewDocument(pdf::PDFDocument&& document);
 
+    /// PDF Fire: opens a picture (a scanned TIFF, every page of it) as a new PDF document,
+    /// which is not saved yet - Save suggests "<name>.pdf" beside the picture, the picture
+    /// itself is never changed
+    void openImageAsDocument(const QString& fileName);
+
     /// PDF Fire: the pages copied (or cut) by copyPagesToClipboard
     struct PageClipboard
     {

@@ -10,6 +10,7 @@ private slots:
     void nearbyAnglesShareSelectionGeometry();
     void angleGroupsDoNotGrowTransitively();
     void cacheRetainsRecentlyUsedPages();
+    void findSkipsEmptyMatches();
 };
 
 static void addCharacter(pdf::PDFTextLayout& layout, QChar character, QPointF position, qreal angle)
@@ -52,6 +53,25 @@ void TextLayoutTest::angleGroupsDoNotGrowTransitively()
     // A chain of small angle differences must not merge arbitrarily different
     // writing directions into one horizontal line.
     QCOMPARE(layout.getTextBlocks().size(), size_t(2));
+}
+
+void TextLayoutTest::findSkipsEmptyMatches()
+{
+    pdf::PDFTextLayout layout;
+    addCharacter(layout, 'A', QPointF(100, 100), 0);
+    addCharacter(layout, 'B', QPointF(108, 100), 0);
+    addCharacter(layout, 'C', QPointF(116, 100), 0);
+    layout.perform();
+
+    const pdf::PDFTextFlows flows = pdf::PDFTextFlow::createTextFlows(layout, pdf::PDFTextFlow::None, 0);
+    QVERIFY(!flows.empty());
+
+    // "x*" matches the empty text at every position, also at the end of the text - the
+    // empty matches have no characters (the last one was read past the end)
+    QVERIFY(flows.front().find(QRegularExpression("x*")).empty());
+    QCOMPARE(flows.front().find(QRegularExpression("B*")).size(), size_t(1));
+    QVERIFY(flows.front().find(QString(), Qt::CaseInsensitive).empty());
+    QCOMPARE(flows.front().find(QString("bc"), Qt::CaseInsensitive).size(), size_t(1));
 }
 
 void TextLayoutTest::cacheRetainsRecentlyUsedPages()

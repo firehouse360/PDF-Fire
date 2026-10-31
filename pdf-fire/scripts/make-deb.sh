@@ -65,7 +65,7 @@ Priority: optional
 Architecture: $ARCH
 Maintainer: PDF Fire <pdffire.constant740@passmail.net>
 Installed-Size: $(du -sk "$STAGE/usr" "$STAGE/opt" | awk '{s+=$1} END {print s}')
-Depends: $DEPENDS, fonts-urw-base35
+Depends: $DEPENDS, fonts-urw-base35, qt6-image-formats-plugins
 Recommends: tesseract-ocr-eng, sane-airscan
 Description: PDF editor - view, annotate, edit, sign, redact and protect PDF files
  PDF Fire is a native PDF editor for Linux, built on the PDF4QT engine.

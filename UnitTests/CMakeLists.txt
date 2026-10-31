@@ -611,6 +611,7 @@ set_target_properties(UnitTestsPageOrganizer PROPERTIES
     MACOSX_BUNDLE OFF
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}
 )
+target_compile_definitions(UnitTestsPageOrganizer PRIVATE PDF4QT_TIFF_TEST_DIRECTORY="${CMAKE_CURRENT_SOURCE_DIR}/tiffsamples")
 add_test(UnitTestsPageOrganizer "${CMAKE_BINARY_DIR}/${PDF4QT_INSTALL_BIN_DIR}/UnitTestsPageOrganizer")
 
 add_executable(UnitTestsSavedSignature tst_savedsignaturetest.cpp)

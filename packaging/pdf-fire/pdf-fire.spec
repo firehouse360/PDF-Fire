@@ -47,6 +47,7 @@ ExclusiveArch:  x86_64
 Requires:       urw-base35-fonts
 Requires:       urw-base35-d050000l-fonts
 Requires:       hicolor-icon-theme
+Requires:       qt6-qtimageformats
 # OCR (the OCR plugin links libtesseract; this adds the English data) and network scanners
 Recommends:     tesseract
 Recommends:     tesseract-langpack-eng

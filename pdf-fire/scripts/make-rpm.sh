@@ -134,7 +134,7 @@ inside_verify() {
   local rpm; rpm="$(ls -t "$ROOT"/dist/pdf-fire-"$VERSION"-*.fc"$FEDORA".x86_64.rpm | head -1)"
   echo "== dnf install $(basename "$rpm")"
   dnf -y install --nogpgcheck "$rpm" > /tmp/dnf.log 2>&1 || { tail -40 /tmp/dnf.log; exit 1; }
-  grep -E '^ (pdf-fire|urw-base35-d050000l-fonts|tesseract|tesseract-langpack-eng|sane-airscan|qt6-qtbase|qt6-qtmultimedia) ' /tmp/dnf.log
+  grep -E '^ (pdf-fire|urw-base35-d050000l-fonts|tesseract|tesseract-langpack-eng|sane-airscan|qt6-qtbase|qt6-qtmultimedia|qt6-qtimageformats) ' /tmp/dnf.log
   rpm -q pdf-fire
   echo "== missing libraries (ldd)"
   # The plugins (lib/pdf4qt) are dlopen()ed by the editor, which has already loaded the engine
@@ -164,6 +164,16 @@ inside_verify() {
   grep -oE '/[^ ]*(/pdf4qt/lib[A-Za-z]+Plugin|libqoffscreen|libonnxruntime|libPdf4QtLib[A-Za-z]+|libtesseract|libsane)[^ ]*' \
        "/proc/$pid/maps" | sort -u | sed 's/^/  /'
   grep -iE 'cannot load|failed to|not found' /tmp/run.log | sort -u | head -20 || true
+  kill "$pid"; wait "$pid" 2>/dev/null || true
+  echo "== open a scanned TIFF (3-page fax, G4) - it needs the TIFF plugin of Qt (qt6-qtimageformats)"
+  local tiff=/tmp/verify-scan.tif
+  cp "$SRC/UnitTests/tiffsamples/multipage-fax-g4.tif" "$tiff"
+  QT_QPA_PLATFORM=offscreen /usr/bin/pdf-fire "$tiff" > /tmp/run-tiff.log 2>&1 &
+  pid=$!
+  sleep 8
+  kill -0 "$pid" 2>/dev/null || { echo "FAIL: the editor exited with the TIFF"; tail -30 /tmp/run-tiff.log; exit 1; }
+  grep -q 'imageformats/libqtiff' "/proc/$pid/maps" || { echo "FAIL: the TIFF plugin of Qt was not loaded"; exit 1; }
+  echo "TIFF plugin loaded: $(grep -oE '/[^ ]*imageformats/libqtiff[^ ]*' "/proc/$pid/maps" | head -1)"
   kill "$pid"; wait "$pid" 2>/dev/null || true
   echo "== installed size"; du -sh /opt/pdf-fire
   echo "VERIFY OK"
@@ -204,7 +214,7 @@ FROM ${BASE}
 RUN dnf -y install --setopt=install_weak_deps=False \
       gcc-c++ cmake ninja-build pkgconf-pkg-config ccache rpm-build binutils findutils file \
       qt6-qtbase-devel qt6-qtbase-private-devel qt6-qtsvg-devel qt6-qttools-devel qt6-linguist \
-      qt6-qtmultimedia-devel qt6-qtspeech-devel mesa-libGL-devel \
+      qt6-qtmultimedia-devel qt6-qtspeech-devel qt6-qtimageformats mesa-libGL-devel \
       openssl-devel zlib-ng-compat-devel freetype-devel openjpeg-devel libjpeg-turbo-devel \
       libpng-devel lcms2-devel tbb-devel fontconfig-devel cups-devel \
       tesseract-devel leptonica-devel sane-backends-devel \

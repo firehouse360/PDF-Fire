@@ -22,6 +22,7 @@
 
 #include "pdfprogramcontroller.h"
 #include "pdffirepermissions.h"
+#include "pdffirepageorganizer.h"
 #include "pdfdrawwidget.h"
 #include "pdfannotation.h"
 #include "pdfform.h"
@@ -1295,7 +1296,13 @@ void PDFProgramController::performSaveAs()
     }
 
     QFileInfo fileInfo(m_fileInfo.originalFileName);
-    QString saveFileName = QFileDialog::getSaveFileName(m_mainWindow, tr("Save As"), fileInfo.dir().absoluteFilePath(m_fileInfo.originalFileName), tr("Portable Document (*.pdf);;All files (*.*)"));
+    QString suggestedFileName = fileInfo.dir().absoluteFilePath(m_fileInfo.originalFileName);
+    if (m_fileInfo.originalFileName.isEmpty() && !m_fileInfo.fileName.isEmpty())
+    {
+        // PDF Fire: a picture opened as a new document - "<name>.pdf" beside the picture
+        suggestedFileName = QDir(m_fileInfo.path).absoluteFilePath(m_fileInfo.fileName);
+    }
+    QString saveFileName = QFileDialog::getSaveFileName(m_mainWindow, tr("Save As"), suggestedFileName, tr("Portable Document (*.pdf);;All files (*.*)"));
     if (!saveFileName.isEmpty())
     {
         saveDocument(saveFileName);
@@ -2404,6 +2411,14 @@ void PDFProgramController::updateFileWatcher(bool forceDisable)
 
 void PDFProgramController::openDocument(const QString& fileName)
 {
+    // PDF Fire: a picture (a scanned TIFF) is opened as a new PDF document, which is not saved yet
+    if (pdf::PDFFirePageOrganizer::isSupportedImageFile(fileName))
+    {
+        m_isReloadRequested = false;
+        openImageAsDocument(fileName);
+        return;
+    }
+
     // PDF Fire: a document, which is open in a tab, is shown; another one is opened
     // in a new tab (the shown document stays open in its tab)
     const QString absoluteFilePath = QFileInfo(fileName).absoluteFilePath();
@@ -3264,7 +3279,11 @@ void PDFProgramController::onPageLayoutChanged()
 
 void PDFProgramController::onActionOpenTriggered()
 {
-    QString fileName = QFileDialog::getOpenFileName(m_mainWindow, tr("Select PDF document"), m_settings->getDirectory(), tr("PDF document (*.pdf *.pdF *.pDf *.pDF *.Pdf *.PdF *.PDf *.PDF);;All files (*)"));
+    // PDF Fire: pictures (scanned TIFF files) are opened as new PDF documents
+    const QString pdfPatterns = QStringLiteral("*.pdf *.pdF *.pDf *.pDF *.Pdf *.PdF *.PDf *.PDF");
+    const QString imagePatterns = QStringLiteral("*.tif *.tiff *.TIF *.TIFF *.png *.jpg *.jpeg *.jpe *.bmp *.gif *.webp *.PNG *.JPG *.JPEG");
+    const QString filter = tr("PDF documents and pictures (%1 %2);;PDF document (%1);;Pictures - opened as a new PDF (%2);;All files (*)").arg(pdfPatterns, imagePatterns);
+    QString fileName = QFileDialog::getOpenFileName(m_mainWindow, tr("Select PDF document"), m_settings->getDirectory(), filter);
     if (!fileName.isEmpty())
     {
         openDocument(fileName);

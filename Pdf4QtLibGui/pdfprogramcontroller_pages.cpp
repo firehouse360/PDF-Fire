@@ -28,6 +28,7 @@
 #include "pdffirepermissions.h"
 #include "pdffirepageoperations.h"
 #include "pdffirepageorganizer.h"
+#include "pdfrecentfilemanager.h"
 #include "pdfdocumentreader.h"
 #include "pdfdocumentwriter.h"
 #include "pdfdrawwidget.h"
@@ -969,6 +970,40 @@ void PDFProgramController::createDocumentFromImages()
     }
 
     showNewDocument(std::move(document));
+}
+
+void PDFProgramController::openImageAsDocument(const QString& fileName)
+{
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    pdf::PDFDocument document;
+    const pdf::PDFOperationResult result = pdf::PDFFirePageOrganizer::createDocumentFromImageFiles({ fileName }, pdf::PDFFirePageOrganizer::ImagePageSize::Image, &document);
+    QApplication::restoreOverrideCursor();
+
+    if (!result)
+    {
+        QMessageBox::critical(m_mainWindow, QApplication::applicationDisplayName(), result.getErrorMessage());
+        return;
+    }
+
+    showNewDocument(std::move(document));
+
+    // The PDF is not saved yet: Save asks for the file, "<name>.pdf" in the folder of the picture
+    const QFileInfo fileInfo(fileName);
+    m_fileInfo.fileName = fileInfo.completeBaseName() + QLatin1String(".pdf");
+    m_fileInfo.path = fileInfo.absolutePath();
+    if (m_undoRedoManager)
+    {
+        m_undoRedoManager->setIsCurrentSaved(false);
+    }
+    updateTitle();
+    updateActionsAvailability();
+    Q_EMIT documentTabsChanged();
+
+    if (isRememberingDocuments())
+    {
+        m_settings->setDirectory(fileInfo.absolutePath());
+        m_recentFileManager->addRecentFile(fileName);
+    }
 }
 
 }   // namespace pdfviewer

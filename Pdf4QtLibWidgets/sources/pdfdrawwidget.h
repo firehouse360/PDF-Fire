@@ -33,6 +33,8 @@
 #include <QTimer>
 #include <QElapsedTimer>
 
+class QMenu;
+
 namespace pdf
 {
 class PDFDocument;
@@ -130,9 +132,20 @@ public:
     /// Returns true, if any scene is active
     bool isAnySceneActive(PDFPageContentScene* sceneToSkip) const;
 
+    /// PDF Fire: shows the menu of the page under the point (a right click on the page,
+    /// which is not on an annotation). The receivers of pageContextMenuRequested fill
+    /// the menu, it may already hold the items of the caller.
+    /// \param widgetPosition Position in the draw widget
+    /// \param menu Menu with the items of the caller, or nullptr
+    void showPageContextMenu(QPoint widgetPosition, QMenu* menu = nullptr);
+
 signals:
     void sceneActivityChanged();
     void pageRenderingErrorsChanged(pdf::PDFInteger pageIndex, int errorsCount);
+
+    /// PDF Fire: the menu of the page is about to be shown, the receiver adds its items
+    /// (page index is -1, if the point is not on a page)
+    void pageContextMenuRequested(QMenu* menu, pdf::PDFInteger pageIndex, QPoint widgetPosition);
 
 protected:
     virtual bool event(QEvent* event) override;

@@ -168,6 +168,7 @@ private:
     QPushButton* m_protectionBarUnlockButton = nullptr;
     bool m_isProtectionBarDismissed = false;
     QList<QAction*> m_pageActions;
+    pdf::PDFInteger m_contextMenuPage = -1;  ///< PDF Fire: page of the right click, while an action of its menu runs
     int m_sidebarExpandedWidth = 0;
 };
 

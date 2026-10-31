@@ -39,6 +39,7 @@
 #include <QDragEnterEvent>
 #include <QDragMoveEvent>
 #include <QDropEvent>
+#include <QMenu>
 
 #include "pdfdbgheap.h"
 
@@ -249,6 +250,23 @@ bool PDFWidget::isAnySceneActive(PDFPageContentScene* sceneToSkip) const
     return false;
 }
 
+void PDFWidget::showPageContextMenu(QPoint widgetPosition, QMenu* menu)
+{
+    QMenu ownMenu(this);
+    if (!menu)
+    {
+        menu = &ownMenu;
+    }
+
+    const PDFInteger pageIndex = m_proxy->getPageUnderPoint(widgetPosition, nullptr);
+    Q_EMIT pageContextMenuRequested(menu, pageIndex, widgetPosition);
+
+    if (!menu->isEmpty())
+    {
+        menu->exec(m_drawWidget->getWidget()->mapToGlobal(widgetPosition));
+    }
+}
+
 PDFWidgetFormManager* PDFWidget::getFormManager() const
 {
     return m_formManager;
@@ -433,6 +451,14 @@ void PDFDrawWidget::mousePressEvent(QMouseEvent* event)
 
     if (processEvent<QMouseEvent, &IDrawWidgetInputInterface::mousePressEvent>(event))
     {
+        return;
+    }
+
+    // PDF Fire: a right click, which no tool and no annotation took, shows the menu of the page
+    if (event->button() == Qt::RightButton)
+    {
+        event->accept();
+        m_widget->showPageContextMenu(event->pos());
         return;
     }
 

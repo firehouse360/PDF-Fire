@@ -2445,11 +2445,40 @@ void PDFWidgetAnnotationManager::mousePressEvent(QWidget* widget, QMouseEvent* e
         }
 
         PDFWidget* pdfWidget = m_proxy->getWidget();
-        if (hasSelection() || canPasteAnnotations() || hasSelectableAnnotation())
+        if (hasSelection())
         {
             event->accept();
             showSelectionMenu(pdfWidget->mapToGlobal(event->pos()), event->pos(), pointContext);
         }
+        else if (canPasteAnnotations() || hasSelectableAnnotation())
+        {
+            // PDF Fire: a right click beside the annotations shows the menu of the page,
+            // the copied annotations can be pasted and the annotations selected from it
+            event->accept();
+
+            const QPoint widgetPosition = event->pos();
+            QMenu menu(pdfWidget);
+
+            if (canPasteAnnotations())
+            {
+                QAction* pasteAction = menu.addAction(tr("Paste"));
+                pasteAction->setShortcut(QKeySequence::Paste);
+                connect(pasteAction, &QAction::triggered, this, [this, widgetPosition]() { pasteAnnotations(widgetPosition); });
+
+                QAction* pasteInPlaceAction = menu.addAction(tr("Paste at Original Position"));
+                connect(pasteInPlaceAction, &QAction::triggered, this, [this, widgetPosition]() { pasteAnnotations(widgetPosition, true); });
+            }
+
+            if (hasSelectableAnnotation())
+            {
+                QAction* selectAllAction = menu.addAction(tr("Select All Annotations on Displayed Pages"));
+                connect(selectAllAction, &QAction::triggered, this, &PDFWidgetAnnotationManager::selectAllAnnotations);
+            }
+
+            menu.addSeparator();
+            pdfWidget->showPageContextMenu(widgetPosition, &menu);
+        }
+        // Otherwise the event is not accepted, the draw widget shows the menu of the page
     }
 }
 

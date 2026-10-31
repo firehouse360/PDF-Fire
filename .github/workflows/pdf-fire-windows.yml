@@ -86,7 +86,7 @@ jobs:
           arch: 'win64_msvc2022_64'
           dir: '${{ github.workspace }}/qt/'
           install-deps: 'true'
-          modules: 'qtspeech qtmultimedia'
+          modules: 'qtspeech qtmultimedia qtimageformats'
           cache: 'true'
           cache-key-prefix: ${{ runner.os }}-qt-6113
           # aqtinstall 3.3 cannot read the Windows repository layout of Qt 6.11+ (same pin as upstream PDF4QT)
@@ -162,7 +162,7 @@ jobs:
           Get-ChildItem $bin | Format-Table Name, Length -AutoSize | Out-String -Width 200
           if (-not (Test-Path "$bin\voice\kokoro.onnx")) { throw 'the voice data is missing from the program folder' }
           if (-not (Test-Path "$bin\onnxruntime.dll")) { throw 'onnxruntime.dll is missing from the program folder' }
-          foreach ($need in 'vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll', 'multimedia', 'tls', 'tessdata\eng.traineddata', 'tessdata\pdf.ttf', 'platforms\qwindows.dll') {
+          foreach ($need in 'vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll', 'multimedia', 'tls', 'tessdata\eng.traineddata', 'tessdata\pdf.ttf', 'platforms\qwindows.dll', 'imageformats\qtiff.dll') {
             if (-not (Test-Path (Join-Path $bin $need))) { throw "$need is missing from the program folder" }
           }
           Get-ChildItem "$bin\multimedia", "$bin\tls" | Format-Table Name, Length -AutoSize | Out-String -Width 200
@@ -187,6 +187,20 @@ jobs:
           'exit code: 0x{0:X8}' -f $p.ExitCode
           if ($p.ExitCode -ne 0) { throw 'PDF Fire did not start cleanly' }
           if (-not (Test-Path $shot)) { throw 'no screenshot - the window did not open' }
+
+          # A scanned TIFF (3-page fax, G4) opens as a new PDF - it needs the TIFF plugin of Qt
+          Copy-Item UnitTests\tiffsamples\multipage-fax-g4.tif $sandbox\
+          Remove-Item Env:PDFFIRE_SCREENSHOT
+          $env:PDFFIRE_SCRIPT = "size:1500x900;wait:8000;shot:$sandbox\pdf-fire-tiff.png;exit"
+          $p = Start-Process -FilePath "$bin\Pdf4QtEditor.exe" -ArgumentList "`"$sandbox\multipage-fax-g4.tif`"" -PassThru
+          Start-Sleep -Seconds 5
+          $tiffPlugin = $p.Modules | Where-Object { $_.ModuleName -eq 'qtiff.dll' } | Select-Object -First 1
+          if (-not $p.WaitForExit(120000)) { $p.Kill(); throw 'PDF Fire did not finish within 2 minutes (TIFF)' }
+          'exit code (TIFF): 0x{0:X8}' -f $p.ExitCode
+          if (-not $tiffPlugin) { throw 'the TIFF plugin (qtiff.dll) was not loaded when a TIFF was opened' }
+          "TIFF plugin loaded: $($tiffPlugin.FileName)"
+          if ($p.ExitCode -ne 0) { throw 'PDF Fire did not open the TIFF cleanly' }
+          if (-not (Test-Path "$sandbox\pdf-fire-tiff.png")) { throw 'no screenshot of the TIFF' }
 
       - name: Upload the smoke-test screenshot
         if: always()

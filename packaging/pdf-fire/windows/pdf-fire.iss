@@ -63,6 +63,9 @@ Root: HKA; Subkey: "Software\Classes\PDFFire.Document"; ValueType: string; Value
 Root: HKA; Subkey: "Software\Classes\PDFFire.Document\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\Pdf4QtEditor.exe"",0"; Tasks: openwith
 Root: HKA; Subkey: "Software\Classes\PDFFire.Document\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\Pdf4QtEditor.exe"" ""%1"""; Tasks: openwith
 Root: HKA; Subkey: "Software\Classes\.pdf\OpenWithProgids"; ValueType: none; ValueName: "PDFFire.Document"; Flags: uninsdeletevalue; Tasks: openwith
+; "Open with" for scanned TIFF pictures - they open as a new PDF document
+Root: HKA; Subkey: "Software\Classes\.tif\OpenWithProgids"; ValueType: none; ValueName: "PDFFire.Document"; Flags: uninsdeletevalue; Tasks: openwith
+Root: HKA; Subkey: "Software\Classes\.tiff\OpenWithProgids"; ValueType: none; ValueName: "PDFFire.Document"; Flags: uninsdeletevalue; Tasks: openwith
 Root: HKA; Subkey: "Software\Classes\Applications\Pdf4QtEditor.exe"; ValueType: string; ValueName: "FriendlyAppName"; ValueData: "PDF Fire"; Flags: uninsdeletekey; Tasks: openwith
 
 [Run]
