@@ -80,6 +80,9 @@ find_package(ZLIB REQUIRED)
 find_package(Freetype REQUIRED)
 find_package(OpenJPEG CONFIG REQUIRED)
 find_package(JPEG REQUIRED)
+# PDF Fire: libtiff reads the TIFF files, which the TIFF plugin of Qt cannot read (the plugin of the
+# official Qt for Windows has no JPEG compression). Optional - without it only the plugin is used.
+find_package(TIFF)
 find_package(PNG REQUIRED)
 find_package(blend2d CONFIG REQUIRED)
 find_package(Clipper2 CONFIG REQUIRED)

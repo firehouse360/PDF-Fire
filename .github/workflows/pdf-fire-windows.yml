@@ -162,7 +162,7 @@ jobs:
           Get-ChildItem $bin | Format-Table Name, Length -AutoSize | Out-String -Width 200
           if (-not (Test-Path "$bin\voice\kokoro.onnx")) { throw 'the voice data is missing from the program folder' }
           if (-not (Test-Path "$bin\onnxruntime.dll")) { throw 'onnxruntime.dll is missing from the program folder' }
-          foreach ($need in 'vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll', 'multimedia', 'tls', 'tessdata\eng.traineddata', 'tessdata\pdf.ttf', 'platforms\qwindows.dll', 'imageformats\qtiff.dll') {
+          foreach ($need in 'vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll', 'multimedia', 'tls', 'tessdata\eng.traineddata', 'tessdata\pdf.ttf', 'platforms\qwindows.dll', 'imageformats\qtiff.dll', 'tiff.dll') {
             if (-not (Test-Path (Join-Path $bin $need))) { throw "$need is missing from the program folder" }
           }
           Get-ChildItem "$bin\multimedia", "$bin\tls" | Format-Table Name, Length -AutoSize | Out-String -Width 200

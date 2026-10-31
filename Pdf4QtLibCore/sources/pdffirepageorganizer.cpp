@@ -34,6 +34,10 @@
 #include <map>
 #include <set>
 
+#ifdef PDF4QT_HAS_LIBTIFF
+#include <tiffio.h>
+#endif
+
 #include "pdfdbgheap.h"
 
 namespace pdf
@@ -712,15 +716,185 @@ bool PDFFirePageOrganizer::isSupportedImageFile(const QString& fileName)
     return suffixes.contains(QFileInfo(fileName).suffix().toLower());
 }
 
+/// The resolution of the picture gives its size; 72 dpi, if it has none (or a silly one)
+static QSizeF getImageSizeInPoints(const QImage& image)
+{
+    auto getDpi = [](int dotsPerMeter)
+    {
+        const PDFReal dpi = dotsPerMeter * 0.0254;
+        return (dpi >= 36.0 && dpi <= 2400.0) ? dpi : 72.0;
+    };
+
+    return QSizeF(image.width() * 72.0 / getDpi(image.dotsPerMeterX()), image.height() * 72.0 / getDpi(image.dotsPerMeterY()));
+}
+
+bool PDFFirePageOrganizer::hasTiffReader()
+{
+#ifdef PDF4QT_HAS_LIBTIFF
+    return true;
+#else
+    return false;
+#endif
+}
+
+PDFOperationResult PDFFirePageOrganizer::readTiffFile(const QString& fileName, std::vector<ImageSource>* images)
+{
+    Q_ASSERT(images);
+
+#ifdef PDF4QT_HAS_LIBTIFF
+    const QString shortName = QFileInfo(fileName).fileName();
+
+    // Errors and warnings of libtiff are not printed (a damaged file gives an error message)
+    TIFFSetErrorHandler(nullptr);
+    TIFFSetWarningHandler(nullptr);
+
+#ifdef Q_OS_WIN
+    TIFF* tiff = TIFFOpenW(reinterpret_cast<const wchar_t*>(fileName.utf16()), "r");
+#else
+    TIFF* tiff = TIFFOpen(QFile::encodeName(fileName).constData(), "r");
+#endif
+    if (!tiff)
+    {
+        return PDFTranslationContext::tr("File '%1' is not a TIFF file, which can be read.").arg(shortName);
+    }
+
+    // A page larger than this (in pixels) is not read - a damaged or hostile file could
+    // ask for gigabytes (a scan of a Letter page at 600 dpi has 34 million pixels)
+    constexpr quint64 MAXIMAL_PIXELS = 400'000'000;
+
+    const size_t firstImage = images->size();
+    PDFOperationResult result = true;
+    do
+    {
+        uint32_t width = 0;
+        uint32_t height = 0;
+        TIFFGetField(tiff, TIFFTAG_IMAGEWIDTH, &width);
+        TIFFGetField(tiff, TIFFTAG_IMAGELENGTH, &height);
+        if (width == 0 || height == 0 || quint64(width) * quint64(height) > MAXIMAL_PIXELS || width > 0x7FFFFFFF / 4)
+        {
+            result = PDFTranslationContext::tr("File '%1' has a page of the size %2 x %3 pixels, which cannot be read.").arg(shortName).arg(width).arg(height);
+            break;
+        }
+
+        // RGBA, 8 bits per sample, row by row from the top: libtiff decodes every compression
+        // and every color model into it. Its 32-bit values (A B G R, from the highest byte) are
+        // the bytes R G B A in the memory, the colors multiplied by the alpha (libtiff does it
+        // with an unassociated alpha too) - the format RGBA8888_Premultiplied of QImage.
+        QImage image(int(width), int(height), QImage::Format_RGBA8888_Premultiplied);
+        if (image.isNull() || image.bytesPerLine() != qsizetype(width) * 4 ||
+            !TIFFReadRGBAImageOriented(tiff, width, height, reinterpret_cast<uint32_t*>(image.bits()), ORIENTATION_TOPLEFT, 0))
+        {
+            result = PDFTranslationContext::tr("File '%1' cannot be read.").arg(shortName);
+            break;
+        }
+
+        // Orientations 5 ... 8 swap the width and the height (libtiff gives the stored rows)
+        uint16_t orientation = ORIENTATION_TOPLEFT;
+        TIFFGetFieldDefaulted(tiff, TIFFTAG_ORIENTATION, &orientation);
+        switch (orientation)
+        {
+            case ORIENTATION_LEFTTOP:  image = image.transformed(QTransform().rotate(90)).flipped(Qt::Horizontal); break;
+            case ORIENTATION_RIGHTTOP: image = image.transformed(QTransform().rotate(90)); break;
+            case ORIENTATION_RIGHTBOT: image = image.transformed(QTransform().rotate(-90)).flipped(Qt::Horizontal); break;
+            case ORIENTATION_LEFTBOT:  image = image.transformed(QTransform().rotate(-90)); break;
+            default: break;
+        }
+
+        // The page as small as the picture allows: a black and white scan stays 1-bit,
+        // a gray one 8-bit gray, and a picture without transparency has no alpha channel
+        uint16_t bitsPerSample = 1;
+        uint16_t samplesPerPixel = 1;
+        uint16_t extraSamples = 0;
+        uint16_t* extraSampleTypes = nullptr;
+        TIFFGetFieldDefaulted(tiff, TIFFTAG_BITSPERSAMPLE, &bitsPerSample);
+        TIFFGetFieldDefaulted(tiff, TIFFTAG_SAMPLESPERPIXEL, &samplesPerPixel);
+        TIFFGetFieldDefaulted(tiff, TIFFTAG_EXTRASAMPLES, &extraSamples, &extraSampleTypes);
+        uint16_t photometric = PHOTOMETRIC_RGB;
+        const bool hasPhotometric = TIFFGetField(tiff, TIFFTAG_PHOTOMETRIC, &photometric);
+        const bool isGray = hasPhotometric && (photometric == PHOTOMETRIC_MINISWHITE || photometric == PHOTOMETRIC_MINISBLACK) && samplesPerPixel - extraSamples == 1;
+        if (isGray && bitsPerSample == 1 && extraSamples == 0)
+        {
+            image = image.convertToFormat(QImage::Format_Mono, Qt::ThresholdDither);
+        }
+        else if (isGray && extraSamples == 0)
+        {
+            image = image.convertToFormat(QImage::Format_Grayscale8);
+        }
+        else if (extraSamples == 0)
+        {
+            image = image.convertToFormat(QImage::Format_RGB32);
+        }
+
+        // The resolution (pixels per inch or per centimeter)
+        float xResolution = 0.0f;
+        float yResolution = 0.0f;
+        uint16_t resolutionUnit = RESUNIT_INCH;
+        TIFFGetFieldDefaulted(tiff, TIFFTAG_RESOLUTIONUNIT, &resolutionUnit);
+        if (resolutionUnit != RESUNIT_NONE && TIFFGetField(tiff, TIFFTAG_XRESOLUTION, &xResolution) && TIFFGetField(tiff, TIFFTAG_YRESOLUTION, &yResolution))
+        {
+            const PDFReal unitsPerMeter = (resolutionUnit == RESUNIT_CENTIMETER) ? 100.0 : 1.0 / 0.0254;
+            const bool swapped = orientation >= ORIENTATION_LEFTTOP;
+            image.setDotsPerMeterX(qRound((swapped ? yResolution : xResolution) * unitsPerMeter));
+            image.setDotsPerMeterY(qRound((swapped ? xResolution : yResolution) * unitsPerMeter));
+        }
+
+        ImageSource source;
+        source.sizeInPoints = getImageSizeInPoints(image);
+        source.image = std::move(image);
+        images->push_back(std::move(source));
+    }
+    while (TIFFReadDirectory(tiff));
+
+    TIFFClose(tiff);
+
+    if (!result)
+    {
+        images->resize(firstImage);
+        return result;
+    }
+
+    if (images->size() == firstImage)
+    {
+        return PDFTranslationContext::tr("File '%1' contains no picture.").arg(shortName);
+    }
+
+    return true;
+#else
+    Q_UNUSED(images);
+    return PDFTranslationContext::tr("File '%1' cannot be read, PDF Fire was built without the TIFF library.").arg(QFileInfo(fileName).fileName());
+#endif
+}
+
 PDFOperationResult PDFFirePageOrganizer::readImageFile(const QString& fileName, std::vector<ImageSource>* images)
 {
     Q_ASSERT(images);
+
+    // A TIFF file, which the TIFF plugin of Qt cannot read (for example the JPEG compression
+    // with the official Qt for Windows), or which it reads only partly, is read by libtiff
+    const QString suffix = QFileInfo(fileName).suffix().toLower();
+    const bool isTiff = suffix == QLatin1String("tif") || suffix == QLatin1String("tiff");
+    auto readByLibtiff = [&](const PDFOperationResult& qtResult) -> PDFOperationResult
+    {
+        if (!isTiff || !hasTiffReader())
+        {
+            return qtResult;
+        }
+
+        std::vector<ImageSource> tiffImages;
+        const PDFOperationResult tiffResult = readTiffFile(fileName, &tiffImages);
+        if (!tiffResult)
+        {
+            return qtResult;
+        }
+        images->insert(images->end(), std::make_move_iterator(tiffImages.begin()), std::make_move_iterator(tiffImages.end()));
+        return true;
+    };
 
     QImageReader reader(fileName);
     reader.setAutoTransform(true);
     if (!reader.canRead())
     {
-        return PDFTranslationContext::tr("File '%1' is not a picture, which can be read.").arg(QFileInfo(fileName).fileName());
+        return readByLibtiff(PDFTranslationContext::tr("File '%1' is not a picture, which can be read.").arg(QFileInfo(fileName).fileName()));
     }
 
     const QByteArray format = reader.format().toLower();
@@ -737,6 +911,13 @@ PDFOperationResult PDFFirePageOrganizer::readImageFile(const QString& fileName, 
         QImage image = reader.read();
         if (image.isNull())
         {
+            if (isTiff && hasTiffReader())
+            {
+                // A page, which the plugin cannot read - the whole file is read by libtiff
+                images->resize(firstImage);
+                return readByLibtiff(PDFTranslationContext::tr("File '%1' cannot be read. %2").arg(QFileInfo(fileName).fileName(), reader.errorString()));
+            }
+
             if (i == 0)
             {
                 return PDFTranslationContext::tr("File '%1' cannot be read. %2").arg(QFileInfo(fileName).fileName(), reader.errorString());
@@ -744,15 +925,8 @@ PDFOperationResult PDFFirePageOrganizer::readImageFile(const QString& fileName, 
             break;
         }
 
-        // The resolution of the picture gives its size; 72 dpi, if it has none (or a silly one)
-        auto getDpi = [](int dotsPerMeter)
-        {
-            const PDFReal dpi = dotsPerMeter * 0.0254;
-            return (dpi >= 36.0 && dpi <= 2400.0) ? dpi : 72.0;
-        };
-
         ImageSource source;
-        source.sizeInPoints = QSizeF(image.width() * 72.0 / getDpi(image.dotsPerMeterX()), image.height() * 72.0 / getDpi(image.dotsPerMeterY()));
+        source.sizeInPoints = getImageSizeInPoints(image);
 
         // A JPEG photo is stored as it is - decoding and encoding it again loses quality.
         // Not when it must be turned (its EXIF orientation), and not in CMYK.

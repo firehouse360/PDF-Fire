@@ -117,6 +117,14 @@ public:
     /// message, when the file is not a picture.
     static PDFOperationResult readImageFile(const QString& fileName, std::vector<ImageSource>* images);
 
+    /// Reads all pages of a TIFF file by libtiff (every compression, also JPEG). readImageFile
+    /// uses it, when the TIFF plugin of Qt cannot read the file. Returns an error message, when
+    /// the file cannot be read, or when PDF Fire was built without libtiff.
+    static PDFOperationResult readTiffFile(const QString& fileName, std::vector<ImageSource>* images);
+
+    /// True, if readTiffFile can read files (PDF Fire was built with libtiff)
+    static bool hasTiffReader();
+
     /// Makes a document from pictures, one picture per page
     /// \param images Pictures
     /// \param pageSize How large the pages are

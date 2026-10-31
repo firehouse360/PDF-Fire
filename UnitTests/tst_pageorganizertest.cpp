@@ -35,6 +35,7 @@
 #include <QImage>
 #include <QImageReader>
 #include <QTemporaryDir>
+#include <QRandomGenerator>
 
 using namespace pdf;
 
@@ -61,6 +62,9 @@ private slots:
     void notAPictureIsRefused();
     void tiffKinds_data();
     void tiffKinds();
+    void tiffKindsByLibtiff_data();
+    void tiffKindsByLibtiff();
+    void damagedTiffFiles();
 
 private:
     /// The page i (from 1) is 100 * i points wide and its content contains PAGE-<prefix>i-MARKER
@@ -669,6 +673,137 @@ void PageOrganizerTest::tiffKinds()
         QVERIFY2(qAbs(size.width() - pageSizes[i].width()) < 2.0 && qAbs(size.height() - pageSizes[i].height()) < 2.0,
                  qPrintable(QString("page %1: %2 x %3").arg(i + 1).arg(size.width()).arg(size.height())));
     }
+}
+
+void PageOrganizerTest::tiffKindsByLibtiff_data()
+{
+    tiffKinds_data();
+}
+
+void PageOrganizerTest::tiffKindsByLibtiff()
+{
+    // libtiff reads the TIFF files, which the TIFF plugin of Qt cannot read (the official Qt
+    // for Windows has no JPEG compression in it). Every sample is read by it, and compared
+    // with the pages read by Qt (where Qt can read them).
+    if (!PDFFirePageOrganizer::hasTiffReader())
+    {
+        QSKIP("PDF Fire was built without libtiff");
+    }
+
+    QFETCH(QString, fileName);
+    QFETCH(QList<QSizeF>, pageSizes);
+    QFETCH(bool, hasRed);
+
+    const QString filePath = QStringLiteral(PDF4QT_TIFF_TEST_DIRECTORY) + QLatin1Char('/') + fileName;
+    std::vector<PDFFirePageOrganizer::ImageSource> images;
+    const PDFOperationResult result = PDFFirePageOrganizer::readTiffFile(filePath, &images);
+    QVERIFY2(result, qPrintable(result.getErrorMessage()));
+    QCOMPARE(images.size(), size_t(pageSizes.size()));
+
+    QImageReader reader(filePath);
+    reader.setAutoTransform(true);
+    for (size_t i = 0; i < images.size(); ++i)
+    {
+        const QImage& image = images[i].image;
+        const QSizeF size = images[i].sizeInPoints;
+        if (pageSizes[qsizetype(i)].isEmpty())
+        {
+            QVERIFY2(qAbs(size.height() / size.width() - 550.0 / 425.0) < 0.01, qPrintable(QString("page %1: %2 x %3").arg(i + 1).arg(size.width()).arg(size.height())));
+        }
+        else
+        {
+            QVERIFY2(qAbs(size.width() - pageSizes[qsizetype(i)].width()) < 2.0 && qAbs(size.height() - pageSizes[qsizetype(i)].height()) < 2.0,
+                     qPrintable(QString("page %1: %2 x %3").arg(i + 1).arg(size.width()).arg(size.height())));
+        }
+
+        // The same picture as the TIFF plugin of Qt reads (the same orientation and colors)
+        if (i > 0 && !reader.jumpToImage(int(i)))
+        {
+            continue;
+        }
+        const QImage qtImage = reader.read();
+        if (qtImage.isNull())
+        {
+            continue;
+        }
+        QCOMPARE(image.size(), qtImage.size());
+        const QImage a = image.convertToFormat(QImage::Format_RGB32);
+        const QImage b = qtImage.convertToFormat(QImage::Format_RGB32);
+        qint64 difference = 0;
+        qint64 count = 0;
+        for (int y = 0; y < a.height(); y += 2)
+        {
+            for (int x = 0; x < a.width(); x += 2)
+            {
+                const QRgb p = a.pixel(x, y);
+                const QRgb q = b.pixel(x, y);
+                difference += qAbs(qRed(p) - qRed(q)) + qAbs(qGreen(p) - qGreen(q)) + qAbs(qBlue(p) - qBlue(q));
+                ++count;
+            }
+        }
+        const double meanDifference = double(difference) / double(3 * count);
+        QVERIFY2(meanDifference < 6.0, qPrintable(QString("page %1 differs from Qt's: mean %2").arg(i + 1).arg(meanDifference)));
+    }
+
+    if (hasRed)
+    {
+        const QImage& image = images.front().image;
+        const QColor color = image.pixelColor(image.width() * 3 / 4, image.height() * 3 / 4);
+        QVERIFY2(color.red() > 150 && color.green() < 110 && color.blue() < 110, qPrintable(color.name()));
+    }
+}
+
+void PageOrganizerTest::damagedTiffFiles()
+{
+    // Damaged TIFF files (cut short, bytes changed) give an error message or the pages,
+    // which can be read - never a crash or a hang
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString damagedPath = directory.filePath("damaged.tif");
+
+    const QStringList samples = QDir(QStringLiteral(PDF4QT_TIFF_TEST_DIRECTORY)).entryList({ "*.tif" }, QDir::Files, QDir::Name);
+    QVERIFY(!samples.isEmpty());
+
+    QRandomGenerator random(20261031);
+    int readCount = 0;
+    for (int round = 0; round < 400; ++round)
+    {
+        QFile sampleFile(QStringLiteral(PDF4QT_TIFF_TEST_DIRECTORY) + QLatin1Char('/') + samples[round % samples.size()]);
+        QVERIFY(sampleFile.open(QFile::ReadOnly));
+        QByteArray data = sampleFile.readAll();
+
+        if (round % 4 == 0)
+        {
+            data.truncate(qsizetype(random.bounded(quint32(data.size()))));
+        }
+        const int changes = 1 + int(random.bounded(8u));
+        for (int i = 0; i < changes && !data.isEmpty(); ++i)
+        {
+            // The header and the directories are near the start or the end of a small file
+            const qsizetype position = qsizetype(random.bounded(quint32(qMin<qsizetype>(data.size(), 512)))) + (random.bounded(2u) ? data.size() - qMin<qsizetype>(data.size(), 512) : 0);
+            data[position] = char(random.bounded(256u));
+        }
+
+        QFile damagedFile(damagedPath);
+        QVERIFY(damagedFile.open(QFile::WriteOnly | QFile::Truncate));
+        damagedFile.write(data);
+        damagedFile.close();
+
+        std::vector<PDFFirePageOrganizer::ImageSource> images;
+        if (PDFFirePageOrganizer::readImageFile(damagedPath, &images))
+        {
+            ++readCount;
+            for (const PDFFirePageOrganizer::ImageSource& source : images)
+            {
+                QVERIFY(!source.image.isNull());
+                QVERIFY(source.sizeInPoints.width() > 0.0 && source.sizeInPoints.height() > 0.0);
+            }
+        }
+
+        std::vector<PDFFirePageOrganizer::ImageSource> tiffImages;
+        PDFFirePageOrganizer::readTiffFile(damagedPath, &tiffImages);
+    }
+    qInfo("%d of 400 damaged files were read", readCount);
 }
 
 #include "tst_pageorganizertest.moc"

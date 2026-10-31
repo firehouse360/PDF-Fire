@@ -216,7 +216,7 @@ RUN dnf -y install --setopt=install_weak_deps=False \
       qt6-qtbase-devel qt6-qtbase-private-devel qt6-qtsvg-devel qt6-qttools-devel qt6-linguist \
       qt6-qtmultimedia-devel qt6-qtspeech-devel qt6-qtimageformats mesa-libGL-devel \
       openssl-devel zlib-ng-compat-devel freetype-devel openjpeg-devel libjpeg-turbo-devel \
-      libpng-devel lcms2-devel tbb-devel fontconfig-devel cups-devel \
+      libpng-devel libtiff-devel lcms2-devel tbb-devel fontconfig-devel cups-devel \
       tesseract-devel leptonica-devel sane-backends-devel \
  && dnf clean all
 CONTAINERFILE
